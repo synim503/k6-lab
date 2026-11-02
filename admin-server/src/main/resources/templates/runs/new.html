@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Новый запуск</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3">Новый запуск</h3>
+    <div class="alert alert-danger" th:if="${blockReason}">
+        <strong>Запуск тестов недоступен:</strong> <span th:text="${blockReason}"></span>
+        <a th:href="@{/settings/prometheus}" class="alert-link">Настройки → Prometheus/Grafana</a></div>
+    <form id="run-form" th:action="@{/runs}" method="post" hx-post="/runs/preview" hx-trigger="change, load" hx-target="#preview" hx-swap="outerHTML">
+        <div class="card card-body mb-3">
+            <h6>1. Сценарий</h6>
+            <select class="form-select" name="scenarioId" required>
+                <option value="">— выберите —</option>
+                <option th:each="s : ${scenarios}" th:value="${s.id}" th:text="${s.name}" th:selected="${s.id == scenarioId}"></option></select>
+        </div>
+        <div class="card card-body mb-3">
+            <h6>2. Генераторы</h6>
+            <div class="mb-2">
+                <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="mode" value="MANUAL" id="m1" checked><label class="form-check-label" for="m1">выбрать вручную</label></div>
+                <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="mode" value="POOL" id="m2"><label class="form-check-label" for="m2">из пула</label></div>
+            </div>
+            <div class="table-responsive"><table class="table table-sm mb-2">
+                <thead class="table-light"><tr><th></th><th>Генератор</th><th>Пул</th><th>Статус</th><th>CPU</th><th>Часы</th><th title="доля нагрузки пропорциональна весу">Вес</th></tr></thead>
+                <tbody>
+                <tr th:each="g : ${generators}">
+                    <td><input class="form-check-input" type="checkbox" th:name="'g.' + ${g.g().id}" value="true" th:disabled="${g.g().status.name() != 'ONLINE'}"></td>
+                    <td th:text="${g.g().name}"></td><td th:text="${g.poolName} ?: '—'"></td>
+                    <td><span class="badge" th:classappend="${g.badgeClass}" th:text="${g.statusLabel}"></span></td>
+                    <td th:text="${g.cpu != null} ? ${#numbers.formatDecimal(g.cpu, 1, 0)} + '%' : '—'"></td>
+                    <td th:classappend="${g.clockBad} ? 'text-danger'" th:text="${g.clockOffsetMs != null} ? ${g.clockOffsetMs} + ' мс' : '—'"></td>
+                    <td style="width:90px"><input class="form-control form-control-sm" type="number" min="1" value="1" th:name="'w.' + ${g.g().id}"></td>
+                </tr></tbody></table></div>
+            <div class="row g-2">
+                <div class="col-md-4"><label class="form-label small mb-0">Пул (если «из пула»)</label>
+                    <select class="form-select form-select-sm" name="poolId"><option value="">—</option>
+                        <option th:each="p : ${pools}" th:value="${p.id}" th:text="${p.name}"></option></select></div>
+                <div class="col-md-2"><label class="form-label small mb-0">Сколько генераторов</label>
+                    <input class="form-control form-control-sm" type="number" min="1" name="poolCount" value="1"></div>
+            </div>
+            <div class="form-text">Нагрузка делится через <code>--execution-segment</code>: поровну или по весам. Если свободных генераторов не хватает, запуск встанет в очередь (QUEUED).</div>
+        </div>
+        <div class="card card-body mb-3">
+            <h6>3. Отказ генератора и подготовка</h6>
+            <div class="row g-3">
+                <div class="col-md-4"><label class="form-label">При отвале генератора во время теста</label>
+                    <select class="form-select" name="failurePolicy"><option th:each="p : ${policies}" th:value="${p}" th:text="${p.title}"></option></select>
+                    <div class="form-text">Ступени, на которых генератора не было, помечаются недостоверными.</div></div>
+                <div class="col-md-3"><label class="form-label">Таймаут подготовки, с</label><input class="form-control" type="number" min="10" name="prepareTimeoutSec" value="120"></div>
+            </div>
+        </div>
+        <h6>4. Подтверждение</h6>
+        <div id="preview" class="mb-3"><div class="text-muted">Выберите сценарий и генераторы…</div></div>
+        <button class="btn btn-success btn-lg" th:disabled="${blockReason != null}">Запустить</button>
+        <a class="btn btn-link" th:href="@{/runs}">Отмена</a>
+    </form>
+</th:block>
+</body>
+</html>

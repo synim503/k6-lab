@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- Общие поля формы добавления генератора (одиночного и массового) -->
+<th:block th:fragment="common">
+    <div class="col-md-4">
+        <label class="form-label">SSH-учётка</label>
+        <select class="form-select" th:field="*{credentialId}" required>
+            <option value="">— выберите —</option>
+            <option th:each="c : ${credentials}" th:value="${c.id}" th:text="${c.name} + ' (' + ${c.username} + ')'"></option>
+        </select>
+        <div class="text-danger small" th:errors="*{credentialId}"></div>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">Пул</label>
+        <select class="form-select" th:field="*{poolId}">
+            <option value="">— без пула —</option>
+            <option th:each="p : ${pools}" th:value="${p.id}" th:text="${p.name}"></option>
+        </select>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">Метки (через запятую)</label>
+        <input class="form-control" th:field="*{labels}" placeholder="dc1, 10g">
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">Режим установки</label>
+        <select class="form-select" th:field="*{mode}">
+            <option value="SYSTEM">Системный (через sudo)</option>
+            <option value="USER">Пользовательский (без root)</option>
+        </select>
+        <div class="form-text">Системный: пользователь k6agent, systemd, /opt/k6-agent. Пользовательский: каталог в домашнем,
+            systemd --user (при включённом linger) либо cron-супервизор с меньшей надёжностью.</div>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">Каталог установки</label>
+        <input class="form-control" th:field="*{dir}" placeholder="/opt/k6-agent или ~/k6-agent">
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">Максимум одновременных run</label>
+        <input class="form-control" type="number" min="1" th:field="*{maxConcurrentRuns}">
+        <div class="form-text">Больше 1 — тесты будут конкурировать за ресурсы генератора.</div>
+        <div class="text-danger small" th:errors="*{maxConcurrentRuns}"></div>
+    </div>
+    <div class="col-md-12">
+        <label class="form-label">URL сервера, доступный с генератора</label>
+        <input class="form-control" th:field="*{serverUrl}" placeholder="ws://k6admin.example:47331/agent/ws">
+        <div class="text-danger small" th:errors="*{serverUrl}"></div>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">Версия агента</label>
+        <select class="form-select" th:field="*{agentArtifactId}">
+            <option value="">по умолчанию</option>
+            <option th:each="a : ${agents}" th:value="${a.id}" th:text="${a.version} + ' ' + ${a.arch.title} + (${a.nativeAgent} ? ' (Go)' : ' (jar)') + (${a.default} ? ' (по умолчанию)' : '')"></option>
+        </select>
+    </div>
+    <div class="col-md-4">
+        <label class="form-label">Версия k6</label>
+        <select class="form-select" th:field="*{k6ArtifactId}">
+            <option value="">по умолчанию</option>
+            <option th:each="a : ${k6s}" th:value="${a.id}"
+                    th:text="${a.kind.name() == 'XK6' ? 'xk6 ' + a.label + ' ' : ''} + ${a.version} + ' ' + ${a.arch.title} + (${a.default} ? ' (по умолчанию)' : '')"></option>
+        </select>
+    </div>
+    <div class="col-md-4 d-flex align-items-end">
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" th:field="*{tuneOs}" id="tuneOs">
+            <label class="form-check-label" for="tuneOs">Тюнинг ОС (sysctl, только системный режим)</label>
+        </div>
+    </div>
+</th:block>
+</body>
+</html>

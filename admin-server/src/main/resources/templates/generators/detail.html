@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security" layout:decorate="~{layout/main}">
+<head><title th:text="${v.g().name}">Генератор</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0"><span th:text="${v.g().name}"></span>
+            <span class="badge fs-6 align-middle ms-2" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span></h3>
+        <a class="btn btn-link" th:href="@{/generators}">← к списку</a>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <div class="card" id="card" th:fragment="card" hx-get="" th:attr="hx-get=@{/generators/{id}/card(id=${v.g().id})}" hx-trigger="every 5s" hx-swap="outerHTML">
+                <div class="card-header">Состояние</div>
+                <table class="table table-sm mb-0">
+                    <tr><th class="w-50">Хост</th><td th:text="${v.g().host} + ':' + ${v.g().sshPort}"></td></tr>
+                    <tr><th>Пул</th><td th:text="${v.poolName} ?: '—'"></td></tr>
+                    <tr><th>Метки</th><td th:text="${v.g().labels.isEmpty()} ? '—' : ${#strings.listJoin(v.g().labels, ', ')}"></td></tr>
+                    <tr><th>Режим установки</th><td th:text="${v.g().installMode} + ' · ' + ${v.g().installDir} + ' · ' + (${v.g().supervisor} ?: '?')"></td></tr>
+                    <tr><th>ОС / архитектура</th><td th:text="(${v.g().osName} ?: '—') + ' / ' + (${v.g().arch} ?: '—')"></td></tr>
+                    <tr><th>Агент</th><td>
+                        <span th:text="${v.g().agentVersion} ?: '—'" th:classappend="${v.agentDrift} ? 'text-warning fw-bold'"></span>
+                        <span class="text-warning small" th:if="${v.agentDrift}">(по умолчанию: [[${v.defaultAgent}]])</span></td></tr>
+                    <tr><th>k6</th><td>
+                        <span th:text="${v.g().k6Version} ?: '—'" th:classappend="${v.k6Drift} ? 'text-warning fw-bold'"></span>
+                        <span class="text-warning small" th:if="${v.k6Drift}">(по умолчанию: [[${v.defaultK6}]])</span></td></tr>
+                    <tr><th>Макс. одновременных run</th><td><span th:text="${v.g().maxConcurrentRuns}"></span>
+                        <span class="text-warning small" th:if="${v.g().maxConcurrentRuns > 1}">— тесты конкурируют за ресурсы генератора</span></td></tr>
+                    <tr><th>Активных run</th><td th:text="${v.g().activeRuns}"></td></tr>
+                    <tr><th>Смещение часов</th><td th:classappend="${v.clockBad} ? 'metric-hot'" th:text="${v.clockOffsetMs != null} ? ${v.clockOffsetMs} + ' мс' : '—'"></td></tr>
+                    <tr><th>Последний heartbeat</th><td th:text="${v.g().lastHeartbeatAt} ?: '—'"></td></tr>
+                    <tr><th>CPU</th><td th:classappend="${v.cpuHot} ? 'metric-hot'" th:text="${v.cpu != null} ? ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%' : '—'"></td></tr>
+                    <tr><th>RAM</th><td th:text="${v.memPct != null} ? ${#numbers.formatDecimal(v.memPct, 1, 0)} + '%' : '—'"></td></tr>
+                    <tr><th>Диск (свободно)</th><td th:text="${v.diskFreeGb != null} ? ${v.diskFreeGb} + ' ГБ' : '—'"></td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="col-lg-6" sec:authorize="hasRole('ADMIN')">
+            <div class="card mb-3">
+                <div class="card-header">Управление</div>
+                <div class="card-body d-flex flex-wrap gap-2">
+                    <form th:action="@{/generators/{id}/maintenance(id=${v.g().id})}" method="post">
+                        <input type="hidden" name="on" th:value="${!v.g().maintenance}">
+                        <button class="btn btn-outline-warning" th:text="${v.g().maintenance} ? 'Вернуть в работу' : 'Режим обслуживания'"></button>
+                    </form>
+                    <form th:action="@{/generators/{id}/restart(id=${v.g().id})}" method="post" onsubmit="return confirm('Перезапустить агента?')">
+                        <button class="btn btn-outline-secondary" th:disabled="${v.g().busy}">Перезапустить</button></form>
+                    <form th:action="@{/generators/{id}/uninstall(id=${v.g().id})}" method="post"
+                          onsubmit="return confirm('Остановить агент, удалить файлы и отозвать токен? Генератор будет удалён из списка.')">
+                        <button class="btn btn-outline-danger" th:disabled="${v.g().busy}">Удалить агент</button></form>
+                </div>
+                <div class="card-body border-top">
+                    <form th:action="@{/generators/{id}/update(id=${v.g().id})}" method="post" class="row g-2"
+                          onsubmit="return confirm('Остановить агент и заменить файлы? При неудаче будет откат.')">
+                        <div class="col-md-5"><label class="form-label small">Агент</label>
+                            <select class="form-select form-select-sm" name="agentArtifactId">
+                                <option value="">по умолчанию</option>
+                                <option th:each="a : ${agents}" th:value="${a.id}" th:text="${a.version}"></option></select></div>
+                        <div class="col-md-5"><label class="form-label small">k6</label>
+                            <select class="form-select form-select-sm" name="k6ArtifactId">
+                                <option value="">по умолчанию</option>
+                                <option th:each="a : ${k6s}" th:value="${a.id}" th:text="${a.version} + ' ' + ${a.arch.title}"></option></select></div>
+                        <div class="col-md-2 d-flex align-items-end"><button class="btn btn-sm btn-primary w-100" th:disabled="${v.g().busy}">Обновить</button></div>
+                        <div class="form-text" th:if="${v.g().busy}">Обновление недоступно, пока генератор занят тестом.</div>
+                    </form>
+                </div>
+                <div class="card-body border-top">
+                    <form th:action="@{/generators/{id}/settings(id=${v.g().id})}" method="post" class="row g-2">
+                        <div class="col-md-4"><label class="form-label small">Пул</label>
+                            <select class="form-select form-select-sm" name="poolId">
+                                <option value="">— без пула —</option>
+                                <option th:each="p : ${pools}" th:value="${p.id}" th:text="${p.name}" th:selected="${p.id == v.g().poolId}"></option></select></div>
+                        <div class="col-md-4"><label class="form-label small">Метки</label>
+                            <input class="form-control form-control-sm" name="labels" th:value="${#strings.listJoin(v.g().labels, ', ')}"></div>
+                        <div class="col-md-2"><label class="form-label small">Макс. run</label>
+                            <input class="form-control form-control-sm" type="number" min="1" name="maxConcurrentRuns" th:value="${v.g().maxConcurrentRuns}"></div>
+                        <div class="col-md-2 d-flex align-items-end"><button class="btn btn-sm btn-outline-primary w-100">Сохранить</button></div>
+                    </form>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header d-flex justify-content-between">Журнал агента
+                    <button class="btn btn-sm btn-outline-secondary py-0" hx-get="" th:attr="hx-get=@{/generators/{id}/agent-log(id=${v.g().id},lines=200)}"
+                            hx-target="#agent-log" hx-swap="innerHTML" hx-indicator="#agent-log">Показать последние 200 строк</button></div>
+                <div class="card-body p-0"><div id="agent-log" th:fragment="agentLog">
+                    <div class="text-danger p-2" th:if="${error}" th:text="${error}"></div>
+                    <pre class="log-view mb-0" th:if="${text != null}" th:text="${text}"></pre>
+                </div></div>
+            </div>
+        </div>
+    </div>
+
+    <h5 class="mt-4">История операций</h5>
+    <div class="card"><table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>#</th><th>Операция</th><th>Статус</th><th>Начало</th><th>Кто</th><th>Ошибка</th></tr></thead>
+        <tbody>
+        <tr th:if="${history.isEmpty()}"><td colspan="6" class="text-muted">Пока пусто</td></tr>
+        <tr th:each="d : ${history}">
+            <td><a th:href="@{/deployments/{id}(id=${d.id})}" th:text="${d.id}"></a></td>
+            <td th:text="${d.operation}"></td><td th:text="${d.status}"></td>
+            <td th:text="${d.startedAt}"></td><td th:text="${d.startedBy}"></td>
+            <td class="text-danger small" th:text="${d.error}"></td>
+        </tr></tbody></table></div>
+</th:block>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- Строка операции модели. Параметры: i - индекс, o - OpForm, rateUnits, operationNames -->
+<div th:fragment="row" class="op-row border rounded p-3 mb-3 bg-white" th:attr="data-i=${i}">
+    <div class="row g-2">
+        <div class="col-md-2"><label class="form-label small mb-0">Имя операции</label>
+            <input class="form-control form-control-sm" th:name="|ops[${i}].name|" th:value="${o.name}" placeholder="createPayment"></div>
+        <div class="col-md-2"><label class="form-label small mb-0">exec-функция</label>
+            <input class="form-control form-control-sm" th:name="|ops[${i}].execFn|" th:value="${o.execFn}" list="op-names" placeholder="createPayment"></div>
+        <div class="col-md-2"><label class="form-label small mb-0">Модель</label>
+            <select class="form-select form-select-sm" th:name="|ops[${i}].mode|">
+                <option value="OPEN" th:selected="${o.mode.name() == 'OPEN'}">открытая (arrival-rate)</option>
+                <option value="CLOSED" th:selected="${o.mode.name() == 'CLOSED'}">закрытая (VU + pacing)</option></select></div>
+        <div class="col-md-3"><label class="form-label small mb-0">Интенсивность</label>
+            <div class="input-group input-group-sm">
+                <input class="form-control" th:name="|ops[${i}].intensityValue|" th:value="${o.intensityValue}" placeholder="значение">
+                <select class="form-select" th:name="|ops[${i}].intensityUnit|">
+                    <option th:each="u : ${rateUnits}" th:value="${u}" th:text="${u.title}" th:selected="${u == o.intensityUnit}"></option></select></div></div>
+        <div class="col-md-1"><label class="form-label small mb-0" title="доля от общей интенсивности (режим «доли»)">Доля, %</label>
+            <input class="form-control form-control-sm" th:name="|ops[${i}].sharePct|" th:value="${o.sharePct}"></div>
+        <div class="col-md-1"><label class="form-label small mb-0">Включена</label>
+            <div class="form-check pt-1"><input class="form-check-input" type="checkbox" th:name="|ops[${i}].enabled|" th:checked="${o.enabled}" value="true">
+                <input type="hidden" th:name="|_ops[${i}].enabled|" value="on"></div></div>
+        <div class="col-md-1 text-end"><button type="button" class="btn btn-sm btn-outline-danger mt-3" onclick="this.closest('.op-row').remove()">×</button></div>
+    </div>
+    <div class="row g-2 mt-1">
+        <div class="col-md-2"><label class="form-label small mb-0" title="вся итерация, все запросы; нужна для расчёта VU">Ожид. длительность, с</label>
+            <input class="form-control form-control-sm" th:name="|ops[${i}].expectedDurationSec|" th:value="${o.expectedDurationSec}"></div>
+        <div class="col-md-2"><label class="form-label small mb-0">SLA: перцентиль</label>
+            <select class="form-select form-select-sm" th:name="|ops[${i}].slaPercentile|">
+                <option th:each="p : ${new int[]{90, 95, 99}}" th:value="${p}" th:text="'p' + ${p}" th:selected="${p == o.slaPercentile}"></option></select></div>
+        <div class="col-md-2"><label class="form-label small mb-0">SLA: порог, мс</label>
+            <input class="form-control form-control-sm" th:name="|ops[${i}].slaThresholdMs|" th:value="${o.slaThresholdMs}"></div>
+        <div class="col-md-2"><label class="form-label small mb-0">Допустимо ошибок, %</label>
+            <input class="form-control form-control-sm" th:name="|ops[${i}].maxErrorPct|" th:value="${o.maxErrorPct}"></div>
+        <div class="col-md-2"><label class="form-label small mb-0" title="зафиксировать уровень операции (например, фон всегда 100%)">Фикс. уровень, %</label>
+            <input class="form-control form-control-sm" th:name="|ops[${i}].fixedLevelPct|" th:value="${o.fixedLevelPct}" placeholder="не фиксирован"></div>
+    </div>
+    <details class="mt-2"><summary class="small text-muted">Закрытая модель, VU, env, теги</summary>
+        <div class="row g-2 mt-1">
+            <div class="col-md-2"><label class="form-label small mb-0">Pacing, мс (закрытая)</label>
+                <input class="form-control form-control-sm" th:name="|ops[${i}].pacingMs|" th:value="${o.pacingMs}"></div>
+            <div class="col-md-3"><label class="form-label small mb-0">Закрытая: что вводите</label>
+                <select class="form-select form-select-sm" th:name="|ops[${i}].closedInput|">
+                    <option value="RATE_PACING" th:selected="${o.closedInput.name() == 'RATE_PACING'}">интенсивность + pacing → VU</option>
+                    <option value="VU_PACING" th:selected="${o.closedInput.name() == 'VU_PACING'}">VU + pacing → интенсивность</option></select></div>
+            <div class="col-md-2"><label class="form-label small mb-0">VU (если VU + pacing)</label>
+                <input class="form-control form-control-sm" th:name="|ops[${i}].vusOverride|" th:value="${o.vusOverride}"></div>
+            <div class="col-md-2"><label class="form-label small mb-0">preAllocatedVUs (перекрыть)</label>
+                <input class="form-control form-control-sm" th:name="|ops[${i}].preAllocOverride|" th:value="${o.preAllocOverride}"></div>
+            <div class="col-md-2"><label class="form-label small mb-0">maxVUs (перекрыть)</label>
+                <input class="form-control form-control-sm" th:name="|ops[${i}].maxVusOverride|" th:value="${o.maxVusOverride}"></div>
+            <div class="col-md-3"><label class="form-label small mb-0">Без admin.js: неуспех по</label>
+                <select class="form-select form-select-sm" th:name="|ops[${i}].failureSource|">
+                    <option value="HTTP" th:selected="${o.failureSource.name() == 'HTTP'}">http_req_failed</option>
+                    <option value="CHECKS" th:selected="${o.failureSource.name() == 'CHECKS'}">checks</option></select></div>
+            <div class="col-md-4"><label class="form-label small mb-0">env операции (KEY=VALUE по строкам)</label>
+                <textarea class="form-control form-control-sm font-monospace" rows="2" th:name="|ops[${i}].envText|" th:text="${o.envText}"></textarea></div>
+            <div class="col-md-4"><label class="form-label small mb-0">теги операции (KEY=VALUE)</label>
+                <textarea class="form-control form-control-sm font-monospace" rows="2" th:name="|ops[${i}].tagsText|" th:text="${o.tagsText}"></textarea></div>
+        </div>
+    </details>
+</div>
+</body>
+</html>

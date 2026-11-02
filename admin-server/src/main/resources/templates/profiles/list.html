@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security" layout:decorate="~{layout/main}">
+<head><title>Профили теста</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-graph-up-arrow"></i></span>Профили теста</h3>
+        <div class="btn-group">
+            <a class="btn btn-primary" th:href="@{/profiles/new}">Создать профиль</a>
+            <a class="btn btn-outline-secondary" th:href="@{/profile-templates}">Шаблоны профилей</a>
+        </div>
+    </div>
+    <div class="card"><table class="table table-sm table-hover mb-0">
+        <thead class="table-light"><tr><th>Имя</th><th>Тип</th><th>Graceful stop / ramp-down</th><th></th></tr></thead>
+        <tbody>
+        <tr th:if="${profiles.isEmpty()}"><td colspan="4"><div class="empty-state"><i class="bi bi-inbox"></i>Профилей пока нет</div></td></tr>
+        <th:block th:each="p : ${profiles}">
+            <tr>
+                <td><a th:href="@{/profiles/{id}/edit(id=${p.id})}" th:text="${p.name}"></a> <span class="badge text-bg-info" th:if="${p.template}">шаблон</span></td>
+                <td th:text="${p.type.title}"></td>
+                <td th:text="${p.gracefulStopSec} + ' с / ' + ${p.gracefulRampDownSec} + ' с'"></td>
+                <td class="text-end text-nowrap">
+                    <button class="btn btn-sm btn-outline-secondary py-0" hx-get="" th:attr="hx-get=@{/profiles/{id}/steps(id=${p.id})}"
+                            th:hx-target="'#steps-' + ${p.id}">ступени</button>
+                    <form class="d-inline" th:action="@{/profiles/{id}/clone(id=${p.id})}" method="post"><button class="btn btn-sm btn-outline-secondary py-0">клонировать</button></form>
+                    <form class="d-inline" th:action="@{/profiles/{id}/delete(id=${p.id})}" method="post" onsubmit="return confirm('Удалить профиль?')"><button class="btn btn-sm btn-outline-danger py-0">удалить</button></form>
+                </td></tr>
+            <tr><td colspan="4" class="p-0 border-0"><div th:id="'steps-' + ${p.id}"></div></td></tr>
+        </th:block></tbody></table></div>
+</th:block>
+</body>
+</html>

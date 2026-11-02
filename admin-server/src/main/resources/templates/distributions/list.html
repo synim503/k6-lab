@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Дистрибутивы</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-box-seam"></i></span>Дистрибутивы</h3>
+    <p class="text-muted">Генераторы не имеют доступа в интернет: агент (бинарь Go под linux-amd64/arm64 или jar), k6, JRE 21 (tar.gz, только для Java-агента) и кастомные сборки xk6 админка хранит
+        и доставляет по SFTP. Первая загруженная версия вида/архитектуры автоматически становится версией по умолчанию.</p>
+
+    <div class="card mb-4"><div class="card-header">Загрузить версию</div>
+        <form class="card-body row g-3" th:action="@{/distributions}" method="post" enctype="multipart/form-data">
+            <div class="col-md-2"><label class="form-label">Вид</label>
+                <select class="form-select" name="kind"><option th:each="k : ${kinds}" th:value="${k}" th:text="${k.title}"></option></select></div>
+            <div class="col-md-2"><label class="form-label">Версия</label><input class="form-control" name="version" required placeholder="1.7.1"></div>
+            <div class="col-md-2"><label class="form-label">Архитектура</label>
+                <select class="form-select" name="arch"><option th:each="a : ${arches}" th:value="${a}" th:text="${a.title}"></option></select></div>
+            <div class="col-md-2"><label class="form-label">Метка (xk6)</label><input class="form-control" name="label" placeholder="kafka"></div>
+            <div class="col-md-4"><label class="form-label">Файл</label><input class="form-control" type="file" name="file" required></div>
+            <div class="col-12 d-flex justify-content-between align-items-center">
+                <div class="form-check"><input class="form-check-input" type="checkbox" name="makeDefault" value="true" id="mkdef">
+                    <label class="form-check-label" for="mkdef">Сделать версией по умолчанию</label></div>
+                <button class="btn btn-primary">Загрузить</button>
+            </div>
+        </form></div>
+
+    <div class="card"><table class="table table-sm table-hover mb-0">
+        <thead class="table-light"><tr><th>Вид</th><th>Версия</th><th>Метка</th><th>Архитектура</th><th>Файл</th><th>Размер</th><th>sha256</th><th></th></tr></thead>
+        <tbody>
+        <tr th:if="${items.isEmpty()}"><td colspan="8"><div class="empty-state"><i class="bi bi-inbox"></i>Ничего не загружено</div></td></tr>
+        <tr th:each="a : ${items}">
+            <td th:text="${a.kind.title}"></td>
+            <td><span th:text="${a.version}"></span> <span class="badge text-bg-success" th:if="${a.default}">по умолчанию</span></td>
+            <td th:text="${a.label}"></td>
+            <td th:text="${a.arch.title}"></td>
+            <td th:text="${a.filename}"></td>
+            <td th:text="${#numbers.formatDecimal(a.sizeBytes / 1048576.0, 1, 1)} + ' МБ'"></td>
+            <td><code class="small" th:text="${#strings.substring(a.sha256, 0, 16)} + '…'" th:title="${a.sha256}"></code></td>
+            <td class="text-end text-nowrap">
+                <form class="d-inline" th:if="${!a.default and a.kind.name() != 'XK6'}" th:action="@{/distributions/{id}/default(id=${a.id})}" method="post">
+                    <button class="btn btn-sm btn-outline-success py-0">по умолчанию</button></form>
+                <form class="d-inline" th:action="@{/distributions/{id}/delete(id=${a.id})}" method="post" onsubmit="return confirm('Удалить версию?')">
+                    <button class="btn btn-sm btn-outline-danger py-0">удалить</button></form>
+            </td>
+        </tr></tbody>
+    </table></div>
+</th:block>
+</body>
+</html>

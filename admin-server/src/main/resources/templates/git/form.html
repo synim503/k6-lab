@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Git-репозиторий</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3" th:text="${form.id == null} ? 'Новый репозиторий' : 'Репозиторий: ' + ${form.name}"></h3>
+    <form th:action="@{/git-repos}" th:object="${form}" method="post" class="card card-body" autocomplete="off">
+        <input type="hidden" th:field="*{id}">
+        <div class="row g-3">
+            <div class="col-md-4"><label class="form-label">Имя</label><input class="form-control" th:field="*{name}" required></div>
+            <div class="col-md-8"><label class="form-label">URL</label><input class="form-control" th:field="*{url}" placeholder="https://git.example/team/perf-scripts.git или git@git.example:team/perf.git" required></div>
+            <div class="col-md-4"><label class="form-label">Аутентификация</label>
+                <select class="form-select" th:field="*{authType}">
+                    <option value="NONE">Без аутентификации</option><option value="HTTPS_TOKEN">HTTPS-токен</option><option value="SSH">SSH-ключ (из SSH-учёток)</option></select></div>
+            <div class="col-md-4"><label class="form-label">HTTPS-токен (или «пользователь:токен»)</label>
+                <input class="form-control" type="password" th:field="*{token}" autocomplete="new-password">
+                <div class="secret-hint" th:if="${form.hasToken}">Токен сохранён и не показывается. Оставьте пустым, чтобы не менять.</div></div>
+            <div class="col-md-4"><label class="form-label">SSH-учётка (ключ)</label>
+                <select class="form-select" th:field="*{sshCredentialId}"><option value="">—</option>
+                    <option th:each="c : ${sshCredentials}" th:value="${c.id}" th:text="${c.name}"></option></select></div>
+            <div class="col-md-6"><label class="form-label">Подкаталог со скриптами</label>
+                <input class="form-control" th:field="*{subdir}" placeholder="пусто = корень репозитория"></div>
+        </div>
+        <div class="mt-4 d-flex gap-2"><button class="btn btn-primary">Сохранить</button><a class="btn btn-link" th:href="@{/git-repos}">Отмена</a></div>
+    </form>
+</th:block>
+</body>
+</html>

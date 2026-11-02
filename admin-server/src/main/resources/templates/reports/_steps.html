@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- Ступени x операции + метрики SUT: общий фрагмент страницы результатов и отчёта -->
+<div th:fragment="steps(data, fmt)">
+    <div th:each="s : ${data.steps}" class="step-block">
+        <h4 class="step-h">
+            Ступень <span th:text="${s.stepNo}"></span> — <span th:text="${#numbers.formatDecimal(s.levelPct, 1, 1)}"></span>% от модели
+            <span class="pill" th:classappend="${fmt.css(s.status)}" th:text="${fmt.status(s.status)}"></span>
+        </h4>
+        <div class="muted" th:if="${s.status != 'NOT_RUN'}">
+            окно расчёта <span th:text="${fmt.time(s.windowStart)} + ' – ' + ${fmt.time(s.windowEnd)}"></span>
+            <span th:if="${s.genCpuMax != null}" th:text="'· CPU генераторов макс. ' + ${fmt.n(s.genCpuMax, 0)} + '%'" th:classappend="${s.genOverloaded} ? 'bad-text'"></span>
+        </div>
+        <ul class="reasons" th:if="${!s.reasons.isEmpty()}"><li th:each="r : ${s.reasons}" th:text="${r}"></li></ul>
+        <table class="tbl" th:if="${!s.ops.isEmpty()}">
+            <thead><tr><th>Операция</th><th>План, оп/с</th><th>Факт, оп/с</th><th>Откл., %</th><th>p50, мс</th><th>p90, мс</th><th>p95, мс</th><th>p99, мс</th><th>SLA</th><th>Ошибки, %</th><th>Dropped</th></tr></thead>
+            <tbody>
+            <tr th:each="o : ${s.ops}" th:classappend="${o.ok} ? '' : 'row-bad'">
+                <td th:text="${o.operation}"></td>
+                <td class="num" th:text="${fmt.n(o.targetRate, 2)}"></td>
+                <td class="num" th:text="${fmt.n(o.actualRate, 2)}"></td>
+                <td class="num" th:text="${fmt.n(o.deviationPct, 1)}"></td>
+                <td class="num" th:text="${fmt.n(o.p50, 0)}"></td>
+                <td class="num" th:text="${fmt.n(o.p90, 0)}"></td>
+                <td class="num" th:text="${fmt.n(o.p95, 0)}"></td>
+                <td class="num" th:text="${fmt.n(o.p99, 0)}"></td>
+                <td class="num" th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaMs, 1, 0)}"></td>
+                <td class="num" th:text="${fmt.n(o.errorPct, 2)} + ' / ' + ${#numbers.formatDecimal(o.maxErrorPct, 1, 2)}"></td>
+                <td class="num" th:text="${fmt.n(o.dropped, 0)}"></td>
+            </tr>
+            </tbody>
+        </table>
+        <table class="tbl" th:if="${!s.sut.isEmpty()}">
+            <thead><tr><th>Метрика SUT</th><th>Среднее</th><th>Максимум</th><th>Последнее</th></tr></thead>
+            <tbody><tr th:each="m : ${s.sut}" th:classappend="${m.warn} ? 'row-warn'">
+                <td th:text="${m.name} + (${m.unit} != null and ${m.unit} != '' ? ', ' + ${m.unit} : '')"></td>
+                <td class="num" th:text="${fmt.n(m.avg, 2)}"></td>
+                <td class="num" th:text="${fmt.n(m.max, 2)}"></td>
+                <td class="num" th:text="${fmt.n(m.last, 2)}"></td></tr></tbody>
+        </table>
+    </div>
+</div>
+</body>
+</html>

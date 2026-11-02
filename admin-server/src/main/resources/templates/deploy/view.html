@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security" layout:decorate="~{layout/main}">
+<head><title th:text="'Операция #' + ${d.id}">Операция</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0">Операция #<span th:text="${d.id}"></span>: <span th:text="${d.operation}"></span> <span th:text="${d.targetHost}"></span></h3>
+        <a class="btn btn-link" th:href="@{/deployments}">← к списку</a>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-4">
+            <div id="deploy-status" th:fragment="status" hx-get="" th:attr="hx-get=@{/deployments/{id}/status(id=${d.id})}"
+                 hx-trigger="refresh" hx-swap="outerHTML">
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <span class="badge fs-6" th:text="${d.status}"
+                              th:classappend="${d.status.name() == 'SUCCEEDED'} ? 'text-bg-success' : (${d.status.name() == 'FAILED' or d.status.name() == 'ROLLED_BACK'} ? 'text-bg-danger' : (${d.status.name() == 'WAITING_HOST_KEY'} ? 'text-bg-warning' : 'text-bg-info'))"></span>
+                        <div class="text-danger mt-2" th:if="${d.error}" th:text="${d.error}"></div>
+                    </div>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item text-muted" th:if="${d.steps.isEmpty()}">Шаги ещё не начались…</li>
+                        <li class="list-group-item" th:each="s : ${d.steps}">
+                            <span th:class="'step-' + ${s.status}">
+                                <span th:switch="${s.status}">
+                                    <span th:case="'OK'">✔</span><span th:case="'FAILED'">✖</span>
+                                    <span th:case="'SKIPPED'">–</span><span th:case="*">…</span>
+                                </span>
+                                <span th:text="${s.n} + '. ' + ${s.name}"></span>
+                            </span>
+                            <div class="small text-muted" th:if="${s.message}" th:text="${s.message}"></div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="card border-warning" th:if="${d.status.name() == 'WAITING_HOST_KEY'}">
+                    <div class="card-header bg-warning-subtle">Подтвердите ключ хоста</div>
+                    <div class="card-body">
+                        <p>Хост <strong th:text="${d.hostKeyHost} + ':' + ${d.hostKeyPort}"></strong> подключается впервые.
+                            Сверьте fingerprint с тем, что показывает сам хост (<code>ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub</code>).</p>
+                        <dl class="mb-3">
+                            <dt>Тип ключа</dt><dd th:text="${d.hostKeyType}"></dd>
+                            <dt>Fingerprint (SHA256)</dt><dd><code th:text="${d.hostKeyFingerprint}"></code></dd>
+                        </dl>
+                        <form sec:authorize="hasRole('ADMIN')" th:action="@{/deployments/{id}/confirm-host-key(id=${d.id})}" method="post">
+                            <button class="btn btn-warning">Доверять и продолжить</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-8">
+            <pre id="deploy-log" class="log-view" th:attr="data-stream=@{/deployments/{id}/stream(id=${d.id})}"></pre>
+        </div>
+    </div>
+</th:block>
+</body>
+</html>

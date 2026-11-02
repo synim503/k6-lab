@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security" layout:decorate="~{layout/main}">
+<head><title>Генераторы</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-hdd-network"></i></span>Генераторы</h3>
+        <div sec:authorize="hasRole('ADMIN')" class="btn-group">
+            <a class="btn btn-primary" th:href="@{/quick/generator}"><i class="bi bi-plus-lg me-1"></i>Добавить сервер</a>
+            <a class="btn btn-outline-secondary" th:href="@{/generators/new}">Расширенно</a>
+            <a class="btn btn-outline-primary" th:href="@{/generators/bulk}">Массовое добавление</a>
+        </div>
+    </div>
+
+    <div id="gen-table" hx-get="/generators/table" hx-trigger="every 5s" hx-swap="outerHTML" th:fragment="table">
+        <div class="card"><div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light"><tr>
+                    <th>Имя</th><th>Хост</th><th>Пул</th><th>Статус</th><th>CPU</th><th>RAM</th><th>Сеть (rx / tx, МБ/с)</th>
+                    <th>Load</th><th>Диск, ГБ</th><th>Сокеты</th><th>Часы</th><th>Версии агент / k6</th>
+                </tr></thead>
+                <tbody>
+                <tr th:if="${generators.isEmpty()}"><td colspan="12"><div class="empty-state"><i class="bi bi-inbox"></i>Генераторов пока нет</div></td></tr>
+                <tr th:each="v : ${generators}">
+                    <td><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a></td>
+                    <td th:text="${v.g().host}"></td>
+                    <td th:text="${v.poolName} ?: '—'"></td>
+                    <td><span class="badge" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span></td>
+                    <td th:classappend="${v.cpuHot} ? 'metric-hot'" th:text="${v.cpu != null} ? ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%' : '—'"></td>
+                    <td th:text="${v.memPct != null} ? ${#numbers.formatDecimal(v.memPct, 1, 0)} + '%' : '—'"></td>
+                    <td th:text="${v.netRx != null} ? ${#numbers.formatDecimal(v.netRx / 1048576.0, 1, 2)} + ' / ' + ${#numbers.formatDecimal(v.netTx / 1048576.0, 1, 2)} : '—'"></td>
+                    <td th:text="${v.load1 != null} ? ${#numbers.formatDecimal(v.load1, 1, 2)} : '—'"></td>
+                    <td th:text="${v.diskFreeGb != null} ? ${v.diskFreeGb} : '—'"></td>
+                    <td th:text="${v.sockets != null} ? ${v.sockets} : '—'"></td>
+                    <td th:classappend="${v.clockBad} ? 'metric-hot' : (${v.clockWarn} ? 'text-warning')"
+                        th:text="${v.clockOffsetMs != null} ? ${v.clockOffsetMs} + ' мс' : '—'"></td>
+                    <td>
+                        <span th:text="${v.g().agentVersion} ?: '—'" th:classappend="${v.agentDrift} ? 'text-warning fw-bold'"
+                              th:title="${v.agentDrift} ? 'По умолчанию: ' + ${v.defaultAgent}"></span> /
+                        <span th:text="${v.g().k6Version} ?: '—'" th:classappend="${v.k6Drift} ? 'text-warning fw-bold'"
+                              th:title="${v.k6Drift} ? 'По умолчанию: ' + ${v.defaultK6}"></span>
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div></div>
+    </div>
+
+    <h5 class="mt-4">Пулы</h5>
+    <div class="card"><div class="card-body">
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            <span th:each="p : ${pools}" class="d-flex align-items-center gap-1 border rounded px-2 py-1 bg-white">
+                <strong th:text="${p.name}"></strong>
+                <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/pools/{id}/update(id=${p.id})}" method="post"
+                      onsubmit="return confirm('Обновить агент и k6 на всех свободных генераторах пула?')">
+                    <button class="btn btn-sm btn-outline-secondary py-0">обновить пул</button></form>
+                <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/pools/{id}/delete(id=${p.id})}" method="post"
+                      onsubmit="return confirm('Удалить пул? Генераторы останутся.')">
+                    <button class="btn btn-sm btn-outline-danger py-0">×</button></form>
+            </span>
+            <span th:if="${pools.isEmpty()}" class="text-muted">Пулов нет</span>
+        </div>
+        <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/pools}" method="post" class="row g-2">
+            <div class="col-auto"><input class="form-control form-control-sm" name="name" placeholder="Новый пул" required></div>
+            <div class="col-auto"><button class="btn btn-sm btn-outline-primary">Создать пул</button></div>
+        </form>
+    </div></div>
+</th:block>
+</body>
+</html>

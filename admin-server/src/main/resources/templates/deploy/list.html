@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Операции</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-tools"></i></span>Операции над генераторами</h3>
+    <div class="card"><table class="table table-sm table-hover mb-0">
+        <thead class="table-light"><tr><th>#</th><th>Операция</th><th>Хост</th><th>Статус</th><th>Начало</th><th>Окончание</th><th>Кто</th><th>Ошибка</th></tr></thead>
+        <tbody>
+        <tr th:if="${items.isEmpty()}"><td colspan="8"><div class="empty-state"><i class="bi bi-inbox"></i>Операций ещё не было</div></td></tr>
+        <tr th:each="d : ${items}">
+            <td><a th:href="@{/deployments/{id}(id=${d.id})}" th:text="${d.id}"></a></td>
+            <td th:text="${d.operation}"></td>
+            <td th:text="${d.targetHost}"></td>
+            <td><span class="badge" th:text="${d.status}"
+                      th:classappend="${d.status.name() == 'SUCCEEDED'} ? 'text-bg-success' : (${d.status.name() == 'FAILED' or d.status.name() == 'ROLLED_BACK'} ? 'text-bg-danger' : (${d.status.name() == 'WAITING_HOST_KEY'} ? 'text-bg-warning' : 'text-bg-info'))"></span></td>
+            <td th:text="${d.startedAt}"></td>
+            <td th:text="${d.finishedAt} ?: '—'"></td>
+            <td th:text="${d.startedBy}"></td>
+            <td class="text-danger small" th:text="${d.error}"></td>
+        </tr></tbody>
+    </table></div>
+</th:block>
+</body>
+</html>

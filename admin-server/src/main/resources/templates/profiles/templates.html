@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security" layout:decorate="~{layout/main}">
+<head><title>Шаблоны профилей</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0">Шаблоны профилей</h3>
+        <a sec:authorize="hasRole('ADMIN')" class="btn btn-primary" th:href="@{/profile-templates/new}">Создать шаблон</a>
+    </div>
+    <p class="text-muted">Пользовательский тип профиля со своим набором параметров и формулой построения ступеней — для методик, которых нет среди встроенных.
+        Создаёт администратор; профиль на его основе создаётся обычным образом (тип «Пользовательский шаблон»).</p>
+    <div class="card"><table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>Имя</th><th>Описание</th><th>Параметры</th><th></th></tr></thead>
+        <tbody>
+        <tr th:if="${items.isEmpty()}"><td colspan="4" class="text-muted p-3">Шаблонов нет</td></tr>
+        <tr th:each="t : ${items}">
+            <td th:text="${t.name}"></td><td th:text="${t.description}"></td>
+            <td><span class="badge text-bg-light me-1" th:each="p : ${t.definition.path('params')}" th:text="${p.path('name').asText()}"></span></td>
+            <td class="text-end" sec:authorize="hasRole('ADMIN')">
+                <a class="btn btn-sm btn-outline-secondary py-0" th:href="@{/profile-templates/{id}/edit(id=${t.id})}">изменить</a>
+                <form class="d-inline" th:action="@{/profile-templates/{id}/delete(id=${t.id})}" method="post" onsubmit="return confirm('Удалить шаблон?')"><button class="btn btn-sm btn-outline-danger py-0">удалить</button></form></td>
+        </tr></tbody></table></div>
+</th:block>
+</body>
+</html>

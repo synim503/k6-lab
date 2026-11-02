@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>SSH-учётка</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3" th:text="${form.id == null} ? 'Новая SSH-учётка' : 'SSH-учётка: ' + ${form.name}"></h3>
+    <form th:action="@{/ssh-credentials}" th:object="${form}" method="post" class="card card-body" autocomplete="off">
+        <input type="hidden" th:field="*{id}">
+        <div class="row g-3">
+            <div class="col-md-4"><label class="form-label">Имя учётки</label><input class="form-control" th:field="*{name}" required></div>
+            <div class="col-md-4"><label class="form-label">Пользователь</label><input class="form-control" th:field="*{username}" required></div>
+            <div class="col-md-4"><label class="form-label">Тип</label>
+                <select class="form-select" th:field="*{authType}">
+                    <option value="KEY">Приватный ключ</option><option value="PASSWORD">Пароль</option></select></div>
+            <div class="col-12">
+                <label class="form-label">Секрет (приватный ключ в формате PEM / OpenSSH или пароль)</label>
+                <textarea class="form-control font-monospace" rows="5" th:field="*{secret}" autocomplete="off"
+                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                <div class="secret-hint" th:if="${form.hasSecret}">Секрет сохранён и не показывается. Оставьте поле пустым, чтобы не менять.</div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Passphrase ключа (если есть)</label>
+                <input class="form-control" type="password" th:field="*{passphrase}" autocomplete="new-password">
+                <div class="secret-hint" th:if="${form.hasPassphrase}">Задан. <label><input type="checkbox" th:field="*{clearPassphrase}"> стереть</label></div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Пароль sudo (если sudo требует пароль)</label>
+                <input class="form-control" type="password" th:field="*{sudoPassword}" autocomplete="new-password">
+                <div class="secret-hint">Передаётся только через stdin (<code>sudo -S</code>), не попадает в командную строку и логи.</div>
+                <div class="secret-hint" th:if="${form.hasSudoPassword}">Задан. <label><input type="checkbox" th:field="*{clearSudoPassword}"> стереть</label></div>
+            </div>
+            <div class="col-12"><hr><h6>Jump-host (ProxyJump), необязательно</h6></div>
+            <div class="col-md-5"><label class="form-label">Хост</label><input class="form-control" th:field="*{jumpHost}" placeholder="bastion.example"></div>
+            <div class="col-md-2"><label class="form-label">Порт</label><input class="form-control" type="number" th:field="*{jumpPort}" placeholder="22"></div>
+            <div class="col-md-5"><label class="form-label">Учётка для jump-host</label>
+                <select class="form-select" th:field="*{jumpCredentialId}"><option value="">—</option>
+                    <option th:each="c : ${others}" th:value="${c.id}" th:text="${c.name}"></option></select></div>
+        </div>
+        <div class="mt-4 d-flex gap-2">
+            <button class="btn btn-primary" type="submit">Сохранить</button>
+            <a class="btn btn-link" th:href="@{/ssh-credentials}">Отмена</a>
+        </div>
+    </form>
+</th:block>
+</body>
+</html>

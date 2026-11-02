@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Сравнение запусков</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h3 class="mb-0">Сравнение: run #<span th:text="${c.a.id}"></span> → run #<span th:text="${c.b.id}"></span></h3>
+        <a class="btn btn-link" th:href="@{/runs}">← история</a>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-6"><div class="card"><div class="card-body py-2">
+            <b>A:</b> <a th:href="@{/runs/{id}(id=${c.a.id})}" th:text="'#' + ${c.a.id} + ' ' + ${c.a.scenarioName}"></a>
+            <span class="badge text-bg-warning" th:if="${c.a.baseline}">эталон</span>
+            <div class="small text-muted" th:text="${fmt.dt(c.a.startedAt)}"></div>
+            <div class="small" th:if="${c.maxA != null}" th:text="${fmt.maxKind(c.maxA.kind)} + ': ' + ${c.maxA.note}"></div></div></div></div>
+        <div class="col-md-6"><div class="card"><div class="card-body py-2">
+            <b>B:</b> <a th:href="@{/runs/{id}(id=${c.b.id})}" th:text="'#' + ${c.b.id} + ' ' + ${c.b.scenarioName}"></a>
+            <span class="badge text-bg-warning" th:if="${c.b.baseline}">эталон</span>
+            <div class="small text-muted" th:text="${fmt.dt(c.b.startedAt)}"></div>
+            <div class="small" th:if="${c.maxB != null}" th:text="${fmt.maxKind(c.maxB.kind)} + ': ' + ${c.maxB.note}"></div></div></div></div>
+    </div>
+    <div class="alert alert-info py-2" th:each="n : ${c.notes}" th:text="${n}"></div>
+    <div class="mb-2">
+        <span th:if="${c.worseCount() == 0}" class="text-success">Ухудшений более 10% нет.</span>
+        <span th:if="${c.worseCount() > 0}" class="text-danger" th:text="'Показателей с ухудшением более 10%: ' + ${c.worseCount()}"></span>
+        <span class="small text-muted">Время и ошибки: рост = хуже; интенсивность: падение = хуже.</span>
+    </div>
+
+    <div class="card mb-3" th:each="s : ${c.steps}">
+        <div class="card-header">Уровень <b th:text="${#numbers.formatDecimal(s.levelPct, 1, 1)} + '%'"></b>
+            · A: <span th:text="${fmt.status(s.statusA)}"></span> · B: <span th:text="${fmt.status(s.statusB)}"></span></div>
+        <table class="table table-sm mb-0">
+            <thead><tr><th rowspan="2">Операция</th><th colspan="3">Время ответа (перцентиль SLA), мс</th><th colspan="3">Интенсивность, оп/с</th><th colspan="3">Ошибки, %</th></tr>
+                <tr><th>A</th><th>B</th><th>Δ%</th><th>A</th><th>B</th><th>Δ%</th><th>A</th><th>B</th><th>Δ%</th></tr></thead>
+            <tbody><tr th:each="o : ${s.ops}">
+                <td th:text="${o.operation} + ' (p' + ${o.slaPercentile} + ')'"></td>
+                <th:block th:insert="~{runs/_cmp :: cell(${o.latency})}"></th:block>
+                <th:block th:insert="~{runs/_cmp :: cell(${o.rate})}"></th:block>
+                <th:block th:insert="~{runs/_cmp :: cell(${o.errors})}"></th:block>
+            </tr></tbody>
+        </table>
+    </div>
+    <div class="text-muted" th:if="${c.steps.isEmpty()}">Нет совпадающих по уровню ступеней для сравнения.</div>
+</th:block>
+</body>
+</html>

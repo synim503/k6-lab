@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title th:text="'Run #' + ${run.id}">Run</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h3 class="mb-0">Run #<span th:text="${run.id}"></span>: <a th:if="${run.scenarioId != null}" th:href="@{/scenarios/{id}(id=${run.scenarioId})}" th:text="${run.scenarioName}"></a>
+            <span th:if="${run.scenarioId == null}" th:text="${run.scenarioName}"></span>
+            <span class="badge text-bg-warning fs-6" th:if="${run.baseline}">эталон</span></h3>
+        <a class="btn btn-link" th:href="@{/runs}">← история</a>
+    </div>
+    <div class="small text-muted mb-3">
+        Скрипт <strong th:text="${snap.script.name}"></strong> v<span th:text="${snap.script.versionNumber}"></span>
+        <span th:if="${snap.script.commit}" th:text="'(' + ${#strings.substring(snap.script.commit, 0, 8)} + ')'"></span> ·
+        модель <strong th:text="${snap.model.name}"></strong> · профиль <strong th:text="${snap.profile.name}"></strong> (<span th:text="${snap.profile.type}"></span>) ·
+        политика отвала: <span th:text="${run.failurePolicy.title}"></span>
+    </div>
+
+    <div id="run-live" th:attr="data-run-id=${run.id},data-status-url=@{/runs/{id}/status(id=${run.id})},data-status-stream=@{/runs/{id}/stream/status(id=${run.id})},data-log-stream=@{/runs/{id}/stream/logs(id=${run.id})},data-metrics-stream=@{/runs/{id}/stream/metrics(id=${run.id})},data-final=${run.status.terminal}">
+        <div th:replace="~{runs/_status :: status}"></div>
+    </div>
+
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-metrics" type="button">Метрики</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-results" type="button" id="results-tab-btn">Результаты</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs" type="button">Логи</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-snapshot" type="button">Snapshot</button></li>
+    </ul>
+    <div class="tab-content">
+        <div class="tab-pane fade show active" id="tab-metrics">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="small text-muted" id="metric-phase">Ожидание данных из Prometheus…</span>
+                <a class="btn btn-sm btn-outline-secondary" th:if="${grafanaUrl != null}" th:href="${grafanaUrl}" target="_blank">Открыть в Grafana</a>
+            </div>
+            <div class="card mb-3"><table class="table table-sm mb-0">
+                <thead><tr><th>Операция</th><th>Интенсивность факт / план, оп/с</th><th>Время ответа / SLA</th><th>Ошибки / порог</th><th>Dropped</th><th>Нарушения</th></tr></thead>
+                <tbody id="metric-table"><tr><td colspan="6" class="text-muted">Нет данных</td></tr></tbody></table></div>
+            <div class="card mb-3" th:if="${snap.sut != null}"><div class="card-header small">Метрики SUT: <span th:text="${snap.sut.name}"></span></div>
+                <table class="table table-sm mb-0"><tbody id="sut-table"></tbody></table></div>
+            <div class="row g-3" id="metric-charts"></div>
+        </div>
+        <div class="tab-pane fade" id="tab-results">
+            <div id="results-box" th:attr="hx-get=@{/runs/{id}/results(id=${run.id})}" hx-trigger="load, click from:#results-tab-btn" hx-swap="innerHTML">
+                <div class="text-muted">Загрузка…</div></div>
+        </div>
+        <div class="tab-pane fade" id="tab-logs">
+            <div class="row g-2 mb-2">
+                <div class="col-md-3"><select id="log-gen" class="form-select form-select-sm"><option value="">все генераторы</option>
+                    <option th:each="g : ${v.generators}" th:value="${g.rg.generatorName}" th:text="${g.rg.generatorName}"></option></select></div>
+                <div class="col-md-2"><select id="log-level" class="form-select form-select-sm"><option value="">все уровни</option><option>WARN</option><option>ERROR</option><option>INFO</option><option>DEBUG</option></select></div>
+                <div class="col-md-3"><input id="log-search" class="form-control form-control-sm" placeholder="поиск по тексту"></div>
+                <div class="col-md-4 d-flex gap-2 align-items-center">
+                    <button type="button" id="log-pause" class="btn btn-sm btn-outline-secondary">Пауза автоскролла</button>
+                    <a class="btn btn-sm btn-outline-secondary" th:href="@{/runs/{id}/log.txt(id=${run.id})}">Скачать полный лог</a>
+                    <span class="small text-muted" id="log-count"></span></div>
+            </div>
+            <pre id="run-log" class="log-view mb-0"></pre>
+        </div>
+        <div class="tab-pane fade" id="tab-snapshot">
+            <div class="alert alert-secondary small">Полный snapshot сценария и сгенерированного конфига на момент запуска: результаты не зависят от последующих правок.</div>
+            <div class="row g-3">
+                <div class="col-md-6"><div class="card"><div class="card-header">Ступени</div>
+                    <table class="table table-sm mb-0"><thead><tr><th>№</th><th>Метка</th><th>Уровень %</th><th>Разгон, с</th><th>Удержание, с</th></tr></thead>
+                        <tbody><tr th:each="s : ${snap.steps}"><td th:text="${s.no}"></td><td th:text="${s.label}"></td><td th:text="${s.levelPct}"></td><td th:text="${s.rampSec}"></td><td th:text="${s.holdSec}"></td></tr></tbody></table></div></div>
+                <div class="col-md-6"><div class="card"><div class="card-header">Операции и SLA</div>
+                    <table class="table table-sm mb-0"><thead><tr><th>Операция</th><th>Режим</th><th>оп/с</th><th>SLA</th></tr></thead>
+                        <tbody><tr th:each="o : ${snap.model.operations}"><td th:text="${o.name}"></td><td th:text="${o.mode}"></td>
+                            <td th:text="${#numbers.formatDecimal(o.ratePerSec, 1, 3)}"></td>
+                            <td th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${o.slaThresholdMs} + ' мс, ошибки ≤ ' + ${o.maxErrorPct} + '%'"></td></tr></tbody></table></div></div>
+                <div class="col-12"><div class="card"><div class="card-header">Конфиг k6</div>
+                    <pre class="mb-0 p-2 small" style="max-height: 360px; overflow:auto" th:text="${run.k6Config}"></pre></div></div>
+            </div>
+        </div>
+    </div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script th:src="@{/js/run-live.js}"></script>
+    <script th:src="@{/js/run-metrics.js}"></script>
+    <script>
+        // открыть вкладку по якорю (#results после редиректов) и обновлять итоги, когда run завершился
+        if (location.hash === '#results') { document.getElementById('results-tab-btn').click(); }
+    </script>
+</th:block>
+</body>
+</html>

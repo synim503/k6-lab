@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<body>
+<div id="run-status" th:fragment="status" th:attr="data-run-status=${run.status}">
+    <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+        <span class="badge fs-6" th:text="${run.status}"
+              th:classappend="${run.status.name() == 'FINISHED'} ? (${run.thresholdsFailed} ? 'text-bg-warning' : 'text-bg-success') : (${run.status.name() == 'FAILED'} ? 'text-bg-danger' : (${run.status.name() == 'ABORTED'} ? 'text-bg-secondary' : 'text-bg-primary'))"></span>
+        <span class="badge text-bg-warning fs-6" th:if="${run.degraded}" title="генератор отваливался во время теста">DEGRADED</span>
+        <span class="badge text-bg-warning fs-6" th:if="${run.thresholdsFailed}" title="k6 завершился кодом 99: thresholds не выполнены (это не авария)">thresholds k6 не выполнены</span>
+        <span class="text-muted" th:if="${v.currentStep != null}">ступень <strong th:text="${v.currentStep}"></strong> из <span th:text="${snap.steps.size()}"></span> (<span th:text="${v.currentPhase}"></span>)</span>
+        <span class="text-muted" th:if="${v.live}" th:text="'прошло ' + ${v.elapsedSec} + ' с из ' + ${v.totalSec} + ' с'"></span>
+    </div>
+    <div class="progress mb-3" style="height: 8px" th:if="${run.status.name() == 'RUNNING' or run.status.name() == 'STOPPING' or run.status.name() == 'FINISHED'}">
+        <div class="progress-bar" role="progressbar" th:style="'width:' + ${v.progressPct} + '%'"></div></div>
+    <div class="alert alert-danger" th:if="${run.error}" th:text="${run.error}"></div>
+    <div class="alert alert-warning py-2" th:if="${run.stopReason}"><strong>Причина остановки:</strong> <span th:text="${run.stopReason}"></span></div>
+
+    <div class="d-flex gap-2 mb-3" th:if="${v.canStop}">
+        <form th:action="@{/runs/{id}/stop(id=${run.id})}" method="post"><button class="btn btn-warning" th:disabled="${run.status.name() == 'STOPPING'}">Stop (graceful)</button></form>
+        <form th:action="@{/runs/{id}/abort(id=${run.id})}" method="post" onsubmit="return confirm('Abort убьёт k6 (SIGKILL) на всех генераторах, метрики последних секунд могут потеряться. Продолжить?')">
+            <button class="btn btn-danger">Abort</button></form>
+        <th:block th:if="${v.canControl}">
+            <form th:action="@{/runs/{id}/control(id=${run.id})}" method="post"><input type="hidden" name="action" value="PAUSE"><button class="btn btn-outline-secondary">Pause</button></form>
+            <form th:action="@{/runs/{id}/control(id=${run.id})}" method="post"><input type="hidden" name="action" value="RESUME"><button class="btn btn-outline-secondary">Resume</button></form>
+            <form th:action="@{/runs/{id}/control(id=${run.id})}" method="post" class="d-flex gap-1"><input type="hidden" name="action" value="SCALE_VUS">
+                <input class="form-control" style="width:90px" type="number" min="0" name="vus" placeholder="VU"><button class="btn btn-outline-secondary">Изменить VU</button></form>
+        </th:block>
+        <span class="small text-muted align-self-center" th:if="${run.status.name() == 'RUNNING' and !v.canControl}"
+              title="k6 не поддерживает pause/resume и смену VU для arrival-rate и ramping-vus">Pause/Resume и смена VU доступны только для externally-controlled (экспертный режим)</span>
+    </div>
+
+    <div class="card mb-3"><div class="card-header">Генераторы</div>
+        <div class="table-responsive"><table class="table table-sm mb-0">
+            <thead class="table-light"><tr><th>Генератор</th><th>Сегмент</th><th>Статус</th><th>k6</th><th>CPU</th><th>RAM</th><th>VU</th><th>Итерации</th><th>dropped</th><th>Код выхода</th><th>Отброшено строк лога</th></tr></thead>
+            <tbody>
+            <tr th:each="g : ${v.generators}" th:classappend="${g.offline} ? 'table-warning'">
+                <td><a th:if="${g.rg.generatorId != null}" th:href="@{/generators/{id}(id=${g.rg.generatorId})}" th:text="${g.rg.generatorName}"></a>
+                    <span th:if="${g.rg.generatorId == null}" th:text="${g.rg.generatorName}"></span>
+                    <span class="badge text-bg-warning" th:if="${g.offline}">нет связи</span></td>
+                <td><code th:text="${g.rg.segment()}"></code> <span class="text-muted small" th:text="'вес ' + ${g.rg.weight}"></span></td>
+                <td th:text="${g.rg.status}"></td>
+                <td th:text="${g.live != null} ? ${g.live.k6Status} : '—'"></td>
+                <td th:classappend="${g.cpuHot} ? 'metric-hot'" th:text="${g.cpu != null} ? ${#numbers.formatDecimal(g.cpu, 1, 0)} + '%' : '—'"
+                    th:title="${g.cpuHot} ? 'CPU > 80%: генератор стал узким местом'"></td>
+                <td th:text="${g.memPct != null} ? ${#numbers.formatDecimal(g.memPct, 1, 0)} + '%' : '—'"></td>
+                <td th:text="${g.live != null} ? ${g.live.vus} + ' / ' + ${g.live.vusMax} : (${g.rg.lastVus} ?: '—')"></td>
+                <td th:text="${g.live != null} ? ${g.live.iterations} : (${g.rg.lastIterations} ?: '—')"></td>
+                <td th:text="${g.live != null} ? ${g.live.dropped} : (${g.rg.lastDropped} ?: '—')"></td>
+                <td><span th:text="${g.rg.exitCode} ?: '—'"></span><span class="badge text-bg-warning ms-1" th:if="${g.rg.exitCode == 99}">thresholds</span></td>
+                <td th:text="${g.rg.droppedLogLines}"></td>
+            </tr></tbody></table></div></div>
+</div>
+</body>
+</html>

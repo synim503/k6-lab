@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="panel" id="diag-panel"
+     th:attr="hx-get=${diagRunning} ? @{/settings/diagnostics/panel} : null, hx-trigger=${diagRunning} ? 'every 2s' : null, hx-swap=${diagRunning} ? 'outerHTML' : null">
+    <div th:if="${diagRunning}">
+        <div class="spinner-border spinner-border-sm me-2"></div>Выполняется…
+        <ul class="list-unstyled mt-2 mb-0 small">
+            <li th:each="s : ${diagProgress}"><span th:class="${s.ok} ? 'text-success' : 'text-danger'" th:text="${s.ok} ? '✔' : '✘'"></span>
+                <b th:text="${s.name}"></b> — <span th:text="${s.detail}"></span></li>
+        </ul>
+    </div>
+    <div th:if="${!diagRunning and diagLast != null}">
+        <div class="alert py-2" th:classappend="${diagPassed} ? 'alert-success' : 'alert-warning'">
+            <span th:if="${diagPassed}">Диагностика пройдена</span>
+            <span th:if="${!diagPassed and diagLast.ok}">Диагностика пройдена для прежних параметров — повторите после изменения настроек</span>
+            <span th:if="${!diagLast.ok}">Диагностика не пройдена</span>
+            <span class="small text-muted" th:text="'(' + ${#temporals.format(diagLast.at, 'dd.MM.yyyy HH:mm:ss')} + ', генератор ' + ${diagLast.generator} + ')'"></span>
+        </div>
+        <ul class="list-unstyled mb-0 small">
+            <li th:each="s : ${diagLast.steps}"><span th:class="${s.ok} ? 'text-success' : 'text-danger'" th:text="${s.ok} ? '✔' : '✘'"></span>
+                <b th:text="${s.name}"></b> — <span th:text="${s.detail}"></span></li>
+        </ul>
+    </div>
+    <div th:if="${!diagRunning and diagLast == null}" class="text-muted">Диагностика ещё не выполнялась. Запуски тестов заблокированы до её успешного прохождения.</div>
+</div>
+</body>
+</html>

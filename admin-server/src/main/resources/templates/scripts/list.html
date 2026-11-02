@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Скрипты</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-file-earmark-code"></i></span>Скрипты</h3>
+        <div class="btn-group">
+            <a class="btn btn-primary" th:href="@{/scripts/new}">Добавить скрипт</a>
+            <a class="btn btn-outline-secondary" th:href="@{/scripts/admin-helper}">Скачать admin.js</a>
+        </div>
+    </div>
+    <p class="text-muted small">k6 на сервере (для <code>k6 inspect</code>):
+        <span th:if="${k6Version}" th:text="${k6Version}"></span>
+        <span th:unless="${k6Version}" class="text-warning">не найден — загрузите k6 для архитектуры сервера в «Дистрибутивы», версии будут проверяться приблизительно</span></p>
+    <div class="card"><table class="table table-sm table-hover mb-0">
+        <thead class="table-light"><tr><th>Имя</th><th>Последняя версия</th><th>Источник</th><th>Операции</th><th>admin.js</th><th>Пригодна для модели</th><th>Обновлена</th></tr></thead>
+        <tbody>
+        <tr th:if="${scripts.isEmpty()}"><td colspan="7"><div class="empty-state"><i class="bi bi-inbox"></i>Скриптов пока нет</div></td></tr>
+        <tr th:each="s : ${scripts}" th:with="v=${latest.get(s.id)}">
+            <td><a th:href="@{/scripts/{id}(id=${s.id})}" th:text="${s.name}"></a></td>
+            <td th:text="${v != '' ? 'v' + v.number : '—'}"></td>
+            <td th:text="${v != '' ? v.sourceLabel() : '—'}"></td>
+            <td th:text="${v != '' ? v.operations.size() : '—'}"></td>
+            <td th:text="${v != '' ? (v.usesHelper ? 'да' : 'нет') : '—'}"></td>
+            <td><span th:if="${v != ''}" class="badge" th:classappend="${v.validForModel} ? 'text-bg-success' : 'text-bg-danger'"
+                      th:text="${v.validForModel} ? 'да' : 'нет'"></span></td>
+            <td th:text="${s.updatedAt}"></td>
+        </tr></tbody></table></div>
+</th:block>
+</body>
+</html>

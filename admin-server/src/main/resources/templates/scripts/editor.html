@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Редактор</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h3 class="mb-0"><a th:href="@{/scripts/{id}(id=${script.id})}" th:text="${script.name}"></a> v<span th:text="${v.number}"></span>:
+            <code th:text="${path}"></code></h3>
+        <a class="btn btn-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}">← к версии</a>
+    </div>
+    <div class="mb-2 small">Файлы:
+        <a class="me-2" th:each="f : ${scriptFiles}" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
+           th:text="${f.path}" th:classappend="${f.path == path} ? 'fw-bold'"></a></div>
+    <div class="alert alert-info py-2 small">Сохранение создаёт <strong>новую версию</strong> (старая остаётся неизменной) и заново проверяет её через <code>k6 inspect</code>.</div>
+    <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post">
+        <input type="hidden" name="file" th:value="${path}">
+        <input type="hidden" name="content" id="content">
+        <div id="editor" style="height: 65vh; border: 1px solid #ccc"
+             th:attr="data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${path})}"></div>
+        <div class="mt-2 d-flex gap-2">
+            <input class="form-control w-50" name="comment" placeholder="комментарий к версии">
+            <button class="btn btn-primary" type="submit">Сохранить как новую версию</button>
+        </div>
+    </form>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+    <script>
+        (function () {
+            var box = document.getElementById('editor');
+            var base = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
+            require.config({paths: {vs: base}});
+            window.MonacoEnvironment = {
+                getWorkerUrl: function () {
+                    return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(
+                        "self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
+                }
+            };
+            // типы k6 для подсказок: @types/k6 подгружаются с CDN и регистрируются как node_modules
+            var k6Types = ['index.d.ts', 'http/index.d.ts', 'metrics/index.d.ts', 'execution/index.d.ts', 'data/index.d.ts',
+                'encoding/index.d.ts', 'crypto/index.d.ts', 'html/index.d.ts', 'ws/index.d.ts', 'options/index.d.ts',
+                'net/grpc/index.d.ts', 'timers/index.d.ts', 'experimental/csv/index.d.ts'];
+            require(['vs/editor/editor.main'], function () {
+                var path = new URLSearchParams(location.search).get('file') || '';
+                var lang = /\.(json)$/i.test(path) ? 'json' : 'javascript';
+                fetch(box.dataset.fileUrl).then(function (r) { return r.json(); }).then(function (data) {
+                    var editor = monaco.editor.create(box, {value: data.content, language: lang, automaticLayout: true,
+                        minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
+                    var ts = monaco.languages.typescript;
+                    ts.javascriptDefaults.setCompilerOptions({allowJs: true, checkJs: false, allowNonTsExtensions: true,
+                        target: ts.ScriptTarget.ES2020, moduleResolution: ts.ModuleResolutionKind.NodeJs,
+                        module: ts.ModuleKind.ESNext});
+                    k6Types.forEach(function (f) {
+                        fetch('https://cdn.jsdelivr.net/npm/@types/k6/' + f).then(function (r) { return r.ok ? r.text() : ''; })
+                            .then(function (t) { if (t) { ts.javascriptDefaults.addExtraLib(t, 'file:///node_modules/@types/k6/' + f); } })
+                            .catch(function () { /* офлайн: редактор работает без подсказок k6 */ });
+                    });
+                    document.getElementById('edit-form').addEventListener('submit', function () {
+                        document.getElementById('content').value = editor.getValue();
+                    });
+                });
+            });
+        })();
+    </script>
+</th:block>
+</body>
+</html>

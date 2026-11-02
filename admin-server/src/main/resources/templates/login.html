@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Вход</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="card login-card">
+        <div class="card-body p-4 p-md-5">
+            <div class="brand-mark"><i class="bi bi-lightning-charge-fill"></i></div>
+            <h4 class="text-center mb-1">k6-lab</h4>
+            <p class="text-center text-muted mb-4">Распределённые нагрузочные тесты</p>
+            <div class="alert alert-danger py-2" th:if="${param.error}">Неверный логин или пароль</div>
+            <div class="alert alert-info py-2" th:if="${param.logout}">Вы вышли из системы</div>
+            <form th:action="@{/login}" method="post">
+                <div class="mb-3"><label class="form-label">Логин</label>
+                    <input class="form-control form-control-lg" name="username" autofocus required></div>
+                <div class="mb-4"><label class="form-label">Пароль</label>
+                    <input class="form-control form-control-lg" type="password" name="password" required></div>
+                <button class="btn btn-primary btn-lg w-100" type="submit">Войти</button>
+            </form>
+        </div>
+    </div>
+</th:block>
+</body>
+</html>

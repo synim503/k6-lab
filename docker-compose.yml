@@ -1,0 +1,89 @@
+# Окружение для РАЗРАБОТКИ. В проде админка ставится на ВМ как systemd-сервис (см. README).
+#   mvn -DskipTests package && docker compose up -d --build
+# UI: http://localhost:8080 (admin / admin12345), Grafana: http://localhost:3000, Prometheus: http://localhost:9090
+# Порты хоста меняются переменными APP_HTTP_PORT, APP_AGENT_PORT, POSTGRES_PORT, PROMETHEUS_PORT, GRAFANA_PORT.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: k6lab
+      POSTGRES_USER: k6lab
+      POSTGRES_PASSWORD: k6lab
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U k6lab"]
+      interval: 5s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver     # приём remote write от k6
+      - --enable-feature=native-histograms     # native histograms для перцентилей
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports: ["${PROMETHEUS_PORT:-9090}:9090"]
+
+  grafana:
+    image: grafana/grafana-oss:11.6.1
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports: ["${GRAFANA_PORT:-3000}:3000"]
+    depends_on: [prometheus]
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    environment:
+      K6LAB_DB_URL: jdbc:postgresql://postgres:5432/k6lab
+      K6LAB_DB_USER: k6lab
+      K6LAB_DB_PASSWORD: k6lab
+      # DEV-ключ, не использовать вне разработки: openssl rand -base64 32
+      K6LAB_MASTER_KEY: AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=
+      K6LAB_ADMIN_PASSWORD: admin12345
+      K6LAB_STORAGE_DIR: /data/storage
+      K6LAB_AGENT_PORT: "47331"
+      # Prometheus для dev-стенда (генераторы и админка видят его по имени сервиса compose)
+      K6LAB_PROMETHEUS_RW_URL: http://prometheus:9090/api/v1/write
+      K6LAB_PROMETHEUS_QUERY_URL: http://prometheus:9090
+      # цель smoke-теста диагностики: генераторы должны достучаться до UI админки
+      K6LAB_PUBLIC_URL: http://app:8080
+    volumes: [appdata:/data]
+    ports:
+      - "${APP_HTTP_PORT:-8080}:8080"
+      - "${APP_AGENT_PORT:-47331}:47331"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Два «генератора» с sshd и systemd для проверки SSH-деплоя.
+  # SSH-учётка: deploy / deploy (пароль sudo тот же); jump-host не нужен.
+  # Для пользовательского режима: k6user / k6user (без sudo, linger выключен -> cron-супервизор).
+  gen1: &gen
+    build:
+      context: ./docker/sshd-systemd
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-deb.debian.org}
+    privileged: true
+    hostname: gen1
+    tmpfs: [/run, /run/lock, /tmp]
+    volumes: ["/sys/fs/cgroup:/sys/fs/cgroup:rw"]
+    cgroup: host
+    ports: ["2201:22"]
+  gen2:
+    <<: *gen
+    hostname: gen2
+    ports: ["2202:22"]
+
+volumes:
+  pgdata:
+  promdata:
+  appdata:

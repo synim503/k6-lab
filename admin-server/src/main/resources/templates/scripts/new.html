@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Новый скрипт</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3">Новый скрипт</h3>
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-upload" type="button">Загрузить файл</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-git" type="button">Из Git</button></li>
+    </ul>
+    <div class="tab-content">
+        <div class="tab-pane fade show active" id="tab-upload">
+            <form class="card card-body row g-3 mx-0" th:action="@{/scripts}" method="post" enctype="multipart/form-data">
+                <div class="col-md-4"><label class="form-label">Имя скрипта</label><input class="form-control" name="name" required></div>
+                <div class="col-md-8"><label class="form-label">Описание</label><input class="form-control" name="description"></div>
+                <div class="col-md-6"><label class="form-label">Файл: .js или архив .zip / .tar.gz (модули, данные, сертификаты)</label>
+                    <input class="form-control" type="file" name="file" required></div>
+                <div class="col-md-3"><label class="form-label">Entrypoint (для архива)</label>
+                    <input class="form-control" name="entrypoint" placeholder="main.js"></div>
+                <div class="col-md-3"><label class="form-label">Комментарий к версии</label><input class="form-control" name="comment"></div>
+                <div class="col-12"><button class="btn btn-primary">Загрузить и проверить</button>
+                    <span class="text-muted small ms-2">Версия проходит <code>k6 inspect</code>; опции scenarios/stages/vus/duration/iterations блокируют запуск через модель.</span></div>
+            </form>
+        </div>
+        <div class="tab-pane fade" id="tab-git">
+            <form class="card card-body row g-3 mx-0" th:action="@{/scripts/git}" method="post">
+                <div class="col-md-4"><label class="form-label">Имя скрипта</label><input class="form-control" name="name" required></div>
+                <div class="col-md-4"><label class="form-label">Репозиторий</label>
+                    <select class="form-select" name="repoId" required>
+                        <option th:each="r : ${repos}" th:value="${r.id}" th:text="${r.name}"></option></select>
+                    <div class="form-text" th:if="${repos.isEmpty()}">Репозиториев нет — их добавляет администратор в разделе «Git».</div></div>
+                <div class="col-md-4"><label class="form-label">Ветка, тег или коммит</label><input class="form-control" name="ref" placeholder="main" required></div>
+                <div class="col-md-6"><label class="form-label">Путь к entrypoint (от каталога репозитория)</label>
+                    <input class="form-control" name="entrypoint" placeholder="scripts/payments.js" required></div>
+                <div class="col-12"><button class="btn btn-primary" th:disabled="${repos.isEmpty()}">Импортировать</button></div>
+            </form>
+        </div>
+    </div>
+</th:block>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title th:text="${script.name} + ' v' + ${v.number}">Версия</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0"><a th:href="@{/scripts/{id}(id=${script.id})}" th:text="${script.name}"></a> — версия <span th:text="${v.number}"></span></h3>
+        <div class="btn-group">
+            <a class="btn btn-outline-primary btn-sm" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}">Открыть в редакторе</a>
+            <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}/versions/{vid}/download(id=${script.id},vid=${v.id})}">Скачать zip</a>
+            <form class="d-inline" th:action="@{/scripts/{id}/versions/{vid}/rollback(id=${script.id},vid=${v.id})}" method="post"
+                  onsubmit="return confirm('Создать новую версию из содержимого этой?')">
+                <button class="btn btn-outline-warning btn-sm rounded-0 rounded-end">Откатить к этой</button></form>
+        </div>
+    </div>
+
+    <div class="alert alert-danger" th:unless="${v.validForModel}">
+        <strong>Версия непригодна для запуска через модель.</strong> <span th:text="${v.invalidReason}"></span></div>
+    <div class="alert alert-warning py-2" th:each="w : ${v.warnings}" th:text="${w}"></div>
+
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <div class="card mb-3"><div class="card-header">Версия</div>
+                <table class="table table-sm mb-0">
+                    <tr><th class="w-25">Источник</th><td th:text="${v.sourceLabel()}"></td></tr>
+                    <tr th:if="${v.commitHash}"><th>Коммит</th><td><code th:text="${v.commitHash}"></code></td></tr>
+                    <tr><th>Entrypoint</th><td><code th:text="${v.entrypoint}"></code></td></tr>
+                    <tr><th>sha256</th><td><code class="small" th:text="${v.sha256}"></code></td></tr>
+                    <tr><th>Размер</th><td th:text="${v.sizeBytes} + ' байт'"></td></tr>
+                    <tr><th>Использует admin.js</th><td th:text="${v.usesHelper} ? 'да' : 'нет'"></td></tr>
+                    <tr><th>k6 inspect</th><td><span class="badge" th:text="${v.inspectStatus}"
+                            th:classappend="${v.inspectStatus.name() == 'OK'} ? 'text-bg-success' : (${v.inspectStatus.name() == 'FAILED'} ? 'text-bg-danger' : 'text-bg-warning')"></span></td></tr>
+                    <tr><th>Создана</th><td th:text="${v.createdAt} + ', ' + ${v.createdBy}"></td></tr>
+                    <tr th:if="${v.comment}"><th>Комментарий</th><td th:text="${v.comment}"></td></tr>
+                </table></div>
+
+            <div class="card mb-3"><div class="card-header">Операции <span class="badge text-bg-secondary" title="Извлекаются эвристикой по export function / export const">эвристика</span></div>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item text-muted" th:if="${v.operations.isEmpty()}">Не найдено — добавьте вручную</li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center" th:each="o : ${v.operations}">
+                        <span><code th:text="${o.name}"></code> <span class="badge text-bg-light" th:text="${o.origin == 'MANUAL' ? 'вручную' : 'авто'}"></span></span>
+                        <form th:if="${o.origin == 'MANUAL'}" th:action="@{/scripts/{id}/versions/{vid}/operations/delete(id=${script.id},vid=${v.id})}" method="post">
+                            <input type="hidden" name="name" th:value="${o.name}"><button class="btn btn-sm btn-outline-danger py-0">×</button></form>
+                    </li>
+                </ul>
+                <form class="card-body d-flex gap-2" th:action="@{/scripts/{id}/versions/{vid}/operations(id=${script.id},vid=${v.id})}" method="post">
+                    <input class="form-control form-control-sm" name="name" placeholder="имя экспортируемой функции">
+                    <button class="btn btn-sm btn-outline-primary">Добавить</button></form>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card mb-3"><div class="card-header">Файлы версии</div>
+                <table class="table table-sm mb-0">
+                    <tr th:each="f : ${v.files}">
+                        <td><a th:if="${f.kind == 'SCRIPT'}" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"><code th:text="${f.path}"></code></a>
+                            <code th:if="${f.kind != 'SCRIPT'}" th:text="${f.path}"></code></td>
+                        <td class="text-end text-muted small" th:text="${f.size} + ' Б'"></td>
+                        <td><span class="badge text-bg-light" th:text="${f.kind == 'SCRIPT' ? 'код' : 'данные'}"></span></td>
+                    </tr></table></div>
+
+            <div class="card" th:if="${inspectJson}"><div class="card-header">Результат <code>k6 inspect</code></div>
+                <pre class="mb-0 p-2 small" style="max-height: 320px; overflow: auto" th:text="${inspectJson}"></pre></div>
+            <div class="alert alert-secondary" th:if="${v.inspectError}" th:text="${v.inspectError}"></div>
+        </div>
+    </div>
+</th:block>
+</body>
+</html>

@@ -1,0 +1,17 @@
+[Unit]
+Description=k6-lab admin
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=k6lab
+WorkingDirectory=/opt/k6-lab
+EnvironmentFile=/etc/k6-lab.env
+ExecStart=/usr/bin/java -Xmx1g -jar /opt/k6-lab/k6-lab-admin.jar
+Restart=always
+RestartSec=5
+SuccessExitStatus=143
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

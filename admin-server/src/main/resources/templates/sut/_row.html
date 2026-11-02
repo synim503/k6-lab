@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+    <div th:fragment="metricRow" class="metric-row border rounded p-2 mb-2 bg-white" th:attr="data-i=${i}">
+        <div class="row g-2">
+            <div class="col-md-3"><label class="form-label small mb-0">Имя</label><input class="form-control form-control-sm" th:name="|metrics[${i}].name|" th:value="${m.name}" placeholder="CPU приложения"></div>
+            <div class="col-md-5"><label class="form-label small mb-0">PromQL</label><input class="form-control form-control-sm font-monospace" th:name="|metrics[${i}].promql|" th:value="${m.promql}"></div>
+            <div class="col-md-1"><label class="form-label small mb-0">Единица</label><input class="form-control form-control-sm" th:name="|metrics[${i}].unit|" th:value="${m.unit}" placeholder="%"></div>
+            <div class="col-md-1"><label class="form-label small mb-0">Агрегация</label>
+                <select class="form-select form-select-sm" th:name="|metrics[${i}].aggregation|">
+                    <option th:each="a : ${T(ru.k6lab.server.sut.SutMetric.Aggregation).values()}" th:value="${a}" th:text="${a}" th:selected="${a == m.aggregation}"></option></select></div>
+            <div class="col-md-1"><label class="form-label small mb-0">Порог</label><input class="form-control form-control-sm" th:name="|metrics[${i}].warnThreshold|" th:value="${m.warnThreshold}"></div>
+            <div class="col-md-1 d-flex gap-1 align-items-end">
+                <select class="form-select form-select-sm" th:name="|metrics[${i}].warnDirection|">
+                    <option value="ABOVE" th:selected="${m.warnDirection.name() == 'ABOVE'}">&gt;</option>
+                    <option value="BELOW" th:selected="${m.warnDirection.name() == 'BELOW'}">&lt;</option></select>
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.metric-row').remove()">×</button></div>
+        </div>
+    </div>
+</body>
+</html>

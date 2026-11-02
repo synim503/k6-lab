@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Добавить сервер</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-hdd-network"></i></span>Добавить сервер-генератор</h3>
+    <form class="card card-body row g-3 mx-0" style="max-width: 640px" th:action="@{/quick/generator}" method="post">
+        <div class="col-8"><label class="form-label">Адрес сервера</label><input class="form-control" name="host" th:value="${host}" placeholder="10.0.0.5" required></div>
+        <div class="col-4"><label class="form-label">SSH-порт</label><input class="form-control" type="number" name="port" th:value="${port} ?: 22"></div>
+        <div class="col-12"><label class="form-label">Логин</label><input class="form-control" name="username" th:value="${username} ?: 'root'" required></div>
+        <div class="col-12">
+            <label class="form-label">Как входить на сервер по SSH</label>
+            <div class="btn-group w-100" role="group">
+                <input type="radio" class="btn-check" name="authType" id="auth-pass" value="PASSWORD" autocomplete="off" th:checked="${authType != 'KEY'}">
+                <label class="btn btn-outline-primary" for="auth-pass"><i class="bi bi-key-fill me-1"></i>Пароль</label>
+                <input type="radio" class="btn-check" name="authType" id="auth-key" value="KEY" autocomplete="off" th:checked="${authType == 'KEY'}">
+                <label class="btn btn-outline-primary" for="auth-key"><i class="bi bi-file-earmark-lock me-1"></i>Ключ SSH</label>
+            </div></div>
+        <div class="col-12 auth-pass"><label class="form-label">Пароль</label>
+            <input class="form-control" type="password" name="password" autocomplete="new-password">
+            <div class="form-text">Если вход не под root, этот же пароль используется для sudo.</div></div>
+        <div class="col-12 auth-key d-none"><label class="form-label">Файл приватного ключа</label>
+            <input class="form-control" type="file" id="key-file">
+            <div class="form-text" id="key-file-info">Выберите файл ключа (например, <code>id_rsa</code> или <code>id_ed25519</code>). Файл читается в браузере и уходит на сервер только зашифрованным в базе.</div>
+            <details class="mt-2"><summary class="small text-muted">или вставьте текст ключа</summary>
+                <textarea class="form-control font-monospace mt-2" rows="6" name="privateKey" id="key-text" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea></details></div>
+        <div class="col-md-6 auth-key d-none"><label class="form-label">Фраза-пароль ключа <span class="text-muted fw-normal">(если есть)</span></label>
+            <input class="form-control" type="password" name="passphrase" autocomplete="new-password"></div>
+        <div class="col-md-6 auth-key d-none"><label class="form-label">Пароль sudo <span class="text-muted fw-normal">(если вход не под root)</span></label>
+            <input class="form-control" type="password" name="sudoPassword" autocomplete="new-password">
+            <div class="form-text">Без пароля sudo агент ставится в пользовательском режиме (без root).</div></div>
+        <div class="col-12"><label class="form-label">Адрес админки для агента</label>
+            <input class="form-control" name="serverUrl" th:value="${serverUrl}" required>
+            <div class="form-text">Агент сам подключится по этому адресу, поэтому он должен быть доступен с сервера-генератора (порт агентов открыт).</div></div>
+        <div class="col-12"><button class="btn btn-primary">Установить агента</button>
+            <span class="text-muted small ms-2">Агент и k6 ставятся автоматически как служба; пароль и ключ хранятся в зашифрованном виде.</span></div>
+    </form>
+    <p class="text-muted small mt-3">Перед первой установкой загрузите в «Ещё → Дистрибутивы» агент (бинарь Go) и k6 под архитектуру сервера (один раз; в портативной версии они уже загружены).</p>
+    <script>
+        (function () {
+            function sync() {
+                var key = document.getElementById('auth-key').checked;
+                document.querySelectorAll('.auth-key').forEach(function (e) { e.classList.toggle('d-none', !key); });
+                document.querySelectorAll('.auth-pass').forEach(function (e) { e.classList.toggle('d-none', key); });
+            }
+            document.getElementById('auth-pass').addEventListener('change', sync);
+            document.getElementById('auth-key').addEventListener('change', sync);
+            sync();
+            document.getElementById('key-file').addEventListener('change', function (e) {
+                var f = e.target.files[0];
+                var info = document.getElementById('key-file-info');
+                if (!f) { return; }
+                if (f.size > 64 * 1024) { info.textContent = 'Файл слишком большой для SSH-ключа'; info.className = 'form-text text-danger'; e.target.value = ''; return; }
+                var r = new FileReader();
+                r.onload = function () {
+                    var text = String(r.result);
+                    if (text.indexOf('PRIVATE KEY') < 0) {
+                        info.textContent = 'Это не похоже на приватный ключ (нет строки PRIVATE KEY). Для .ppk сначала экспортируйте в формат OpenSSH.';
+                        info.className = 'form-text text-danger';
+                        return;
+                    }
+                    document.getElementById('key-text').value = text;
+                    info.innerHTML = '<i class="bi bi-check-circle-fill text-success me-1"></i>Ключ загружен: <b></b>';
+                    info.querySelector('b').textContent = f.name;
+                    info.className = 'form-text';
+                };
+                r.readAsText(f);
+            });
+        })();
+    </script>
+</th:block>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Тестируемые системы</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-bullseye"></i></span>Тестируемые системы (SUT)</h3>
+        <a class="btn btn-primary" th:href="@{/sut/new}">Добавить</a>
+    </div>
+    <div class="card"><table class="table table-sm table-hover mb-0">
+        <thead class="table-light"><tr><th>Имя</th><th>Метрики</th><th>Grafana</th><th></th></tr></thead>
+        <tbody>
+        <tr th:if="${items.isEmpty()}"><td colspan="4"><div class="empty-state"><i class="bi bi-inbox"></i>SUT пока нет</div></td></tr>
+        <tr th:each="s : ${items}">
+            <td><a th:href="@{/sut/{id}/edit(id=${s.id})}" th:text="${s.name}"></a></td>
+            <td><span class="badge text-bg-light me-1" th:each="m : ${s.metrics}" th:text="${m.name}"></span></td>
+            <td class="small" th:text="${s.grafanaUrlTpl} ?: '—'"></td>
+            <td class="text-end"><form class="d-inline" th:action="@{/sut/{id}/delete(id=${s.id})}" method="post" onsubmit="return confirm('Удалить SUT?')"><button class="btn btn-sm btn-outline-danger py-0">удалить</button></form></td>
+        </tr></tbody></table></div>
+</th:block>
+</body>
+</html>

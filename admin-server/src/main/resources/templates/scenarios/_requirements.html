@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="requirements">
+    <div class="alert alert-danger" th:if="${error}" th:text="${error}"></div>
+    <table class="table table-sm w-auto" th:if="${maxVus != null}">
+        <tr><th>Максимум VU (k6 execution requirements)</th><td th:text="${maxVus}"></td></tr>
+        <tr><th>Общая длительность</th><td th:text="${totalDuration}"></td></tr>
+    </table>
+    <div class="small text-muted" th:if="${maxVus != null}">Значения рассчитаны <code>k6 inspect --execution-requirements</code> по итоговому конфигу для всей нагрузки (без деления на генераторы).</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="col-6" th:fragment="tile(href, icon, title, sub)">
+    <a class="text-reset" th:href="@{${href}}"><div class="card tile-link h-100"><div class="card-body py-3">
+        <i th:class="'bi bi-' + ${icon} + ' fs-4 text-primary'"></i>
+        <div class="fw-semibold mt-1" th:text="${title}"></div><div class="small text-muted" th:text="${sub}"></div>
+    </div></div></a>
+</div>
+</body>
+</html>

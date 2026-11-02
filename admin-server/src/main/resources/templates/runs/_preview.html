@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div id="preview" th:fragment="preview">
+    <div class="alert alert-danger" th:if="${error}" th:text="${error}"></div>
+    <th:block th:if="${plan != null}">
+        <div class="alert alert-danger" th:each="e : ${plan.errors}" th:text="${e}"></div>
+        <div class="alert alert-warning py-2" th:each="w : ${plan.warnings}" th:text="${w}"></div>
+        <div class="alert alert-warning py-2" th:each="c : ${contention}" th:text="${c}"></div>
+        <div class="row g-3" th:if="${plan.generated != null}">
+            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small">Длительность</div><div class="fs-5" th:text="${#numbers.formatDecimal(plan.totalSec() / 60.0, 1, 1)} + ' мин'"></div></div></div>
+            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small">Пиковая интенсивность (всего)</div><div class="fs-5" th:text="${#numbers.formatDecimal(peakRate, 1, 2)} + ' оп/с'"></div></div></div>
+            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small">VU: оценка / preAllocated / max (всего)</div><div class="fs-6" th:text="${peakVus} + ' / ' + ${preAlloc} + ' / ' + ${maxVus}"></div></div></div>
+            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small" th:text="'На один генератор (из ' + ${n} + ')'"></div><div class="fs-6" th:text="${#numbers.formatDecimal(perGenRate, 1, 2)} + ' оп/с, VU ~' + ${#numbers.formatDecimal(perGenVus, 1, 0)} + ' / ' + ${#numbers.formatDecimal(perGenPre, 1, 0)} + ' / ' + ${#numbers.formatDecimal(perGenMax, 1, 0)}"></div></div></div>
+        </div>
+        <table class="table table-sm w-auto mt-3" th:unless="${shares.isEmpty()}">
+            <thead><tr><th>Генератор</th><th>Вес</th><th>Доля нагрузки</th><th></th></tr></thead>
+            <tbody><tr th:each="s : ${shares}"><td th:text="${s.name}"></td><td th:text="${s.weight}"></td><td th:text="${s.pct} + '%'"></td>
+                <td><span class="badge text-bg-info" th:if="${s.busy}">занят — запуск встанет в очередь</span></td></tr></tbody></table>
+        <div class="small text-muted">Шаг подготовки: PREPARE всем → ожидание PREPARED → проверка часов (&gt; 500 мс блокирует запуск) → START с общим временем (через 10 с).</div>
+    </th:block>
+</div>
+</body>
+</html>

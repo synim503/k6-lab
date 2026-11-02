@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="results" id="results-panel">
+    <div class="alert alert-secondary" th:if="${!terminal}">Итоги по ступеням рассчитываются после завершения run.</div>
+    <div th:if="${terminal}">
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            <form th:action="@{/runs/{id}/results/recompute(id=${run.id})}" method="post"><button class="btn btn-sm btn-outline-secondary">Пересчитать итоги</button></form>
+            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id})}" target="_blank">HTML-отчёт</a>
+            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id},download=true)}">Скачать HTML</a>
+            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.pdf(id=${run.id})}">PDF</a>
+            <form th:action="@{/runs/{id}/baseline(id=${run.id})}" method="post">
+                <input type="hidden" name="on" th:value="${!run.baseline}">
+                <button class="btn btn-sm btn-outline-warning" th:text="${run.baseline} ? 'Снять пометку эталона' : 'Пометить эталонным'"></button></form>
+            <form th:if="${data != null and data.max != null and data.max.candidateLevelPct != null}" th:action="@{/runs/{id}/confirm-max(id=${run.id})}" method="post">
+                <button class="btn btn-sm btn-success">Создать подтверждение максимума</button></form>
+        </div>
+
+        <div class="alert alert-warning" th:if="${data == null}">Итоги ещё не рассчитаны (метрики поступают в Prometheus с задержкой). Нажмите «Пересчитать итоги» через несколько секунд.</div>
+        <div th:if="${data != null}">
+            <div class="alert alert-danger" th:if="${!data.prometheusOk}" th:text="${data.error}"></div>
+
+            <div class="card mb-3" th:if="${data.max != null}">
+                <div class="card-body">
+                    <h5 class="card-title mb-1" th:text="${fmt.maxKind(data.max.kind)}"></h5>
+                    <div th:text="${data.max.note}"></div>
+                    <div class="small text-muted mt-1">Кандидат — последняя успешная ступень перед первой неуспешной. Итоговое решение за инженером.</div>
+                </div>
+            </div>
+
+            <div class="card mb-3" th:if="${baselineCompare != null}">
+                <div class="card-body">
+                    <h5 class="card-title">Сравнение с эталоном (run #<span th:text="${baselineCompare.a.id}"></span>)</h5>
+                    <span th:if="${baselineCompare.worseCount() == 0}" class="text-success">Ухудшений более 10% не найдено.</span>
+                    <span th:if="${baselineCompare.worseCount() > 0}" class="text-danger" th:text="'Показателей с ухудшением более 10%: ' + ${baselineCompare.worseCount()}"></span>
+                    <a class="ms-2" th:href="@{/runs/compare(a=${baselineCompare.a.id},b=${baselineCompare.b.id})}">подробно</a>
+                </div>
+            </div>
+
+            <div class="card mb-3"><div class="card-body">
+                <h5 class="card-title">Вывод инженера</h5>
+                <form th:action="@{/runs/{id}/conclusion(id=${run.id})}" method="post" class="row g-2">
+                    <div class="col-md-4"><select class="form-select" name="conclusion">
+                        <option value="" th:selected="${run.conclusion == null}">— не указан —</option>
+                        <option th:each="o : ${conclusions}"
+                                th:value="${o}" th:text="${o}" th:selected="${o == run.conclusion}"></option>
+                        <option th:if="${run.conclusion != null and !conclusions.contains(run.conclusion)}"
+                                th:value="${run.conclusion}" th:text="${run.conclusion}" selected></option></select></div>
+                    <div class="col-md-8"><textarea class="form-control" name="comment" rows="2" placeholder="Комментарий" th:text="${run.conclusionComment}"></textarea></div>
+                    <div class="col-12"><button class="btn btn-primary btn-sm">Сохранить</button></div>
+                </form>
+            </div></div>
+
+            <h5>Ступени и операции</h5>
+            <div class="small text-muted mb-2">Перцентили — histogram_quantile по native histograms суммарно по всем генераторам. Окно ступени — удержание без первых секунд выхода на режим.</div>
+            <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
+
+            <h5 class="mt-4">Генераторы (справочно)</h5>
+            <div class="small text-muted mb-1">Накопленные за весь тест значения k6; для оценки SLA не используются.</div>
+            <table class="table table-sm">
+                <thead><tr><th>Генератор</th><th>Статус</th><th>Код k6</th><th>CPU макс., %</th><th>Итераций</th><th>Dropped</th><th>HTTP-запросов</th></tr></thead>
+                <tbody><tr th:each="g : ${data.generators}"><td th:text="${g.generator}"></td><td th:text="${g.status}"></td><td th:text="${g.exitCode} ?: '—'"></td>
+                    <td th:text="${fmt.n(g.cpuMax, 0)}"></td><td th:text="${fmt.n(g.iterations, 0)}"></td><td th:text="${fmt.n(g.dropped, 0)}"></td><td th:text="${fmt.n(g.httpReqs, 0)}"></td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+</html>

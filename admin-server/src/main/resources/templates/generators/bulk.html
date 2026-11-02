@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Массовое добавление</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3">Массовое добавление генераторов</h3>
+    <form th:action="@{/generators/bulk}" th:object="${form}" method="post" class="card card-body">
+        <div class="row g-3">
+            <div class="col-md-9">
+                <label class="form-label">Хосты (по одному в строке: <code>host[:порт] [имя]</code>)</label>
+                <textarea class="form-control font-monospace" rows="8" th:field="*{hosts}"
+                          placeholder="10.0.0.11&#10;10.0.0.12:2222 gen-02&#10;# комментарий"></textarea>
+                <div class="text-danger small" th:errors="*{hosts}"></div>
+                <div class="form-text">Имя по умолчанию — адрес хоста. Установки идут параллельно с ограничением числа потоков.</div>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Порт SSH по умолчанию</label>
+                <input class="form-control" type="number" th:field="*{sshPort}">
+            </div>
+            <th:block th:replace="~{generators/_fields :: common}"></th:block>
+        </div>
+        <div class="mt-4 d-flex gap-2">
+            <button class="btn btn-primary" type="submit">Установить на все</button>
+            <a class="btn btn-link" th:href="@{/generators}">Отмена</a>
+        </div>
+    </form>
+</th:block>
+</body>
+</html>

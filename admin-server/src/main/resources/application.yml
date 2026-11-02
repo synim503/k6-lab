@@ -1,0 +1,59 @@
+spring:
+  application:
+    name: k6-lab-admin
+  datasource:
+    url: ${K6LAB_DB_URL:jdbc:postgresql://localhost:5432/k6lab}
+    username: ${K6LAB_DB_USER:k6lab}
+    password: ${K6LAB_DB_PASSWORD:k6lab}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+  servlet:
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
+  thymeleaf:
+    cache: ${K6LAB_TEMPLATE_CACHE:true}
+  mvc:
+    problemdetails:
+      enabled: false
+
+server:
+  port: ${K6LAB_HTTP_PORT:8080}
+  servlet:
+    session:
+      timeout: 12h
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+k6lab:
+  # base64 от 32 случайных байт: openssl rand -base64 32
+  master-key: ${K6LAB_MASTER_KEY:}
+  storage-dir: ${K6LAB_STORAGE_DIR:./data/storage}
+  # порт, на котором слушают агенты (отдельный коннектор Tomcat)
+  agent-port: ${K6LAB_AGENT_PORT:47331}
+  admin-password: ${K6LAB_ADMIN_PASSWORD:}
+  # путь к k6 на сервере админки для k6 inspect (иначе: дистрибутив по умолчанию для архитектуры сервера, затем PATH)
+  k6-path: ${K6LAB_K6_PATH:}
+  prometheus-rw-url: ${K6LAB_PROMETHEUS_RW_URL:}
+  prometheus-query-url: ${K6LAB_PROMETHEUS_QUERY_URL:}
+  require-diagnostics: ${K6LAB_REQUIRE_DIAGNOSTICS:true}
+  public-url: ${K6LAB_PUBLIC_URL:}
+  one-time-token-ttl: 24h
+  deploy:
+    max-parallel: 4
+    registration-timeout: 60s

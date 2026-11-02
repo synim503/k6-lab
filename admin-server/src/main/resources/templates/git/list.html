@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security" layout:decorate="~{layout/main}">
+<head><title>Git-репозитории</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-git"></i></span>Git-репозитории</h3>
+        <a sec:authorize="hasRole('ADMIN')" class="btn btn-primary" th:href="@{/git-repos/new}">Добавить</a>
+    </div>
+    <div class="card mb-3"><table class="table table-sm table-hover mb-0">
+        <thead class="table-light"><tr><th>Имя</th><th>URL</th><th>Доступ</th><th>Подкаталог</th><th></th></tr></thead>
+        <tbody>
+        <tr th:if="${repos.isEmpty()}"><td colspan="5"><div class="empty-state"><i class="bi bi-inbox"></i>Репозиториев нет</div></td></tr>
+        <tr th:each="r : ${repos}">
+            <td th:text="${r.name}"></td><td><code th:text="${r.url}"></code></td>
+            <td th:text="${r.authType.name() == 'NONE'} ? 'без аутентификации' : (${r.authType.name() == 'SSH'} ? 'SSH-ключ' : 'HTTPS-токен')"></td>
+            <td th:text="${r.subdir} ?: '/'"></td>
+            <td class="text-end text-nowrap">
+                <button class="btn btn-sm btn-outline-secondary py-0" hx-post="" th:attr="hx-post=@{/git-repos/{id}/refresh(id=${r.id})}"
+                        hx-target="#refs-box" hx-indicator="#refs-box">Проверить доступ</button>
+                <a sec:authorize="hasRole('ADMIN')" class="btn btn-sm btn-outline-secondary py-0" th:href="@{/git-repos/{id}/edit(id=${r.id})}">изменить</a>
+                <form sec:authorize="hasRole('ADMIN')" class="d-inline" th:action="@{/git-repos/{id}/delete(id=${r.id})}" method="post"
+                      onsubmit="return confirm('Удалить репозиторий?')"><button class="btn btn-sm btn-outline-danger py-0">удалить</button></form>
+            </td></tr></tbody></table></div>
+    <div id="refs-box"></div>
+</th:block>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Настройки</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-gear"></i></span>Настройки</h3>
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <div class="card"><div class="card-header">Prometheus</div><div class="card-body">
+                <form th:action="@{/settings/prometheus}" method="post">
+                    <div class="mb-2"><label class="form-label">URL remote write (его используют генераторы)</label>
+                        <input class="form-control" name="rwUrl" th:value="${p.rwUrl}" placeholder="http://prometheus:9090/api/v1/write"></div>
+                    <div class="mb-2"><label class="form-label">URL запросов (его использует админка)</label>
+                        <input class="form-control" name="queryUrl" th:value="${p.queryUrl}" placeholder="http://prometheus:9090"></div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-4"><label class="form-label">Аутентификация</label>
+                            <select class="form-select" name="authType">
+                                <option th:each="t : ${T(ru.k6lab.server.settings.SettingsService.AuthType).values()}" th:value="${t}" th:text="${t}" th:selected="${t == p.authType}"></option>
+                            </select></div>
+                        <div class="col-4"><label class="form-label">Пользователь</label><input class="form-control" name="user" th:value="${p.user}"></div>
+                        <div class="col-4"><label class="form-label">Пароль / токен</label>
+                            <input class="form-control" type="password" name="secret" autocomplete="new-password" th:placeholder="${hasSecret} ? '(сохранён, пусто — не менять)' : ''"></div>
+                    </div>
+                    <div class="mb-2"><label class="form-label">Шаблон ссылки на Grafana</label>
+                        <input class="form-control" name="grafana" th:value="${grafana}" placeholder="http://grafana/d/k6?var-run={{run_id}}&amp;from={{start}}&amp;to={{end}}"></div>
+                    <button class="btn btn-primary">Сохранить</button>
+                </form>
+                <div class="form-text mt-2">Prometheus должен быть запущен с <code>--web.enable-remote-write-receiver</code> и <code>--enable-feature=native-histograms</code>.</div>
+            </div></div>
+
+            <div class="card mt-3" id="diag"><div class="card-header">Диагностика связки k6 → Prometheus</div><div class="card-body">
+                <form class="row g-2 mb-3" th:action="@{/settings/diagnostics}" method="post">
+                    <div class="col"><select class="form-select" name="generatorId" required>
+                        <option value="" th:if="${connected.isEmpty()}">нет подключённых генераторов</option>
+                        <option th:each="g : ${connected}" th:value="${g.id}" th:text="${g.name}"></option></select></div>
+                    <div class="col-auto"><button class="btn btn-outline-primary" th:disabled="${connected.isEmpty() or diagRunning}">Проверить</button></div>
+                </form>
+                <div th:replace="~{settings/_diag :: panel}"></div>
+                <div class="form-text mt-2" th:if="${requireDiagnostics}">Запуск тестов разрешён только после успешной диагностики.</div>
+            </div></div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card"><div class="card-header">Имена метрик k6 в Prometheus</div><div class="card-body">
+                <form th:action="@{/settings/metric-names}" method="post">
+                    <textarea class="form-control font-monospace mb-2" rows="11" name="json" th:text="${metricNames}"></textarea>
+                    <button class="btn btn-primary">Сохранить</button>
+                </form>
+                <div class="form-text mt-2">Имена зависят от версии k6 и настроек remote write; меняйте, если в вашем Prometheus они другие.</div>
+            </div></div>
+
+            <div class="card mt-3"><div class="card-header">Хранение и логи</div><div class="card-body">
+                <form class="row g-2" th:action="@{/settings/limits}" method="post">
+                    <div class="col-4"><label class="form-label">Строк лога агента в секунду</label><input class="form-control" type="number" min="1" name="logLines" th:value="${logLines}"></div>
+                    <div class="col-4"><label class="form-label">Хранить логи, дней</label><input class="form-control" type="number" min="1" name="logDays" th:value="${logDays}"></div>
+                    <div class="col-4"><label class="form-label">Метрики генераторов, дней</label><input class="form-control" type="number" min="1" name="metricsDays" th:value="${metricsDays}"></div>
+                    <div class="col-12"><button class="btn btn-primary">Сохранить</button></div>
+                </form>
+                <div class="form-text mt-2">Результаты и отчёты хранятся без ограничения срока.</div>
+            </div></div>
+
+            <div class="card mt-3"><div class="card-header">Агенты</div><div class="card-body">
+                Порт подключения агентов: <b th:text="${agentPort}"></b> (отдельный коннектор, без TLS — используйте изолированную сеть).
+            </div></div>
+        </div>
+    </div>
+</th:block>
+</body>
+</html>

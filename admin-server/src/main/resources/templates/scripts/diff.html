@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Сравнение версий</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
+</head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0"><a th:href="@{/scripts/{id}(id=${script.id})}" th:text="${script.name}"></a>:
+            v<span th:text="${a.number}"></span> → v<span th:text="${b.number}"></span></h3>
+        <a class="btn btn-link" th:href="@{/scripts/{id}(id=${script.id})}">← к версиям</a>
+    </div>
+    <div class="alert alert-info" th:if="${diffs.isEmpty()}">Содержимое версий одинаково</div>
+    <ul class="small" th:unless="${diffs.isEmpty()}">
+        <li th:each="d : ${diffs}"><code th:text="${d.path}"></code> — <span th:text="${d.status}"></span>
+            <span th:if="${d.unified == null}" class="text-muted">(бинарный/большой файл, построчное сравнение недоступно)</span></li>
+    </ul>
+    <textarea id="unified" class="d-none" th:text="${unified}"></textarea>
+    <div id="diff-out"></div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
+    <script>
+        (function () {
+            var text = document.getElementById('unified').value;
+            if (!text.trim() || !window.Diff2HtmlUI) { return; }
+            new Diff2HtmlUI(document.getElementById('diff-out'), text,
+                {drawFileList: true, matching: 'lines', outputFormat: 'side-by-side', highlight: true}).draw();
+        })();
+    </script>
+</th:block>
+</body>
+</html>

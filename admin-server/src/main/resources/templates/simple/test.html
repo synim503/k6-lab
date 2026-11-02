@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Создать тест</title></head>
+<body>
+<th:block layout:fragment="content">
+    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-plus-circle"></i></span>Создать тест</h3>
+    <form class="card card-body row g-3 mx-0" style="max-width: 820px" th:action="@{/quick/test}" method="post">
+        <div class="col-md-6"><label class="form-label">Название теста</label><input class="form-control" name="name" required></div>
+        <div class="col-md-6"><label class="form-label">Скрипт</label>
+            <select class="form-select" name="scriptId" required hx-get="/quick/test/ops" hx-target="#ops-box" hx-trigger="change" hx-include="this">
+                <option value="">— выберите —</option>
+                <option th:each="s : ${scripts}" th:value="${s.id}" th:text="${s.name}" th:selected="${s.id == scriptId}"></option></select>
+            <div class="form-text" th:if="${scripts.isEmpty()}">Скриптов нет — <a th:href="@{/scripts/new}">загрузите скрипт</a>.</div></div>
+        <div class="col-12" id="ops-box"><div th:fragment="ops">
+            <div class="alert alert-warning py-2" th:if="${opsWarning}" th:text="${opsWarning}"></div>
+            <table class="table table-sm align-middle mb-0" th:if="${!ops.isEmpty()}">
+                <thead><tr><th>Операция (функция скрипта)</th><th style="width:160px">Нагрузка, оп/с</th><th style="width:180px">Допустимое время p95, мс</th></tr></thead>
+                <tbody><tr th:each="o : ${ops}">
+                    <td><code th:text="${o}"></code><input type="hidden" name="op" th:value="${o}"></td>
+                    <td><input class="form-control form-control-sm" type="number" step="any" min="0" name="rate" placeholder="0 = не использовать"></td>
+                    <td><input class="form-control form-control-sm" type="number" step="any" min="1" name="sla" value="1000"></td></tr></tbody></table>
+            <div class="form-text" th:if="${!ops.isEmpty()}">Нагрузка — сколько операций в секунду подавать. Пустое или 0 — операция в тесте не участвует.</div>
+        </div></div>
+        <div class="col-md-3"><label class="form-label">Длительность, мин</label><input class="form-control" type="number" min="1" name="minutes" value="5"></div>
+        <div class="col-md-3"><label class="form-label">Уровень нагрузки, %</label><input class="form-control" type="number" step="any" min="1" name="percent" value="100"></div>
+        <div class="col-12"><button class="btn btn-primary">Создать</button>
+            <span class="text-muted small ms-2">Разгон 30 с, затем постоянная нагрузка. Тонкая настройка — «Ещё → Сценарии».</span></div>
+        <div class="alert alert-danger mb-0" th:if="${error}" th:text="${error}"></div>
+    </form>
+</th:block>
+</body>
+</html>
