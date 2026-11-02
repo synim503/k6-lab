@@ -154,21 +154,23 @@ public class AgentConnection {
             log.warn("Получено некорректное сообщение: {}", e.getMessage());
             return;
         }
-        switch (msg) {
-            case Messages.Registered r -> {
-                tokens.savePermanent(r.permanentToken());
-                log.info("Агент зарегистрирован на сервере, переподключаемся с постоянным токеном");
-                // Переподключение доказывает серверу, что постоянный токен сохранён и работает; только после этого
-                // сервер гасит одноразовый токен.
-                WebSocket ws = socket;
-                if (ws != null) {
-                    ws.sendClose(WebSocket.NORMAL_CLOSURE, "re-authenticate");
-                }
+        if (msg instanceof Messages.Registered r) {
+            tokens.savePermanent(r.permanentToken());
+            log.info("Агент зарегистрирован на сервере, переподключаемся с постоянным токеном");
+            // Переподключение доказывает серверу, что постоянный токен сохранён и работает; только после этого
+            // сервер гасит одноразовый токен.
+            WebSocket ws = socket;
+            if (ws != null) {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "re-authenticate");
             }
-            case Messages.Ack a -> journal.ack(a.upToSeq());
-            case Messages.Ping p -> send(new Messages.Pong(p.pingId(), p.t1(), receivedAt, System.currentTimeMillis()));
-            case Message.Command c -> handleCommand(c);
-            default -> log.debug("Игнорируем сообщение {}", msg.getClass().getSimpleName());
+        } else if (msg instanceof Messages.Ack a) {
+            journal.ack(a.upToSeq());
+        } else if (msg instanceof Messages.Ping p) {
+            send(new Messages.Pong(p.pingId(), p.t1(), receivedAt, System.currentTimeMillis()));
+        } else if (msg instanceof Message.Command c) {
+            handleCommand(c);
+        } else {
+            log.debug("Игнорируем сообщение {}", msg.getClass().getSimpleName());
         }
     }
 

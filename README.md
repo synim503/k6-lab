@@ -57,7 +57,7 @@ flowchart LR
 
 ## Установка админки на ВМ
 
-Требования: Linux с systemd, Java 21, PostgreSQL 16, свободные порты 8080 (UI) и 47331 (агенты).
+Требования: Linux с systemd, Java 17+, PostgreSQL 16, свободные порты 8080 (UI) и 47331 (агенты).
 
 ```bash
 # 1. База
@@ -233,16 +233,23 @@ export function getPayment() {
 
 ## Портативная версия (без Docker, для виртуалок)
 
-Комплект собирается одной командой и содержит всё, кроме PostgreSQL и Prometheus (нужен Go 1.22+ для сборки агента):
+Комплект собирается **одной командой** и содержит всё, кроме PostgreSQL и Prometheus. Нужны JDK 17+, Go 1.22+, curl и tar
+(на Windows — Git for Windows: его bash). xk6 ставится автоматически.
 
 ```bash
-scripts/build-portable.sh            # -> portable/k6-lab-portable.zip (~310 МБ)
+./build.sh                  # Linux / macOS / Git Bash;  Windows: build.cmd
+./build.sh --with-tests     # сначала прогнать все тесты
+./build.sh --no-xk6         # без k6 с расширениями (быстрее)
+./build.sh --check          # только проверить, что всё необходимое установлено
 ```
+
+Результат — `portable/k6-lab-portable.zip` (~200 МБ). Админка собирается под **Java 17** (запускается на 17 и новее, проверено
+на Temurin 17); агентам на генераторах Java не нужна.
 
 В архиве: `k6-lab-admin.jar`, `start.bat` / `start.sh`, `dist/` с агентом на Go (linux-amd64/arm64, без JRE), k6
 (linux-amd64/arm64) и сборкой k6 с популярными расширениями xk6 («full»: kafka, sql + драйверы postgres/mysql, faker, mqtt, sse).
 
-1. Распакуйте, запустите `start.bat` / `./start.sh` (нужна Java 21+ на машине админки).
+1. Распакуйте, запустите `start.bat` / `./start.sh` (нужна Java 17+ на машине админки).
 2. Откройте http://localhost:8080 — мастер первого запуска спросит параметры PostgreSQL, проверит подключение, сохранит их
    и сгенерирует ключ шифрования в `config/k6lab.properties` (**сохраните файл**) и пароль `admin`.
 3. Дистрибутивы из `dist/` подхватываются сами (`dist/manifest.json`), второй запуск ничего не дублирует.

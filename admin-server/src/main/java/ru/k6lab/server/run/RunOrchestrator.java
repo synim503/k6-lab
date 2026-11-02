@@ -254,17 +254,22 @@ public class RunOrchestrator implements AgentEventListener {
     @Override
     public void onEvent(long generatorId, Message message) {
         try {
-            switch (message) {
-                case Messages.CmdAck a -> onCmdAck(generatorId, a);
-                case Messages.Prepared p -> withCtx(p.runId(), generatorId, (ctx, g) -> onPrepared(ctx, g));
-                case Messages.PrepareFailed f -> withCtx(f.runId(), generatorId, (ctx, g) -> onPrepareFailed(ctx, g, f.reason()));
-                case Messages.Status s -> withCtx(s.runId(), generatorId, (ctx, g) -> onAgentStatus(ctx, g, s));
-                case Messages.K6Status k -> withCtx(k.runId(), generatorId, (ctx, g) -> onK6Status(ctx, g, k));
-                case Messages.LogBatch b -> withCtx(b.runId(), generatorId, (ctx, g) -> onLogBatch(ctx, g, b));
-                case Messages.Summary s -> withCtx(s.runId(), generatorId, (ctx, g) -> onSummary(ctx, g, s));
-                case Messages.Exit e -> withCtx(e.runId(), generatorId, (ctx, g) -> onExit(ctx, g, e));
-                default -> {
-                }
+            if (message instanceof Messages.CmdAck a) {
+                onCmdAck(generatorId, a);
+            } else if (message instanceof Messages.Prepared p) {
+                withCtx(p.runId(), generatorId, (ctx, g) -> onPrepared(ctx, g));
+            } else if (message instanceof Messages.PrepareFailed f) {
+                withCtx(f.runId(), generatorId, (ctx, g) -> onPrepareFailed(ctx, g, f.reason()));
+            } else if (message instanceof Messages.Status s) {
+                withCtx(s.runId(), generatorId, (ctx, g) -> onAgentStatus(ctx, g, s));
+            } else if (message instanceof Messages.K6Status k) {
+                withCtx(k.runId(), generatorId, (ctx, g) -> onK6Status(ctx, g, k));
+            } else if (message instanceof Messages.LogBatch b) {
+                withCtx(b.runId(), generatorId, (ctx, g) -> onLogBatch(ctx, g, b));
+            } else if (message instanceof Messages.Summary s) {
+                withCtx(s.runId(), generatorId, (ctx, g) -> onSummary(ctx, g, s));
+            } else if (message instanceof Messages.Exit e) {
+                withCtx(e.runId(), generatorId, (ctx, g) -> onExit(ctx, g, e));
             }
         } catch (RuntimeException e) {
             log.error("Ошибка обработки события {} от генератора {}", message.getClass().getSimpleName(), generatorId, e);

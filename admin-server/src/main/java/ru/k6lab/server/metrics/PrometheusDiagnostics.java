@@ -378,13 +378,16 @@ public class PrometheusDiagnostics implements AgentEventListener {
 
     @Override
     public void onEvent(long generatorId, Message message) {
-        String runId = switch (message) {
-            case Messages.Prepared x -> x.runId();
-            case Messages.PrepareFailed x -> x.runId();
-            case Messages.Exit x -> x.runId();
-            case Messages.LogBatch x -> x.runId();
-            default -> null;
-        };
+        String runId = null;
+        if (message instanceof Messages.Prepared x) {
+            runId = x.runId();
+        } else if (message instanceof Messages.PrepareFailed x) {
+            runId = x.runId();
+        } else if (message instanceof Messages.Exit x) {
+            runId = x.runId();
+        } else if (message instanceof Messages.LogBatch x) {
+            runId = x.runId();
+        }
         if (runId == null || !runId.startsWith("diag-")) {
             return;
         }
@@ -392,16 +395,15 @@ public class PrometheusDiagnostics implements AgentEventListener {
         if (p == null) {
             return;
         }
-        switch (message) {
-            case Messages.Prepared x -> p.prepared.complete(null);
-            case Messages.PrepareFailed x -> p.prepared.completeExceptionally(new IllegalStateException(x.reason()));
-            case Messages.Exit x -> p.exit.complete(x);
-            case Messages.LogBatch x -> {
-                synchronized (p.out) {
-                    x.lines().forEach(l -> p.out.append(l.line()).append('\n'));
-                }
-            }
-            default -> {
+        if (message instanceof Messages.Prepared) {
+            p.prepared.complete(null);
+        } else if (message instanceof Messages.PrepareFailed x) {
+            p.prepared.completeExceptionally(new IllegalStateException(x.reason()));
+        } else if (message instanceof Messages.Exit x) {
+            p.exit.complete(x);
+        } else if (message instanceof Messages.LogBatch x) {
+            synchronized (p.out) {
+                x.lines().forEach(l -> p.out.append(l.line()).append('\n'));
             }
         }
     }

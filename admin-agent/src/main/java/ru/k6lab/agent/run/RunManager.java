@@ -101,17 +101,24 @@ public class RunManager implements CommandHandler, RunStateProvider {
     @Override
     public Messages.CmdAck handle(Message.Command cmd) {
         try {
-            return switch (cmd) {
-                case Messages.Prepare p -> prepare(p);
-                case Messages.Start s -> start(s);
-                case Messages.Stop s -> control(s.cmdId(), s.runId(), Run::stop);
-                case Messages.Abort a -> control(a.cmdId(), a.runId(), Run::abort);
-                case Messages.Pause p -> control(p.cmdId(), p.runId(), r -> r.api().pause(true));
-                case Messages.Resume r2 -> control(r2.cmdId(), r2.runId(), r -> r.api().pause(false));
-                case Messages.ScaleVus s -> control(s.cmdId(), s.runId(), r -> r.api().scaleVus(s.vus()));
-                case Messages.CancelPrepare c -> cancelPrepare(c);
-                default -> new Messages.CmdAck(cmd.cmdId(), false, "Неизвестная команда");
-            };
+            if (cmd instanceof Messages.Prepare p) {
+                return prepare(p);
+            } else if (cmd instanceof Messages.Start s) {
+                return start(s);
+            } else if (cmd instanceof Messages.Stop s) {
+                return control(s.cmdId(), s.runId(), Run::stop);
+            } else if (cmd instanceof Messages.Abort a) {
+                return control(a.cmdId(), a.runId(), Run::abort);
+            } else if (cmd instanceof Messages.Pause p) {
+                return control(p.cmdId(), p.runId(), r -> r.api().pause(true));
+            } else if (cmd instanceof Messages.Resume r2) {
+                return control(r2.cmdId(), r2.runId(), r -> r.api().pause(false));
+            } else if (cmd instanceof Messages.ScaleVus s) {
+                return control(s.cmdId(), s.runId(), r -> r.api().scaleVus(s.vus()));
+            } else if (cmd instanceof Messages.CancelPrepare c) {
+                return cancelPrepare(c);
+            }
+            return new Messages.CmdAck(cmd.cmdId(), false, "Неизвестная команда");
         } catch (Exception e) {
             return new Messages.CmdAck(cmd.cmdId(), false, e.getMessage() == null ? e.toString() : e.getMessage());
         }

@@ -33,13 +33,18 @@ public class AgentMessageService {
     }
 
     public void handle(AgentSession session, Message message) {
-        switch (message) {
-            case Messages.Hello h -> onHello(session, h);
-            case Messages.Heartbeat hb -> onHeartbeat(session, hb);
-            case Messages.Pong p -> onPong(session, p);
-            case Message.Sequenced s -> onSequenced(session, s);
-            case Messages.CmdAck a -> publish(session, a);
-            default -> log.warn("Неожиданное сообщение от агента {}: {}", session.generatorName(),
+        if (message instanceof Messages.Hello h) {
+            onHello(session, h);
+        } else if (message instanceof Messages.Heartbeat hb) {
+            onHeartbeat(session, hb);
+        } else if (message instanceof Messages.Pong p) {
+            onPong(session, p);
+        } else if (message instanceof Message.Sequenced s) {
+            onSequenced(session, s);
+        } else if (message instanceof Messages.CmdAck a) {
+            publish(session, a);
+        } else {
+            log.warn("Неожиданное сообщение от агента {}: {}", session.generatorName(),
                     message.getClass().getSimpleName());
         }
     }
