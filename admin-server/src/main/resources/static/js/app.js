@@ -44,12 +44,7 @@ function nextRowIndex(selector) {
         var h = a.getAttribute('href');
         if (h && h !== '#' && (h === '/' ? path === '/' : path.indexOf(h) === 0) && (!best || h.length > best.getAttribute('href').length)) { best = a; }
     });
-    // раздел «Тесты» объединяет и /quick/test/..., а «Запуски» - и /runs/...
-    if (!best) {
-        var map = [['/quick/test', '/quick/tests'], ['/deployments', null]];
-        map.forEach(function (m) {
-            if (!best && path.indexOf(m[0]) === 0 && m[1]) { best = document.querySelector('.app-nav a.nav-link[href$="' + m[1] + '"]'); }
-        });
-    }
+    // страница запуска /runs/... относится к разделу «Скрипты»
+    if (!best && path.indexOf('/runs') === 0) { best = document.querySelector('.app-nav a.nav-link[href$="/scripts"]'); }
     if (best) { best.classList.add('active'); }
 })();

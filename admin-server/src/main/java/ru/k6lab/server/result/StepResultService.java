@@ -10,11 +10,8 @@ import org.slf4j.MDC;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import ru.k6lab.core.analysis.MaxFinder;
 import ru.k6lab.core.analysis.StepAnalysis;
-import ru.k6lab.core.profile.ProfileType;
 import ru.k6lab.core.prom.PromQueries;
-import ru.k6lab.core.util.PromQlTemplate;
 import ru.k6lab.server.metrics.MetricNamesService;
 import ru.k6lab.server.metrics.PrometheusClient;
 import ru.k6lab.server.run.Run;
@@ -23,7 +20,7 @@ import ru.k6lab.server.run.RunOrchestrator;
 import ru.k6lab.server.run.RunService;
 import ru.k6lab.server.run.RunSnapshot;
 import ru.k6lab.server.run.RunStep;
-import ru.k6lab.server.scenario.ScenarioCriteria;
+import ru.k6lab.server.load.LoadCriteria;
 import ru.k6lab.server.settings.SettingsService;
 
 import java.io.IOException;
@@ -132,16 +129,16 @@ public class StepResultService {
         List<ResultData.GenRow> genRows = genRows(run, gens);
         SettingsService.Prometheus p = settings.prometheus();
         if (!p.configured()) {
-            return new ResultData(List.of(), null, false, "Prometheus не настроен: итоги по ступеням недоступны", now, genRows);
+            return new ResultData(List.of(), false, "Prometheus не настроен: итоги по ступеням недоступны", now, genRows);
         }
         try {
             prom.ping(p);
         } catch (IOException e) {
-            return new ResultData(List.of(), null, false, "Prometheus недоступен: " + e.getMessage(), now, genRows);
+            return new ResultData(List.of(), false, "Prometheus недоступен: " + e.getMessage(), now, genRows);
         }
-        StepAnalysis.SuccessCriteria criteria = ScenarioCriteria.success(snap.successCriteria());
+        StepAnalysis.SuccessCriteria criteria = LoadCriteria.success(snap.successCriteria());
         Map<String, StepAnalysis.OpSla> sla = new HashMap<>();
-        for (RunSnapshot.OpInfo o : snap.model().operations()) {
+        for (RunSnapshot.OpInfo o : snap.operations()) {
             if (o.enabled()) {
                 sla.put(o.name(), new StepAnalysis.OpSla(o.name(), o.slaPercentile(), o.slaThresholdMs(), o.maxErrorPct()));
             }
@@ -162,7 +159,7 @@ public class StepResultService {
             if (winSec < MIN_WINDOW_SEC) {
                 rows.add(new ResultData.StepRow(step.getStepNo(), label, step.getLevelPct(), "NOT_RUN", step.getHoldStartAt(),
                         step.getHoldEndAt(), winStart, winEnd, true, null, false,
-                        List.of("ступень не была выполнена (тест завершён раньше)"), List.of(), List.of()));
+                        List.of("ступень не была выполнена (тест завершён раньше)"), List.of()));
                 continue;
             }
             try {
@@ -181,30 +178,14 @@ public class StepResultService {
                             ov.ok(), ov.dataMissing()));
                 }
                 rows.add(new ResultData.StepRow(step.getStepNo(), label, step.getLevelPct(), v.status().name(), step.getHoldStartAt(),
-                        step.getHoldEndAt(), winStart, winEnd, reliable, cpuMax, overloaded, v.reasons(), ops,
-                        sutRows(snap, winStart, winEnd, p)));
+                        step.getHoldEndAt(), winStart, winEnd, reliable, cpuMax, overloaded, v.reasons(), ops));
             } catch (IOException e) {
                 error = "Ошибка запроса к Prometheus: " + e.getMessage();
                 log.warn("Run {}: ступень {}: {}", run.getId(), step.getStepNo(), error);
                 break;
             }
         }
-        MaxFinder.Result mf = MaxFinder.find(verdicts);
-        boolean searchesMax = isSearchProfile(snap);
-        ResultData.MaxRow max = searchesMax && error == null
-                ? new ResultData.MaxRow(mf.kind().name(), mf.candidateStep(), mf.firstProblemStep(), mf.note(),
-                        mf.candidateStep() == null ? null : levels.get(mf.candidateStep()))
-                : null;
-        return new ResultData(rows, max, error == null, error, now, genRows);
-    }
-
-    private static boolean isSearchProfile(RunSnapshot snap) {
-        try {
-            ProfileType t = ProfileType.valueOf(snap.profile().type());
-            return t == ProfileType.MAX_SEARCH || t == ProfileType.STRESS || t == ProfileType.CUSTOM || t == ProfileType.TEMPLATE;
-        } catch (IllegalArgumentException e) {
-            return true;
-        }
+        return new ResultData(rows, error == null, error, now, genRows);
     }
 
     private List<StepAnalysis.OpMetrics> opMetrics(RunSnapshot snap, PromQueries.Names n, long runId, double stepLevel, long winSec,
@@ -217,55 +198,23 @@ public class StepResultService {
         Map<String, Double> rate = byScenario(prom.query(p, PromQueries.ratePerSec(n, runId, winSec), at));
         Map<String, Double> dropped = byScenario(prom.query(p, PromQueries.dropped(n, runId, winSec), at));
         Map<String, Double> errHelper = helper ? byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HELPER, runId, winSec), at)) : Map.of();
-        boolean anyHttp = !helper && snap.model().operations().stream().anyMatch(o -> o.enabled() && !"CHECKS".equals(o.failureSource()));
-        boolean anyChecks = !helper && snap.model().operations().stream().anyMatch(o -> o.enabled() && "CHECKS".equals(o.failureSource()));
+        boolean anyHttp = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && !"CHECKS".equals(o.failureSource()));
+        boolean anyChecks = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && "CHECKS".equals(o.failureSource()));
         Map<String, Double> errHttp = anyHttp ? byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HTTP, runId, winSec), at)) : Map.of();
         Map<String, Double> errChecks = anyChecks ? byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.CHECKS, runId, winSec), at)) : Map.of();
 
         List<StepAnalysis.OpMetrics> out = new ArrayList<>();
-        for (RunSnapshot.OpInfo o : snap.model().operations()) {
+        for (RunSnapshot.OpInfo o : snap.operations()) {
             if (!o.enabled()) {
                 continue;
             }
-            double level = o.fixedLevelPct() != null ? o.fixedLevelPct() : stepLevel;
+            double level = stepLevel;
             double target = o.ratePerSec() * level / 100.0;
             Double err = helper ? errHelper.get(o.name()) : "CHECKS".equals(o.failureSource()) ? errChecks.get(o.name()) : errHttp.get(o.name());
             Double drop = dropped.get(o.name());
             // нет серии dropped = ни одной пропущенной итерации (k6 не создаёт счётчик до первого события)
             out.add(new StepAnalysis.OpMetrics(o.name(), target, rate.get(o.name()), pct.get(50).get(o.name()), pct.get(90).get(o.name()),
                     pct.get(95).get(o.name()), pct.get(99).get(o.name()), err, drop == null ? 0.0 : drop));
-        }
-        return out;
-    }
-
-    private List<ResultData.SutRow> sutRows(RunSnapshot snap, Instant from, Instant to, SettingsService.Prometheus p) {
-        if (snap.sut() == null) {
-            return List.of();
-        }
-        List<ResultData.SutRow> out = new ArrayList<>();
-        long range = Math.max(1, Duration.between(from, to).getSeconds());
-        for (RunSnapshot.SutMetricInfo m : snap.sut().metrics()) {
-            try {
-                String q = PromQlTemplate.render(m.promql(), from, to);
-                List<Double> vals = prom.queryRange(p, q, from, to, (int) Math.max(5, range / 60));
-                if (vals.isEmpty()) {
-                    out.add(new ResultData.SutRow(m.name(), m.unit(), null, null, null, false));
-                    continue;
-                }
-                double avg = vals.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-                double max = vals.stream().mapToDouble(Double::doubleValue).max().orElse(0);
-                double last = vals.get(vals.size() - 1);
-                double basis = switch (m.aggregation() == null ? "AVG" : m.aggregation().toUpperCase()) {
-                    case "MAX" -> max;
-                    case "LAST" -> last;
-                    default -> avg;
-                };
-                boolean warn = m.warnThreshold() != null && ("BELOW".equals(m.warnDirection()) ? basis < m.warnThreshold() : basis > m.warnThreshold());
-                out.add(new ResultData.SutRow(m.name(), m.unit(), avg, max, last, warn));
-            } catch (IOException | RuntimeException e) {
-                log.debug("SUT-метрика {}: {}", m.name(), e.getMessage());
-                out.add(new ResultData.SutRow(m.name(), m.unit(), null, null, null, false));
-            }
         }
         return out;
     }

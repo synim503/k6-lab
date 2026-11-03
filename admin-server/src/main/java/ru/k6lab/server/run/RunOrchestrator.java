@@ -20,7 +20,7 @@ import ru.k6lab.server.agent.AgentSession;
 import ru.k6lab.server.agent.AgentSessionRegistry;
 import ru.k6lab.server.common.Hashes;
 import ru.k6lab.server.generator.Generator;
-import ru.k6lab.server.scenario.SecretService;
+import ru.k6lab.server.secret.SecretService;
 import ru.k6lab.server.settings.SettingsService;
 
 import java.net.URI;
@@ -78,7 +78,7 @@ public class RunOrchestrator implements AgentEventListener {
 
     static final class Ctx {
         long runId;
-        String scenarioName;
+        String scriptName;
         Run.FailurePolicy policy;
         int gracefulStopSec;
         int totalSec;
@@ -154,7 +154,7 @@ public class RunOrchestrator implements AgentEventListener {
         MDC.put("run_id", String.valueOf(runId));
         try {
             logs.addSystem(runId, "INFO", "Run " + runId + ": подготовка на " + ctx.gens.size() + " генераторах");
-            Map<String, String> secretValues = secrets.resolve(SecretService.referencedNames(snap.scenario().env()));
+            Map<String, String> secretValues = secrets.resolve(SecretService.referencedNames(snap.env()));
             RunArtifactService.Artifact artifact = artifacts.forVersion(runService.versionOf(run));
             for (RunGenerator rg : runService.generatorsOf(runId)) {
                 sendPrepare(ctx, run, snap, rg, artifact, secretValues);
@@ -172,9 +172,9 @@ public class RunOrchestrator implements AgentEventListener {
     private Ctx newCtx(Run run, RunSnapshot snap) {
         Ctx ctx = new Ctx();
         ctx.runId = run.getId();
-        ctx.scenarioName = run.getScenarioName();
+        ctx.scriptName = run.getScriptName();
         ctx.policy = run.getFailurePolicy();
-        ctx.gracefulStopSec = snap.profile().gracefulStopSec();
+        ctx.gracefulStopSec = snap.gracefulStopSec();
         ctx.totalSec = snap.steps().stream().mapToInt(s -> s.rampSec() + s.holdSec()).sum();
         ctx.externallyControlled = run.getK6Config() != null && run.getK6Config().toString().contains("externally-controlled");
         ctx.plannedStart = run.getPlannedStartAt();
@@ -213,7 +213,7 @@ public class RunOrchestrator implements AgentEventListener {
         Map<String, String> tags = new LinkedHashMap<>();
         tags.put("test_run_id", String.valueOf(run.getId()));
         tags.put("generator", rg.getGeneratorName());
-        tags.put("test_scenario", run.getScenarioName());
+        tags.put("test_script", run.getScriptName());
         List<Messages.DataRule> rules = snap.dataFiles().stream()
                 .map(d -> new Messages.DataRule(d.path(), d.mode(), d.hasHeader())).toList();
         SettingsService.Prometheus prom = settings.prometheus();
@@ -222,7 +222,7 @@ public class RunOrchestrator implements AgentEventListener {
         String cmdId = UUID.randomUUID().toString();
         pendingCmds.put(cmdId, new CmdRef(run.getId(), rg.getGeneratorId(), "PREPARE"));
         session.send(new Messages.Prepare(cmdId, String.valueOf(run.getId()), artifactUrl(gen.getServerUrl(), run.getId(), token),
-                artifact.sha256(), run.getK6Config(), snap.scenario().env(), secretValues, rg.segment(), snap.segmentSequence(),
+                artifact.sha256(), run.getK6Config(), snap.env(), secretValues, rg.segment(), snap.segmentSequence(),
                 tags, rules, promParams, rg.getK6ApiPort(), ConfigInput.SYSTEM_TAGS, snap.script().entrypoint(),
                 settings.logLinesPerSecond()));
     }

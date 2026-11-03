@@ -20,7 +20,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Запуск теста. Хранит полный snapshot сценария и сгенерированного конфига: результаты не зависят от последующих правок. */
+/** Запуск скрипта. Хранит полный снимок нагрузки и сгенерированного конфига: результаты не зависят от последующих правок. */
 @Getter
 @Setter
 @Entity
@@ -45,11 +45,11 @@ public class Run extends Auditable {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "scenario_id")
-    private Long scenarioId;
+    @Column(name = "script_id")
+    private Long scriptId;
 
-    @Column(name = "scenario_name", nullable = false)
-    private String scenarioName;
+    @Column(name = "script_name", nullable = false)
+    private String scriptName;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -110,8 +110,6 @@ public class Run extends Auditable {
     @Column(name = "conclusion_comment", columnDefinition = "text")
     private String conclusionComment;
 
-    @Column(name = "is_baseline", nullable = false)
-    private boolean baseline;
 
     @Column(name = "created_by")
     private String createdBy;

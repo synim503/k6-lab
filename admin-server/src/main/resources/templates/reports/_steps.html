@@ -31,14 +31,6 @@
             </tr>
             </tbody>
         </table>
-        <table class="tbl" th:if="${!s.sut.isEmpty()}">
-            <thead><tr><th>Метрика SUT</th><th>Среднее</th><th>Максимум</th><th>Последнее</th></tr></thead>
-            <tbody><tr th:each="m : ${s.sut}" th:classappend="${m.warn} ? 'row-warn'">
-                <td th:text="${m.name} + (${m.unit} != null and ${m.unit} != '' ? ', ' + ${m.unit} : '')"></td>
-                <td class="num" th:text="${fmt.n(m.avg, 2)}"></td>
-                <td class="num" th:text="${fmt.n(m.max, 2)}"></td>
-                <td class="num" th:text="${fmt.n(m.last, 2)}"></td></tr></tbody>
-        </table>
     </div>
 </div>
 </body>

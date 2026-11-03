@@ -17,13 +17,19 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import ru.k6lab.core.util.ZipUtil;
 import ru.k6lab.server.git.GitClient;
 import ru.k6lab.server.git.GitRepoService;
+import ru.k6lab.server.load.LoadOperation;
+import ru.k6lab.server.load.LoadService;
+import ru.k6lab.server.run.Run;
+import ru.k6lab.server.run.RunService;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Controller
 @RequestMapping("/scripts")
@@ -33,9 +39,13 @@ public class ScriptController {
     private final GitRepoService gitRepos;
     private final AdminHelper helper;
     private final K6Tool k6;
+    private final LoadService load;
+    private final RunService runs;
 
     public ScriptController(ScriptService service, GitRepoService gitRepos,
-                            AdminHelper helper, K6Tool k6) {
+                            AdminHelper helper, K6Tool k6, LoadService load, RunService runs) {
+        this.load = load;
+        this.runs = runs;
         this.service = service;
         this.gitRepos = gitRepos;
         this.helper = helper;
@@ -51,6 +61,8 @@ public class ScriptController {
         model.addAttribute("latest", all.stream().collect(java.util.stream.Collectors.toMap(Script::getId,
                 s -> service.latest(s.getId()).map(v -> (Object) v).orElse(""))));
         model.addAttribute("k6Version", k6.version().orElse(null));
+        model.addAttribute("loadDefined", all.stream().collect(java.util.stream.Collectors.toMap(Script::getId, x -> load.isDefined(x.getId()))));
+        model.addAttribute("runningIds", runningScriptIds());
         return "scripts/list";
     }
 
@@ -105,7 +117,29 @@ public class ScriptController {
         model.addAttribute("repos", gitRepos.list());
         model.addAttribute("gitRepo", s.getGitRepoId() == null ? null : gitRepos.get(s.getGitRepoId()));
         model.addAttribute("refs", s.getGitRepoId() == null ? List.of() : gitRepos.cachedRefs(s.getGitRepoId()));
+        List<LoadOperation> ops = load.operations(id);
+        model.addAttribute("ops", ops);
+        model.addAttribute("loadDefined", ops.stream().anyMatch(LoadOperation::isEnabled));
+        model.addAttribute("running", runningScriptIds().contains(id));
+        model.addAttribute("history", runs.search(id, null, 20));
+        model.addAttribute("fmt", new ru.k6lab.server.result.ReportFormat());
         return "scripts/detail";
+    }
+
+    /** Скрипты, у которых сейчас есть выполняющийся или ожидающий запуск. */
+    private Set<Long> runningScriptIds() {
+        Set<Long> ids = new HashSet<>();
+        for (Run r : runs.activeRuns()) {
+            if (r.getScriptId() != null) {
+                ids.add(r.getScriptId());
+            }
+        }
+        for (Run r : runs.search(null, ru.k6lab.core.runstate.RunStatus.QUEUED, 50)) {
+            if (r.getScriptId() != null) {
+                ids.add(r.getScriptId());
+            }
+        }
+        return ids;
     }
 
     @PostMapping("/{id}/versions")

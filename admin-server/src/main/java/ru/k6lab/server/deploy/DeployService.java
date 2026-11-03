@@ -21,7 +21,6 @@ import ru.k6lab.server.ssh.SshCredentialRepository;
 import ru.k6lab.server.ssh.SshExceptions.HostKeyUnconfirmed;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +40,8 @@ public class DeployService {
 
     private static final Logger log = LoggerFactory.getLogger(DeployService.class);
 
-    public record InstallRequest(String name, String host, int port, Long credentialId, Long poolId,
-                                 List<String> labels, Generator.InstallMode mode, String dir, String serverUrl,
+    public record InstallRequest(String name, String host, int port, Long credentialId,
+                                 Generator.InstallMode mode, String dir, String serverUrl,
                                  boolean tuneOs, int maxConcurrentRuns, Long agentArtifactId, Long k6ArtifactId) {
     }
 
@@ -132,8 +131,6 @@ public class DeployService {
         g.setHost(r.host());
         g.setSshPort(r.port());
         g.setSshCredentialId(r.credentialId());
-        g.setPoolId(r.poolId());
-        g.setLabels(r.labels() == null ? new ArrayList<>() : new ArrayList<>(r.labels()));
         g.setInstallMode(mode);
         g.setInstallDir(dir);
         g.setServerUrl(r.serverUrl());

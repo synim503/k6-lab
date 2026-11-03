@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Запустить скрипт</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-play-circle"></i></span>Запустить: <span th:text="${script.name}"></span></h3></div>
+
+    <div class="alert alert-danger" th:if="${blockReason != null}" th:text="${blockReason}"></div>
+    <div class="alert alert-danger" th:each="e : ${errors}">
+        <span th:text="${e}"></span>
+        <a class="alert-link ms-1" th:href="@{/scripts/{id}/load(id=${script.id})}">Открыть нагрузку</a></div>
+    <div class="alert alert-warning py-2" th:each="w : ${warnings}" th:text="${w}"></div>
+
+    <form class="card card-body mx-0 form-card" th:action="@{/scripts/{id}/run(id=${script.id})}" method="post">
+        <div class="text-muted" th:if="${generators.isEmpty()}">Серверов нет — <a th:href="@{/generators/add}">добавьте сервер</a>.</div>
+        <div th:unless="${generators.isEmpty()}">
+            <label class="form-label fw-semibold" for="gen-count">Количество генераторов</label>
+            <div class="d-flex align-items-center gap-3">
+                <input class="form-control" style="width:110px" type="number" min="1" th:max="${freeCount}" value="1" name="count" id="gen-count">
+                <span class="text-muted small">свободно: <span th:text="${freeCount}"></span> из <span th:text="${generators.size()}"></span>. Нагрузка делится между ними поровну.</span>
+            </div>
+            <details class="mt-3">
+                <summary class="text-muted">Выбрать конкретные серверы (необязательно)</summary>
+                <div class="mt-2">
+                    <div class="form-check" th:each="g : ${generators}">
+                        <input class="form-check-input host-pick" type="checkbox" name="generatorId" th:id="'g' + ${g.id}" th:value="${g.id}"
+                               th:disabled="${!g.availableForRuns}">
+                        <label class="form-check-label" th:for="'g' + ${g.id}">
+                            <span th:text="${g.name}"></span>
+                            <span class="badge ms-1" th:classappend="${g.availableForRuns} ? 'text-bg-success' : 'text-bg-secondary'"
+                                  th:text="${g.availableForRuns} ? 'свободен' : (${g.busy} ? 'занят' : ${g.status.title})"></span></label></div>
+                    <div class="form-text">Если отмечены серверы, количество берётся по ним, а поле выше не учитывается.</div>
+                </div>
+            </details>
+        </div>
+        <div class="mt-3"><button class="btn btn-success btn-lg" th:disabled="${generators.isEmpty() or !errors.isEmpty()}"><i class="bi bi-play-fill me-1"></i>Запустить</button>
+            <a class="btn btn-link" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a></div>
+        <div class="alert alert-danger mt-3 mb-0" th:if="${error}" th:text="${error}"></div>
+    </form>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script>
+        // отмеченные хосты задают количество: поле синхронизируется и блокируется
+        (function () {
+            var cnt = document.getElementById('gen-count');
+            var picks = document.querySelectorAll('.host-pick');
+            if (!cnt) { return; }
+            function sync() {
+                var n = 0; picks.forEach(function (p) { if (p.checked) { n++; } });
+                if (n > 0) { cnt.value = n; }
+                cnt.readOnly = n > 0;
+            }
+            picks.forEach(function (p) { p.addEventListener('change', sync); });
+        })();
+    </script>
+</th:block>
+</body>
+</html>

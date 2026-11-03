@@ -59,7 +59,6 @@ public class GeneratorController {
         List<GeneratorView> all = views.all();
         model.addAttribute("generators", all);
         model.addAttribute("outdated", all.stream().filter(GeneratorView::hasDrift).count());
-        model.addAttribute("pools", service.pools());
         return "generators/list";
     }
 
@@ -73,7 +72,6 @@ public class GeneratorController {
     @GetMapping("/{id}")
     public String detail(@PathVariable Long id, Model model) {
         model.addAttribute("v", views.one(id));
-        model.addAttribute("pools", service.pools());
         model.addAttribute("history", deployments.findTop50ByGeneratorIdOrderByStartedAtDesc(id));
         model.addAttribute("agents", distributions.findByKindOrderByCreatedAtDesc(DistributionArtifact.Kind.AGENT));
         model.addAttribute("k6s", k6Artifacts());
@@ -203,13 +201,9 @@ public class GeneratorController {
 
     @PostMapping("/{id}/settings")
     @PreAuthorize("hasRole('ADMIN')")
-    public String settings(@PathVariable Long id, @RequestParam(required = false) Long poolId,
-                           @RequestParam(defaultValue = "") String labels,
-                           @RequestParam(defaultValue = "1") int maxConcurrentRuns, RedirectAttributes ra) {
+    public String settings(@PathVariable Long id, @RequestParam(defaultValue = "1") int maxConcurrentRuns, RedirectAttributes ra) {
         try {
-            GeneratorForm f = new GeneratorForm();
-            f.setLabels(labels);
-            service.update(id, poolId, f.labelList(), maxConcurrentRuns);
+            service.update(id, maxConcurrentRuns);
             ra.addFlashAttribute("info", "Настройки сохранены");
         } catch (IllegalArgumentException e) {
             ra.addFlashAttribute("error", e.getMessage());
@@ -264,48 +258,6 @@ public class GeneratorController {
         return "redirect:/deployments";
     }
 
-    /** Массовое обновление агента/k6 по пулу: простаивающие обновляются, занятые пропускаются. */
-    @PostMapping("/pools/{poolId}/update")
-    @PreAuthorize("hasRole('ADMIN')")
-    public String updatePool(@PathVariable Long poolId, RedirectAttributes ra) {
-        int started = 0;
-        List<String> skipped = new ArrayList<>();
-        for (GeneratorView v : views.all()) {
-            if (!java.util.Objects.equals(v.g().getPoolId(), poolId)) {
-                continue;
-            }
-            try {
-                deploy.startUpdate(v.g().getId(), null, null);
-                started++;
-            } catch (IllegalStateException | IllegalArgumentException e) {
-                skipped.add(v.g().getName() + " (" + e.getMessage() + ")");
-            }
-        }
-        ra.addFlashAttribute("info", "Обновление запущено на " + started + " генераторах");
-        if (!skipped.isEmpty()) {
-            ra.addFlashAttribute("error", "Пропущены: " + String.join("; ", skipped));
-        }
-        return "redirect:/deployments";
-    }
-
-    @PostMapping("/pools")
-    @PreAuthorize("hasRole('ADMIN')")
-    public String createPool(@RequestParam String name, RedirectAttributes ra) {
-        try {
-            service.createPool(name);
-        } catch (IllegalArgumentException e) {
-            ra.addFlashAttribute("error", e.getMessage());
-        }
-        return "redirect:/generators";
-    }
-
-    @PostMapping("/pools/{id}/delete")
-    @PreAuthorize("hasRole('ADMIN')")
-    public String deletePool(@PathVariable Long id) {
-        service.deletePool(id);
-        return "redirect:/generators";
-    }
-
     /** Последние N строк журнала агента (htmx-фрагмент). */
     @GetMapping("/{id}/agent-log")
     @PreAuthorize("hasRole('ADMIN')")
@@ -330,7 +282,7 @@ public class GeneratorController {
     }
 
     private DeployService.InstallRequest installRequest(GeneratorForm f, String name, String host, int port) {
-        return new DeployService.InstallRequest(name, host, port, f.getCredentialId(), f.getPoolId(), f.labelList(),
+        return new DeployService.InstallRequest(name, host, port, f.getCredentialId(),
                 f.getMode(), f.getDir(), f.getServerUrl(), f.isTuneOs(), f.getMaxConcurrentRuns(),
                 f.getAgentArtifactId(), f.getK6ArtifactId());
     }
@@ -338,7 +290,6 @@ public class GeneratorController {
     private void fillFormModel(Model model, GeneratorForm form) {
         model.addAttribute("form", form);
         model.addAttribute("credentials", credentials.list());
-        model.addAttribute("pools", service.pools());
         model.addAttribute("agents", distributions.findByKindOrderByCreatedAtDesc(DistributionArtifact.Kind.AGENT));
         model.addAttribute("k6s", k6Artifacts());
     }

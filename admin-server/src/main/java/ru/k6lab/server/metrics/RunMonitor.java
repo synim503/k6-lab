@@ -11,7 +11,6 @@ import org.springframework.stereotype.Component;
 import ru.k6lab.core.analysis.StopCriteriaEvaluator;
 import ru.k6lab.core.prom.PromQueries;
 import ru.k6lab.core.runstate.RunStatus;
-import ru.k6lab.core.util.PromQlTemplate;
 import ru.k6lab.server.run.Run;
 import ru.k6lab.server.run.RunEventBroadcaster;
 import ru.k6lab.server.run.RunLogService;
@@ -19,7 +18,7 @@ import ru.k6lab.server.run.RunOrchestrator;
 import ru.k6lab.server.run.RunService;
 import ru.k6lab.server.run.RunSnapshot;
 import ru.k6lab.server.run.RunStep;
-import ru.k6lab.server.scenario.ScenarioCriteria;
+import ru.k6lab.server.load.LoadCriteria;
 import ru.k6lab.server.settings.SettingsService;
 
 import java.io.IOException;
@@ -116,7 +115,7 @@ public class RunMonitor {
 
         State st = states.computeIfAbsent(run.getId(), k -> new State());
         if (st.evaluator == null) {
-            st.evaluator = new StopCriteriaEvaluator(ScenarioCriteria.stop(snap.stopCriteria(), ru.k6lab.core.profile.ProfileType.valueOf(snap.profile().type())));
+            st.evaluator = new StopCriteriaEvaluator(LoadCriteria.stop(snap.stopCriteria()));
         }
         int stepNo = current == null ? 0 : current.getStepNo();
         if (stepNo != st.lastStep) {
@@ -146,24 +145,6 @@ public class RunMonitor {
             o.put("violation", r.violation());
             ArrayNode rs = o.putArray("reasons");
             r.reasons().forEach(rs::add);
-        }
-        // метрики SUT рядом с метриками k6
-        if (snap.sut() != null) {
-            ArrayNode sa = json.putArray("sut");
-            for (RunSnapshot.SutMetricInfo m : snap.sut().metrics()) {
-                ObjectNode o = sa.addObject();
-                o.put("name", m.name());
-                o.put("unit", m.unit() == null ? "" : m.unit());
-                try {
-                    Optional<Double> v = prom.single(p, PromQlTemplate.render(m.promql(), now.minusSeconds(60), now), now);
-                    v.ifPresent(x -> {
-                        o.put("value", x);
-                        o.put("warn", exceeds(m, x));
-                    });
-                } catch (IOException e) {
-                    o.put("error", e.getMessage());
-                }
-            }
         }
         broadcaster.publishMetrics(run.getId(), json.toString());
 
@@ -198,7 +179,7 @@ public class RunMonitor {
         PromQueries.Names n = names.names();
         boolean helper = snap.usesHelper();
         Map<Integer, Map<String, Double>> pct = new HashMap<>();
-        for (int q : snap.model().operations().stream().filter(RunSnapshot.OpInfo::enabled).map(RunSnapshot.OpInfo::slaPercentile).distinct().toList()) {
+        for (int q : snap.operations().stream().filter(RunSnapshot.OpInfo::enabled).map(RunSnapshot.OpInfo::slaPercentile).distinct().toList()) {
             pct.put(q, byScenario(prom.query(p, PromQueries.percentileMs(n, helper, q, runId, windowSec), at)));
         }
         Map<String, Double> rate = byScenario(prom.query(p, PromQueries.ratePerSec(n, runId, windowSec), at));
@@ -206,8 +187,8 @@ public class RunMonitor {
         Map<String, Double> errHelper = helper ? byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HELPER, runId, windowSec), at)) : Map.of();
         Map<String, Double> errHttp = Map.of();
         Map<String, Double> errChecks = Map.of();
-        boolean anyHttp = !helper && snap.model().operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("HTTP"));
-        boolean anyChecks = !helper && snap.model().operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("CHECKS"));
+        boolean anyHttp = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("HTTP"));
+        boolean anyChecks = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("CHECKS"));
         if (anyHttp) {
             errHttp = byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HTTP, runId, windowSec), at));
         }
@@ -216,11 +197,11 @@ public class RunMonitor {
         }
 
         List<LiveRow> rows = new ArrayList<>();
-        for (RunSnapshot.OpInfo o : snap.model().operations()) {
+        for (RunSnapshot.OpInfo o : snap.operations()) {
             if (!o.enabled()) {
                 continue;
             }
-            double level = o.fixedLevelPct() != null ? o.fixedLevelPct() : levelOrNull != null ? levelOrNull : step == null ? 0 : step.getLevelPct();
+            double level = levelOrNull != null ? levelOrNull : step == null ? 0 : step.getLevelPct();
             double target = o.ratePerSec() * level / 100.0;
             Double actual = rate.get(o.name());
             Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
@@ -260,12 +241,5 @@ public class RunMonitor {
         if (v != null && Double.isFinite(v)) {
             o.put(k, v);
         }
-    }
-
-    private static boolean exceeds(RunSnapshot.SutMetricInfo m, double v) {
-        if (m.warnThreshold() == null) {
-            return false;
-        }
-        return "BELOW".equals(m.warnDirection()) ? v < m.warnThreshold() : v > m.warnThreshold();
     }
 }

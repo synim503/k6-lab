@@ -13,7 +13,7 @@
                     <i class="bi bi-arrow-repeat me-1"></i>Обновить агент на всех
                     <span class="badge text-bg-warning ms-1" th:if="${outdated > 0}" th:text="${outdated}"></span></button></form>
             <div class="btn-group">
-            <a class="btn btn-primary" th:href="@{/quick/generator}"><i class="bi bi-plus-lg me-1"></i>Добавить сервер</a>
+            <a class="btn btn-primary" th:href="@{/generators/add}"><i class="bi bi-plus-lg me-1"></i>Добавить сервер</a>
             <a class="btn btn-outline-secondary" th:href="@{/generators/new}">Расширенно</a>
             <a class="btn btn-outline-primary" th:href="@{/generators/bulk}">Массовое добавление</a>
             </div>
@@ -24,15 +24,14 @@
         <div class="card"><div class="table-responsive">
             <table class="table table-sm table-hover mb-0">
                 <thead class="table-light"><tr>
-                    <th>Имя</th><th>Хост</th><th>Пул</th><th>Статус</th><th>CPU</th><th>RAM</th><th>Сеть (rx / tx, МБ/с)</th>
+                    <th>Имя</th><th>Хост</th><th>Статус</th><th>CPU</th><th>RAM</th><th>Сеть (rx / tx, МБ/с)</th>
                     <th>Load</th><th>Диск, ГБ</th><th>Сокеты</th><th>Часы</th><th>Версии агент / k6</th>
                 </tr></thead>
                 <tbody>
-                <tr th:if="${generators.isEmpty()}"><td colspan="12"><div class="empty-state"><i class="bi bi-inbox"></i>Генераторов пока нет</div></td></tr>
+                <tr th:if="${generators.isEmpty()}"><td colspan="11"><div class="empty-state"><i class="bi bi-inbox"></i>Генераторов пока нет</div></td></tr>
                 <tr th:each="v : ${generators}">
                     <td><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a></td>
                     <td th:text="${v.g().host}"></td>
-                    <td th:text="${v.poolName} ?: '—'"></td>
                     <td><span class="badge" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span></td>
                     <td th:classappend="${v.cpuHot} ? 'metric-hot'" th:text="${v.cpu != null} ? ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%' : '—'"></td>
                     <td th:text="${v.memPct != null} ? ${#numbers.formatDecimal(v.memPct, 1, 0)} + '%' : '—'"></td>
@@ -53,26 +52,6 @@
             </table>
         </div></div>
     </div>
-
-    <h5 class="mt-4">Пулы</h5>
-    <div class="card"><div class="card-body">
-        <div class="d-flex flex-wrap gap-2 mb-3">
-            <span th:each="p : ${pools}" class="d-flex align-items-center gap-1 border rounded px-2 py-1 bg-white">
-                <strong th:text="${p.name}"></strong>
-                <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/pools/{id}/update(id=${p.id})}" method="post"
-                      onsubmit="return confirm('Обновить агент и k6 на всех свободных генераторах пула?')">
-                    <button class="btn btn-sm btn-outline-secondary py-0">обновить пул</button></form>
-                <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/pools/{id}/delete(id=${p.id})}" method="post"
-                      onsubmit="return confirm('Удалить пул? Генераторы останутся.')">
-                    <button class="btn btn-sm btn-outline-danger py-0">×</button></form>
-            </span>
-            <span th:if="${pools.isEmpty()}" class="text-muted">Пулов нет</span>
-        </div>
-        <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/pools}" method="post" class="row g-2">
-            <div class="col-auto"><input class="form-control form-control-sm" name="name" placeholder="Новый пул" required></div>
-            <div class="col-auto"><button class="btn btn-sm btn-outline-primary">Создать пул</button></div>
-        </form>
-    </div></div>
 </th:block>
 </body>
 </html>

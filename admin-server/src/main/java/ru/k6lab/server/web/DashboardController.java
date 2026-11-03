@@ -10,13 +10,12 @@ import ru.k6lab.server.generator.GeneratorViewService;
 import ru.k6lab.server.run.Run;
 import ru.k6lab.server.run.RunService;
 import ru.k6lab.server.run.RunViewService;
-import ru.k6lab.server.scenario.ScenarioService;
 import ru.k6lab.server.script.ScriptService;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** Главная: запущенные тесты, генераторы, последние запуски и быстрые переходы по разделам. */
+/** Главная: запущенные скрипты, генераторы, последние запуски и быстрые переходы по разделам. */
 @Controller
 public class DashboardController {
 
@@ -24,16 +23,14 @@ public class DashboardController {
     private final DeploymentRepository deployments;
     private final RunService runs;
     private final RunViewService runViews;
-    private final ScenarioService scenarios;
     private final ScriptService scripts;
 
     public DashboardController(GeneratorViewService views, DeploymentRepository deployments, RunService runs,
-                               RunViewService runViews, ScenarioService scenarios, ScriptService scripts) {
+                               RunViewService runViews, ScriptService scripts) {
         this.views = views;
         this.deployments = deployments;
         this.runs = runs;
         this.runViews = runViews;
-        this.scenarios = scenarios;
         this.scripts = scripts;
     }
 
@@ -49,14 +46,14 @@ public class DashboardController {
         model.addAttribute("hot", all.stream().filter(GeneratorView::cpuHot).toList());
         model.addAttribute("drift", all.stream().filter(GeneratorView::hasDrift).toList());
         model.addAttribute("recent", deployments.findTop50ByOrderByStartedAtDesc().stream().limit(8).toList());
-        model.addAttribute("testsCount", scenarios.list().size());
+        model.addAttribute("runsCount", runs.count());
         model.addAttribute("scriptsCount", scripts.list().size());
         model.addAttribute("lastRuns", runs.search(null, null, 8));
         addRunning(model);
         return "dashboard";
     }
 
-    /** htmx-фрагмент «Запущенные тесты»: обновляется каждые 5 секунд. */
+    /** htmx-фрагмент «Запущенные скрипты»: обновляется каждые 5 секунд. */
     @GetMapping("/dashboard/running")
     public String running(Model model) {
         addRunning(model);

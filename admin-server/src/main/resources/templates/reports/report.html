@@ -2,7 +2,7 @@
 <html lang="ru" xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8"/>
-    <title th:text="'Отчёт: ' + ${run.scenarioName} + ' (run #' + ${run.id} + ')'">Отчёт</title>
+    <title th:text="'Отчёт: ' + ${run.scriptName} + ' (запуск #' + ${run.id} + ')'">Отчёт</title>
     <style>
         @page { size: A4 landscape; margin: 14mm; }
         body { font-family: 'DejaVu Sans', Arial, sans-serif; font-size: 10px; color: #212529; }
@@ -27,24 +27,17 @@
     </style>
 </head>
 <body>
-<h1 th:text="'Отчёт о нагрузочном тесте: ' + ${run.scenarioName}">Отчёт</h1>
+<h1 th:text="'Отчёт о нагрузочном тесте: ' + ${run.scriptName}">Отчёт</h1>
 <div class="muted">
-    Run #<span th:text="${run.id}"></span> · статус: <b th:text="${fmt.runStatus(run.status.name())}"></b>
+    Запуск #<span th:text="${run.id}"></span> · статус: <b th:text="${fmt.runStatus(run.status.name())}"></b>
     · начало <span th:text="${fmt.dt(run.startedAt)}"></span> · окончание <span th:text="${fmt.dt(run.finishedAt)}"></span>
     · отчёт сформирован <span th:text="${fmt.dt(generatedAt)}"></span>
-    <span th:if="${run.baseline}"> · <b>эталонный запуск</b></span>
 </div>
 
 <h2>Итог</h2>
 <div class="box" th:if="${run.conclusion != null or run.conclusionComment != null}">
     <div th:if="${run.conclusion != null}"><b>Вывод инженера:</b> <span th:text="${run.conclusion}"></span></div>
     <div th:if="${run.conclusionComment != null}" th:text="${run.conclusionComment}"></div>
-</div>
-<div class="box" th:if="${data.max != null}">
-    <b th:text="${fmt.maxKind(data.max.kind)}"></b> —
-    <span th:text="${data.max.note}"></span>
-    <span th:if="${data.max.candidateLevelPct != null}" th:text="'(уровень кандидата: ' + ${#numbers.formatDecimal(data.max.candidateLevelPct, 1, 1)} + '% от модели)'"></span>
-    <div class="muted">Кандидат максимума — последняя успешная ступень перед первой неуспешной; решение принимает инженер.</div>
 </div>
 <div class="box" th:if="${run.stopReason != null}">Тест остановлен: <span th:text="${run.stopReason}"></span></div>
 <div class="box" th:if="${run.degraded}">Во время теста терялись генераторы: ступени, на которые это повлияло, помечены как недостоверные.</div>
@@ -57,16 +50,13 @@
     <tr><th>Скрипт</th><td><span th:text="${snap.script.name} + ' v' + ${snap.script.versionNumber}"></span>
         <span th:if="${snap.script.commit != null}" th:text="'(commit ' + ${#strings.substring(snap.script.commit, 0, 8)} + ')'"></span>
         <span class="muted" th:text="'sha256 ' + ${#strings.substring(snap.script.sha256, 0, 12)}"></span></td></tr>
-    <tr><th>Модель нагрузки</th><td th:text="${snap.model.name}"></td></tr>
-    <tr><th>Профиль</th><td th:text="${snap.profile.name} + ' (' + ${snap.profile.type} + ')'"></td></tr>
     <tr><th>Генераторы</th><td><span th:each="g,st : ${snap.generators}" th:text="${g.name} + ' (вес ' + ${g.weight} + ')' + (${st.last} ? '' : ', ')"></span></td></tr>
-    <tr th:if="${snap.sut != null}"><th>Тестируемая система</th><td th:text="${snap.sut.name}"></td></tr>
     </tbody>
 </table>
 <table class="tbl">
-    <thead><tr><th>Операция</th><th>Режим</th><th>Интенсивность, оп/с</th><th>SLA</th><th>Допустимые ошибки</th></tr></thead>
-    <tbody><tr th:each="o : ${snap.model.operations}" th:if="${o.enabled}">
-        <td th:text="${o.name}"></td><td th:text="${o.mode}"></td><td class="num" th:text="${#numbers.formatDecimal(o.ratePerSec, 1, 3)}"></td>
+    <thead><tr><th>Операция</th><th>Функция</th><th>Интенсивность, оп/с</th><th>SLA</th><th>Допустимые ошибки</th></tr></thead>
+    <tbody><tr th:each="o : ${snap.operations}" th:if="${o.enabled}">
+        <td th:text="${o.name}"></td><td><code th:text="${o.execFn}"></code></td><td class="num" th:text="${#numbers.formatDecimal(o.ratePerSec, 1, 3)}"></td>
         <td th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaThresholdMs, 1, 0)} + ' мс'"></td>
         <td th:text="${#numbers.formatDecimal(o.maxErrorPct, 1, 2)} + '%'"></td></tr></tbody>
 </table>

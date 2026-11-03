@@ -9,33 +9,11 @@
             <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id})}" target="_blank">HTML-отчёт</a>
             <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id},download=true)}">Скачать HTML</a>
             <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.pdf(id=${run.id})}">PDF</a>
-            <form th:action="@{/runs/{id}/baseline(id=${run.id})}" method="post">
-                <input type="hidden" name="on" th:value="${!run.baseline}">
-                <button class="btn btn-sm btn-outline-warning" th:text="${run.baseline} ? 'Снять пометку эталона' : 'Пометить эталонным'"></button></form>
-            <form th:if="${data != null and data.max != null and data.max.candidateLevelPct != null}" th:action="@{/runs/{id}/confirm-max(id=${run.id})}" method="post">
-                <button class="btn btn-sm btn-success">Создать подтверждение максимума</button></form>
         </div>
 
         <div class="alert alert-warning" th:if="${data == null}">Итоги ещё не рассчитаны (метрики поступают в Prometheus с задержкой). Нажмите «Пересчитать итоги» через несколько секунд.</div>
         <div th:if="${data != null}">
             <div class="alert alert-danger" th:if="${!data.prometheusOk}" th:text="${data.error}"></div>
-
-            <div class="card mb-3" th:if="${data.max != null}">
-                <div class="card-body">
-                    <h5 class="card-title mb-1" th:text="${fmt.maxKind(data.max.kind)}"></h5>
-                    <div th:text="${data.max.note}"></div>
-                    <div class="small text-muted mt-1">Кандидат — последняя успешная ступень перед первой неуспешной. Итоговое решение за инженером.</div>
-                </div>
-            </div>
-
-            <div class="card mb-3" th:if="${baselineCompare != null}">
-                <div class="card-body">
-                    <h5 class="card-title">Сравнение с эталоном (run #<span th:text="${baselineCompare.a.id}"></span>)</h5>
-                    <span th:if="${baselineCompare.worseCount() == 0}" class="text-success">Ухудшений более 10% не найдено.</span>
-                    <span th:if="${baselineCompare.worseCount() > 0}" class="text-danger" th:text="'Показателей с ухудшением более 10%: ' + ${baselineCompare.worseCount()}"></span>
-                    <a class="ms-2" th:href="@{/runs/compare(a=${baselineCompare.a.id},b=${baselineCompare.b.id})}">подробно</a>
-                </div>
-            </div>
 
             <div class="card mb-3"><div class="card-body">
                 <h5 class="card-title">Вывод инженера</h5>

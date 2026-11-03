@@ -84,16 +84,6 @@
         }
         var ph = document.getElementById('metric-phase');
         if (ph) { ph.textContent = 'ступень ' + m.step + (m.phase ? ', ' + (m.phase === 'hold' ? 'удержание' : 'разгон') : '') + ', окно ' + m.windowSec + ' с'; }
-
-        // метрики SUT
-        var st = document.getElementById('sut-table');
-        if (st && m.sut) {
-            var h = '';
-            m.sut.forEach(function (s) {
-                h += '<tr class="' + (s.warn ? 'table-warning' : '') + '"><td>' + s.name + '</td><td>' + (s.value !== undefined ? fmt(s.value, 2) + ' ' + s.unit : (s.error || '—')) + '</td></tr>';
-            });
-            st.innerHTML = h;
-        }
     }
 
     var es = new EventSource(root.dataset.metricsStream);

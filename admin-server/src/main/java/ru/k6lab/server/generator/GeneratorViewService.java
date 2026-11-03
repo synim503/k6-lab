@@ -10,9 +10,7 @@ import ru.k6lab.server.distribution.DistributionArtifact.Kind;
 import ru.k6lab.server.distribution.DistributionService;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 @Service
 public class GeneratorViewService {
@@ -21,16 +19,13 @@ public class GeneratorViewService {
     public static final double CPU_HOT_PCT = 80.0;
 
     private final GeneratorRepository generators;
-    private final GeneratorPoolRepository pools;
     private final GeneratorMetricsService metrics;
     private final AgentSessionRegistry registry;
     private final DistributionService distributions;
 
-    public GeneratorViewService(GeneratorRepository generators, GeneratorPoolRepository pools,
-                                GeneratorMetricsService metrics, AgentSessionRegistry registry,
+    public GeneratorViewService(GeneratorRepository generators, GeneratorMetricsService metrics, AgentSessionRegistry registry,
                                 DistributionService distributions) {
         this.generators = generators;
-        this.pools = pools;
         this.metrics = metrics;
         this.registry = registry;
         this.distributions = distributions;
@@ -38,20 +33,16 @@ public class GeneratorViewService {
 
     @Transactional(readOnly = true)
     public List<GeneratorView> all() {
-        Map<Long, String> poolNames = pools.findAll().stream()
-                .collect(Collectors.toMap(GeneratorPool::getId, GeneratorPool::getName));
-        return generators.findAllByOrderByNameAsc().stream().map(g -> view(g, poolNames)).toList();
+        return generators.findAllByOrderByNameAsc().stream().map(this::view).toList();
     }
 
     @Transactional(readOnly = true)
     public GeneratorView one(Long id) {
         Generator g = generators.findById(id).orElseThrow(() -> new IllegalArgumentException("Генератор не найден"));
-        Map<Long, String> poolNames = pools.findAll().stream()
-                .collect(Collectors.toMap(GeneratorPool::getId, GeneratorPool::getName));
-        return view(g, poolNames);
+        return view(g);
     }
 
-    private GeneratorView view(Generator g, Map<Long, String> poolNames) {
+    private GeneratorView view(Generator g) {
         String label;
         String badge;
         if (g.isMaintenance()) {
@@ -85,7 +76,7 @@ public class GeneratorViewService {
                 && !norm(defAgent.get().getVersion()).equals(norm(g.getAgentVersion()));
         boolean k6Drift = defK6.isPresent() && g.getK6Version() != null
                 && !norm(defK6.get().getVersion()).equals(norm(g.getK6Version()));
-        return new GeneratorView(g, g.getPoolId() == null ? null : poolNames.get(g.getPoolId()), label, badge, connected,
+        return new GeneratorView(g, label, badge, connected,
                 hb == null ? null : hb.cpuPct(), memPct, hb == null ? null : hb.netRxBytesPerSec(),
                 hb == null ? null : hb.netTxBytesPerSec(), hb == null ? null : hb.load1(),
                 hb == null ? null : hb.diskFreeBytes() / (1024 * 1024 * 1024), hb == null ? null : hb.openSockets(),

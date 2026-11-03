@@ -9,30 +9,24 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
-import ru.k6lab.core.model.RateUnit;
-import ru.k6lab.core.profile.ProfileType;
 import ru.k6lab.core.runstate.RunStatus;
 import ru.k6lab.core.util.ZipUtil;
 import ru.k6lab.server.agent.AgentSessionRegistry;
 import ru.k6lab.server.agent.TokenService;
 import ru.k6lab.server.generator.Generator;
 import ru.k6lab.server.generator.GeneratorRepository;
-import ru.k6lab.server.loadmodel.LoadModel;
-import ru.k6lab.server.loadmodel.LoadModelService;
-import ru.k6lab.server.loadmodel.ModelForm;
-import ru.k6lab.server.profile.ProfileService;
+import ru.k6lab.server.load.LoadForm;
+import ru.k6lab.server.load.LoadService;
 import ru.k6lab.server.run.Run;
 import ru.k6lab.server.run.RunGenerator;
 import ru.k6lab.server.run.RunGeneratorRepository;
 import ru.k6lab.server.run.RunOrchestrator;
 import ru.k6lab.server.run.RunService;
 import ru.k6lab.server.run.RunStep;
-import ru.k6lab.server.scenario.Scenario;
-import ru.k6lab.server.scenario.ScenarioForm;
-import ru.k6lab.server.scenario.ScenarioService;
+import ru.k6lab.server.script.Script;
 import ru.k6lab.server.script.ScriptService;
+import ru.k6lab.server.testdata.ScriptDataFile;
 import ru.k6lab.server.script.ScriptVersion;
-import ru.k6lab.server.testdata.ScenarioDataFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -73,11 +67,7 @@ class RunE2EIT extends AbstractIT {
     @Autowired
     ScriptService scripts;
     @Autowired
-    LoadModelService models;
-    @Autowired
-    ProfileService profiles;
-    @Autowired
-    ScenarioService scenarios;
+    LoadService load;
     @Autowired
     RunService runService;
     @Autowired
@@ -199,44 +189,37 @@ class RunE2EIT extends AbstractIT {
         return scripts.createFromUpload(name, "", "bundle.zip", new ByteArrayInputStream(ZipUtil.write(files)), "main.js", null);
     }
 
-    /** Сценарий: одна операция work, 10 оп/с, подтверждение на 100% длительностью holdSec. */
-    private Scenario scenario(String name, int holdSec, boolean split, String execFn) throws Exception {
+    /** Скрипт с описанной нагрузкой: одна операция work, 10 оп/с на 100% длительностью holdSec. */
+    private Script scriptWithLoad(String name, int holdSec, boolean split, String execFn) throws Exception {
         ScriptVersion v = script("scr-" + name);
-        ModelForm mf = new ModelForm();
-        mf.setName("m-" + name);
-        mf.setScriptId(v.getScriptId());
-        ModelForm.OpForm o = new ModelForm.OpForm();
-        o.setName("work");
-        o.setExecFn(execFn);
-        o.setIntensityValue(10.0);
-        o.setIntensityUnit(RateUnit.PER_SEC);
-        o.setExpectedDurationSec(0.1);
-        o.setSlaThresholdMs(500.0);
-        mf.getOps().add(o);
         if (!execFn.equals("work")) {
             scripts.addOperation(v.getScriptId(), v.getId(), execFn);
         }
-        LoadModel m = models.save(mf);
-        var p = profiles.save(new ProfileService.ProfileForm(null, "p-" + name, ProfileType.CONFIRMATION, null,
-                Map.of("levelPct", "100", "rampSec", "0", "holdSec", String.valueOf(holdSec)), 5, 5, false));
-        ScenarioForm sf = new ScenarioForm();
-        sf.setName("sc-" + name);
-        sf.setScriptId(v.getScriptId());
-        sf.setModelId(m.getId());
-        sf.setProfileId(p.getId());
-        sf.setEnvText("BASE=http://localhost");
+        LoadForm f = new LoadForm();
+        LoadForm.OpForm o = new LoadForm.OpForm();
+        o.setName("work");
+        o.setExecFn(execFn);
+        o.setRatePerSec(10.0);
+        o.setExpectedDurationSec(0.1);
+        o.setSlaThresholdMs(500.0);
+        f.getOps().add(o);
+        f.setLevelPct(100);
+        f.setRampSec(0);
+        f.setHoldMinutes(holdSec / 60.0);
+        f.setEnvText("BASE=http://localhost");
         if (split) {
-            ScenarioForm.DataForm d = new ScenarioForm.DataForm();
+            LoadForm.DataForm d = new LoadForm.DataForm();
             d.setPath("data/users.csv");
-            d.setMode(ScenarioDataFile.Mode.SPLIT);
+            d.setMode(ScriptDataFile.Mode.SPLIT);
             d.setHasHeader(true);
-            sf.getDataFiles().add(d);
+            f.getDataFiles().add(d);
         }
-        return scenarios.save(sf);
+        load.save(v.getScriptId(), f);
+        return scripts.get(v.getScriptId());
     }
 
-    private Run startRun(Scenario s, Run.FailurePolicy policy, RunService.GeneratorSel... gens) throws Exception {
-        return runService.create(new RunService.CreateRequest(s.getId(), List.of(gens), null, null, policy, 90));
+    private Run startRun(Script s, Run.FailurePolicy policy, RunService.GeneratorSel... gens) throws Exception {
+        return runService.create(new RunService.CreateRequest(s.getId(), List.of(gens), policy, 90));
     }
 
     private Run awaitStatus(long runId, Duration timeout, RunStatus... statuses) {
@@ -278,7 +261,7 @@ class RunE2EIT extends AbstractIT {
     @Order(1)
     void singleGeneratorRunGoesThroughAllStatesAndProducesResults() throws Exception {
         Agent a = startAgent("e2e1", 1);
-        Scenario s = scenario("single", 12, false, "work");
+        Script s = scriptWithLoad("single", 12, false, "work");
         Run run = startRun(s, Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1));
         assertThat(run.getStatus()).isEqualTo(RunStatus.QUEUED);
         long id = run.getId();
@@ -314,7 +297,7 @@ class RunE2EIT extends AbstractIT {
 
         // snapshot сохранён целиком, конфиг тоже
         var snap = runService.snapshot(finished);
-        assertThat(snap.model().operations()).extracting(o -> o.name()).containsExactly("work");
+        assertThat(snap.operations()).extracting(o -> o.name()).containsExactly("work");
         assertThat(snap.steps()).hasSize(1);
         assertThat(snap.generators()).hasSize(1);
         assertThat(snap.segmentSequence()).isEqualTo("0,1");
@@ -332,7 +315,7 @@ class RunE2EIT extends AbstractIT {
     void twoGeneratorsShareLoadByWeightsAndSplitData() throws Exception {
         Agent a = startAgent("e2e2a", 1);
         Agent b = startAgent("e2e2b", 1);
-        Scenario s = scenario("two", 14, true, "work");
+        Script s = scriptWithLoad("two", 14, true, "work");
         Run run = startRun(s, Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1), new RunService.GeneratorSel(b.id(), 3));
         long id = run.getId();
         Run finished = awaitStatus(id, Duration.ofSeconds(120), RunStatus.FINISHED, RunStatus.FAILED);
@@ -364,7 +347,7 @@ class RunE2EIT extends AbstractIT {
     @Order(3)
     void stopIsGracefulAbortIsForcedAndBothReleaseGenerators() throws Exception {
         Agent a = startAgent("e2e3", 1);
-        Scenario s = scenario("stop", 300, false, "work");
+        Script s = scriptWithLoad("stop", 300, false, "work");
         var sel = new RunService.GeneratorSel(a.id(), 1);
 
         Run r1 = startRun(s, Run.FailurePolicy.CONTINUE, sel);
@@ -391,7 +374,7 @@ class RunE2EIT extends AbstractIT {
     @Order(4)
     void runWaitsInQueueUntilGeneratorIsFree() throws Exception {
         Agent a = startAgent("e2e4", 1);
-        Scenario s = scenario("queue", 300, false, "work");
+        Script s = scriptWithLoad("queue", 300, false, "work");
         var sel = new RunService.GeneratorSel(a.id(), 1);
         Run first = startRun(s, Run.FailurePolicy.CONTINUE, sel);
         awaitStatus(first.getId(), Duration.ofSeconds(60), RunStatus.RUNNING);
@@ -424,7 +407,7 @@ class RunE2EIT extends AbstractIT {
     void lostGeneratorMakesRunDegradedAndPolicyIsApplied() throws Exception {
         Agent a = startAgent("e2e5a", 1);
         Agent b = startAgent("e2e5b", 1);
-        Scenario s = scenario("degraded", 25, false, "work");
+        Script s = scriptWithLoad("degraded", 25, false, "work");
 
         // политика CONTINUE: отвал одного генератора -> DEGRADED, тест продолжается на оставшемся
         Run run = startRun(s, Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1), new RunService.GeneratorSel(b.id(), 1));
@@ -446,7 +429,7 @@ class RunE2EIT extends AbstractIT {
         // политика STOP_ALL: тот же отвал останавливает всех
         Agent c = startAgent("e2e5c", 1);
         Agent d = startAgent("e2e5d", 1);
-        Scenario long1 = scenario("degraded2", 300, false, "work");
+        Script long1 = scriptWithLoad("degraded2", 300, false, "work");
         Run r2 = startRun(long1, Run.FailurePolicy.STOP_ALL, new RunService.GeneratorSel(c.id(), 1), new RunService.GeneratorSel(d.id(), 1));
         awaitStatus(r2.getId(), Duration.ofSeconds(60), RunStatus.RUNNING);
         await().atMost(Duration.ofSeconds(20)).until(() -> runService.generatorsOf(r2.getId()).stream().allMatch(x -> x.getStatus() == RunGenerator.Status.RUNNING));
@@ -463,7 +446,7 @@ class RunE2EIT extends AbstractIT {
     void k6CrashMakesRunFailedAndUnknownFunctionIsReported() throws Exception {
         Agent a = startAgent("e2e6", 1);
         // exec-функция есть в модели (добавлена вручную), но в скрипте её нет: k6 завершится с ошибкой
-        Scenario s = scenario("crash", 10, false, "noSuchFunction");
+        Script s = scriptWithLoad("crash", 10, false, "noSuchFunction");
         Run run = startRun(s, Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1));
         Run done = awaitStatus(run.getId(), Duration.ofSeconds(90), RunStatus.FINISHED, RunStatus.FAILED);
         assertThat(done.getStatus()).as(dump(run.getId())).isEqualTo(RunStatus.FAILED);
@@ -475,18 +458,18 @@ class RunE2EIT extends AbstractIT {
     @Test
     @Order(7)
     void sendingStartWithoutGeneratorsOrWithBadSelectionIsRejected() throws Exception {
-        Scenario s = scenario("reject", 5, false, "work");
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> runService.create(new RunService.CreateRequest(s.getId(), List.of(), null, null, null, null)))
+        Script s = scriptWithLoad("reject", 5, false, "work");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> runService.create(new RunService.CreateRequest(s.getId(), List.of(), null, null)))
                 .hasMessageContaining("генераторы");
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> runService.create(new RunService.CreateRequest(s.getId(),
-                        List.of(new RunService.GeneratorSel(999999L, 1)), null, null, null, null)))
+                        List.of(new RunService.GeneratorSel(999999L, 1)), null, null)))
                 .hasMessageContaining("не найден");
         Agent a = startAgent("e2e7", 1);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> runService.create(new RunService.CreateRequest(s.getId(),
-                        List.of(new RunService.GeneratorSel(a.id(), 1), new RunService.GeneratorSel(a.id(), 1)), null, null, null, null)))
+                        List.of(new RunService.GeneratorSel(a.id(), 1), new RunService.GeneratorSel(a.id(), 1)), null, null)))
                 .hasMessageContaining("дважды");
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> runService.create(new RunService.CreateRequest(s.getId(),
-                        List.of(new RunService.GeneratorSel(a.id(), 0)), null, null, null, null)))
+                        List.of(new RunService.GeneratorSel(a.id(), 0)), null, null)))
                 .hasMessageContaining("Вес");
     }
 

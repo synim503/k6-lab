@@ -12,8 +12,6 @@ public interface GeneratorRepository extends JpaRepository<Generator, Long> {
 
     List<Generator> findAllByOrderByNameAsc();
 
-    List<Generator> findByPoolIdOrderByNameAsc(Long poolId);
-
     Optional<Generator> findByName(String name);
 
     boolean existsByNameIgnoreCase(String name);
@@ -32,10 +30,6 @@ public interface GeneratorRepository extends JpaRepository<Generator, Long> {
     @Query(value = "select * from generator where id in (:ids) and status = 'ONLINE' and maintenance = false "
             + "and active_runs < max_concurrent_runs for update skip locked", nativeQuery = true)
     List<Generator> lockAvailable(java.util.Collection<Long> ids);
-
-    @Query(value = "select * from generator where pool_id = :poolId and status = 'ONLINE' and maintenance = false "
-            + "and active_runs < max_concurrent_runs order by active_runs, name limit :n for update skip locked", nativeQuery = true)
-    List<Generator> lockFromPool(Long poolId, int n);
 
     /** Точечные обновления из потока heartbeat без загрузки сущности и без конфликтов версий. */
     @Modifying

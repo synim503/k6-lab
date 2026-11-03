@@ -1,9 +1,0 @@
-<!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
-<body>
-<th:block th:fragment="cell(d)">
-    <td th:text="${fmt.n(d.a, 1)}"></td><td th:text="${fmt.n(d.b, 1)}"></td>
-    <td th:class="${d.worse} ? 'table-danger fw-bold' : ''" th:text="${d.deltaPct != null} ? ${(d.deltaPct > 0 ? '+' : '') + fmt.n(d.deltaPct, 1)} : '—'"></td>
-</th:block>
-</body>
-</html>

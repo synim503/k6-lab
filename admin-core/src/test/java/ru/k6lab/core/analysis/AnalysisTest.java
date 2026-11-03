@@ -1,7 +1,6 @@
 package ru.k6lab.core.analysis;
 
 import org.junit.jupiter.api.Test;
-import ru.k6lab.core.analysis.MaxFinder.Kind;
 import ru.k6lab.core.analysis.StepAnalysis.OpMetrics;
 import ru.k6lab.core.analysis.StepAnalysis.OpSla;
 import ru.k6lab.core.analysis.StepAnalysis.Status;
@@ -86,41 +85,6 @@ class AnalysisTest {
 
     private static StepVerdict v(int no, Status s) {
         return new StepVerdict(no, s, List.of(), List.of());
-    }
-
-    @Test
-    void maxIsLastSuccessBeforeFirstFailureNotLastSuccessOverall() {
-        // успех, успех, провал, успех (шум), успех -> кандидат шаг 2, а не 5
-        var r = MaxFinder.find(List.of(v(1, Status.SUCCESS), v(2, Status.SUCCESS), v(3, Status.FAILED),
-                v(4, Status.SUCCESS), v(5, Status.SUCCESS)));
-        assertThat(r.kind()).isEqualTo(Kind.FOUND);
-        assertThat(r.candidateStep()).isEqualTo(2);
-        assertThat(r.firstProblemStep()).isEqualTo(3);
-    }
-
-    @Test
-    void allSuccessMeansNotReachedAndFirstFailureMeansNone() {
-        var all = MaxFinder.find(List.of(v(1, Status.SUCCESS), v(2, Status.SUCCESS)));
-        assertThat(all.kind()).isEqualTo(Kind.NOT_REACHED);
-        assertThat(all.candidateStep()).isEqualTo(2);
-        var none = MaxFinder.find(List.of(v(1, Status.FAILED), v(2, Status.SUCCESS)));
-        assertThat(none.kind()).isEqualTo(Kind.NONE);
-        assertThat(none.candidateStep()).isNull();
-        assertThat(MaxFinder.find(List.of()).kind()).isEqualTo(Kind.NONE);
-    }
-
-    @Test
-    void unreliableStepStopsTheSearch() {
-        var r = MaxFinder.find(List.of(v(1, Status.SUCCESS), v(2, Status.UNRELIABLE), v(3, Status.FAILED)));
-        assertThat(r.kind()).isEqualTo(Kind.INDETERMINATE);
-        assertThat(r.candidateStep()).isEqualTo(1);
-        assertThat(r.firstProblemStep()).isEqualTo(2);
-    }
-
-    @Test
-    void verdictsAreSortedByStepNumber() {
-        var r = MaxFinder.find(List.of(v(3, Status.FAILED), v(1, Status.SUCCESS), v(2, Status.SUCCESS)));
-        assertThat(r.candidateStep()).isEqualTo(2);
     }
 
     // ---------------------------------------------------------------- критерии остановки

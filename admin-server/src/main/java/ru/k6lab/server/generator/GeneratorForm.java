@@ -8,8 +8,6 @@ import jakarta.validation.constraints.Pattern;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.util.Arrays;
-import java.util.List;
 
 /** Форма добавления генератора (одиночного и массового). */
 @Getter
@@ -27,11 +25,6 @@ public class GeneratorForm {
 
     @NotNull(message = "Выберите SSH-учётку")
     private Long credentialId;
-
-    private Long poolId;
-
-    /** Метки через запятую. */
-    private String labels;
 
     @NotNull
     private Generator.InstallMode mode = Generator.InstallMode.SYSTEM;
@@ -52,11 +45,4 @@ public class GeneratorForm {
 
     /** Только для массового добавления: по хосту в строке, «host[:port] [имя]». */
     private String hosts;
-
-    public List<String> labelList() {
-        if (labels == null || labels.isBlank()) {
-            return List.of();
-        }
-        return Arrays.stream(labels.split(",")).map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
-    }
 }

@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import ru.k6lab.core.model.OperationSpec;
 import ru.k6lab.core.model.OperationSpec.FailureSource;
 import ru.k6lab.core.model.OperationSpec.Mode;
-import ru.k6lab.core.model.RateUnit;
 import ru.k6lab.core.profile.StepPlan;
 
 import java.util.List;
@@ -17,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class K6ConfigGeneratorTest {
 
     private static OperationSpec open(String name, double perHour, double durSec) {
-        return new OperationSpec(name, name, Mode.OPEN, RateUnit.PER_HOUR.toPerSec(perHour), durSec, null, null, null, null,
+        return new OperationSpec(name, name, Mode.OPEN, perHour / 3600.0, durSec, null, null, null, null,
                 95, 800, 1.0, FailureSource.HTTP, Map.of(), Map.of(), true, null);
     }
 
@@ -264,12 +263,5 @@ class K6ConfigGeneratorTest {
         assertThat(row.rampStartSec()).isEqualTo(150);
         assertThat(row.holdStartSec()).isEqualTo(180);
         assertThat(out.totalPeakRatePerSec()).isEqualTo(30.0);
-    }
-
-    @Test
-    void rateUnitConversion() {
-        assertThat(RateUnit.PER_HOUR.toPerSec(3600)).isEqualTo(1.0);
-        assertThat(RateUnit.PER_MIN.toPerSec(120)).isEqualTo(2.0);
-        assertThat(RateUnit.PER_HOUR.fromPerSec(1)).isEqualTo(3600.0);
     }
 }

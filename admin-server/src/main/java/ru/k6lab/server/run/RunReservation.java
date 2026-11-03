@@ -48,25 +48,16 @@ public class RunReservation {
         Map<String, Object> req = run.getRequest();
         List<Generator> picked = new ArrayList<>();
         List<Integer> weights = new ArrayList<>();
-        if (req.containsKey("poolId")) {
-            int n = ((Number) req.get("poolCount")).intValue();
-            picked.addAll(generators.lockFromPool(((Number) req.get("poolId")).longValue(), n));
-            if (picked.size() < n) {
-                return Optional.empty();
-            }
-            picked.forEach(g -> weights.add(1));
-        } else {
-            List<Map<String, Object>> sel = (List<Map<String, Object>>) req.get("generators");
-            List<Long> ids = sel.stream().map(m -> ((Number) m.get("id")).longValue()).toList();
-            Map<Long, Generator> locked = new HashMap<>();
-            generators.lockAvailable(ids).forEach(g -> locked.put(g.getId(), g));
-            if (locked.size() < ids.size()) {
-                return Optional.empty();
-            }
-            for (Map<String, Object> m : sel) {
-                picked.add(locked.get(((Number) m.get("id")).longValue()));
-                weights.add(((Number) m.get("weight")).intValue());
-            }
+        List<Map<String, Object>> sel = (List<Map<String, Object>>) req.get("generators");
+        List<Long> ids = sel.stream().map(m -> ((Number) m.get("id")).longValue()).toList();
+        Map<Long, Generator> locked = new HashMap<>();
+        generators.lockAvailable(ids).forEach(g -> locked.put(g.getId(), g));
+        if (locked.size() < ids.size()) {
+            return Optional.empty();
+        }
+        for (Map<String, Object> m : sel) {
+            picked.add(locked.get(((Number) m.get("id")).longValue()));
+            weights.add(((Number) m.get("weight")).intValue());
         }
         // генератор числится ONLINE в БД, но связи может не быть (агент как раз отваливается) - не берём
         for (Generator g : picked) {

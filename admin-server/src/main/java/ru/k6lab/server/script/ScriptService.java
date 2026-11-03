@@ -17,7 +17,6 @@ import ru.k6lab.server.git.GitClient;
 import ru.k6lab.server.git.GitRepo;
 import ru.k6lab.server.git.GitRepoService;
 import ru.k6lab.server.script.ScriptVersion.FileEntry;
-import ru.k6lab.server.script.ScriptVersion.InspectStatus;
 import ru.k6lab.server.script.ScriptVersion.OpEntry;
 import ru.k6lab.server.script.ScriptVersion.Source;
 
@@ -57,12 +56,11 @@ public class ScriptService {
     private final AuditService audit;
     private final GitClient git;
     private final GitRepoService gitRepos;
-    private final List<ScriptUsage> usages;
     private final org.springframework.transaction.support.TransactionTemplate tx;
 
     public ScriptService(ScriptRepository scripts, ScriptVersionRepository versions, StorageService storage, K6Tool k6,
                          AdminHelper helper, AuditService audit, GitClient git, GitRepoService gitRepos,
-                         List<ScriptUsage> usages, org.springframework.transaction.PlatformTransactionManager txm) {
+                         org.springframework.transaction.PlatformTransactionManager txm) {
         this.scripts = scripts;
         this.versions = versions;
         this.storage = storage;
@@ -71,13 +69,7 @@ public class ScriptService {
         this.audit = audit;
         this.git = git;
         this.gitRepos = gitRepos;
-        this.usages = usages;
         this.tx = new org.springframework.transaction.support.TransactionTemplate(txm);
-    }
-
-    /** Кто использует скрипт (сценарии) - чтобы не удалять используемые. */
-    public interface ScriptUsage {
-        boolean isUsed(Long scriptId);
     }
 
     // ------------------------------------------------------------------ запросы
@@ -270,9 +262,6 @@ public class ScriptService {
     }
 
     public void delete(Long scriptId) {
-        if (usages.stream().anyMatch(u -> u.isUsed(scriptId))) {
-            throw new IllegalStateException("Скрипт используется моделями или сценариями");
-        }
         List<ScriptVersion> vs = versions.findByScriptIdOrderByNumberDesc(scriptId);
         tx.executeWithoutResult(st -> scripts.deleteById(scriptId));
         for (ScriptVersion v : vs) {

@@ -10,13 +10,9 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 import ru.k6lab.server.common.Auditable;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 
 @Getter
 @Setter
@@ -58,13 +54,6 @@ public class Generator extends Auditable {
 
     @Column(name = "ssh_credential_id")
     private Long sshCredentialId;
-
-    @Column(name = "pool_id")
-    private Long poolId;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(nullable = false)
-    private List<String> labels = new ArrayList<>();
 
     @Enumerated(EnumType.STRING)
     @Column(name = "install_mode", nullable = false)

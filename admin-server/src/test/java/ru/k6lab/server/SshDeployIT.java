@@ -183,8 +183,8 @@ class SshDeployIT extends AbstractIT {
     @Test
     @Order(3)
     void systemInstallEndToEnd() throws Exception {
-        var req = new DeployService.InstallRequest("it-system", "localhost", gen.getMappedPort(22), systemCred, null,
-                List.of("it"), Generator.InstallMode.SYSTEM, null, serverUrl(), true, 1, null, null);
+        var req = new DeployService.InstallRequest("it-system", "localhost", gen.getMappedPort(22), systemCred,
+                Generator.InstallMode.SYSTEM, null, serverUrl(), true, 1, null, null);
         Deployment d = awaitSucceeded(deploy.startInstall(req).getId());
         systemGen = d.getGeneratorId();
 
@@ -248,8 +248,8 @@ class SshDeployIT extends AbstractIT {
     @Order(6)
     void userModeInstallFallsBackToCronWithoutLinger() throws Exception {
         // host key уже подтверждён (тот же хост и порт)
-        var req = new DeployService.InstallRequest("it-user", "localhost", gen.getMappedPort(22), userCred, null,
-                List.of(), Generator.InstallMode.USER, null, serverUrl(), false, 1, null, null);
+        var req = new DeployService.InstallRequest("it-user", "localhost", gen.getMappedPort(22), userCred,
+                Generator.InstallMode.USER, null, serverUrl(), false, 1, null, null);
         Deployment d = awaitSucceeded(deploy.startInstall(req).getId());
         Generator g = generators.findById(d.getGeneratorId()).orElseThrow();
         assertThat(g.getSupervisor()).isEqualTo(Generator.Supervisor.CRON);
@@ -288,8 +288,8 @@ class SshDeployIT extends AbstractIT {
     @Order(8)
     void preflightFailureLeavesHostUntouched() throws Exception {
         // сервер недоступен с генератора: pre-flight падает на проверке порта, ничего не устанавливается
-        var bad = new DeployService.InstallRequest("it-bad", "localhost", gen.getMappedPort(22), systemCred, null,
-                List.of(), Generator.InstallMode.SYSTEM, "/opt/k6-bad", "ws://127.0.0.1:9/agent/ws", false, 1, null, null);
+        var bad = new DeployService.InstallRequest("it-bad", "localhost", gen.getMappedPort(22), systemCred,
+                Generator.InstallMode.SYSTEM, "/opt/k6-bad", "ws://127.0.0.1:9/agent/ws", false, 1, null, null);
         Deployment d = awaitSettled(deploy.startInstall(bad).getId(), Duration.ofMinutes(3));
         assertThat(d.getStatus()).isEqualTo(Deployment.Status.FAILED);
         assertThat(d.getError()).contains("Pre-flight не пройден").contains("недоступен");
@@ -301,8 +301,8 @@ class SshDeployIT extends AbstractIT {
     @Order(9)
     void installIsRolledBackWhenAgentCannotRegister() throws Exception {
         // порт доступен, но путь неверный: сервис стартует, регистрации нет -> таймаут -> откат (unit удалён)
-        var req = new DeployService.InstallRequest("it-noreg", "localhost", gen.getMappedPort(22), systemCred, null,
-                List.of(), Generator.InstallMode.SYSTEM, "/opt/k6-noreg", "ws://" + CONTAINER_HOST + ":" + AGENT_PORT + "/agent/nope",
+        var req = new DeployService.InstallRequest("it-noreg", "localhost", gen.getMappedPort(22), systemCred,
+                Generator.InstallMode.SYSTEM, "/opt/k6-noreg", "ws://" + CONTAINER_HOST + ":" + AGENT_PORT + "/agent/nope",
                 false, 1, null, null);
         Deployment d = awaitSettled(deploy.startInstall(req).getId(), Duration.ofMinutes(4));
         assertThat(d.getStatus()).as(d.getLog()).isEqualTo(Deployment.Status.ROLLED_BACK);

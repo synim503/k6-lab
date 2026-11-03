@@ -50,16 +50,6 @@ public class ReportFormat {
         };
     }
 
-    public String maxKind(String k) {
-        return switch (k == null ? "" : k) {
-            case "FOUND" -> "Кандидат максимума найден";
-            case "NOT_REACHED" -> "Максимум не достигнут";
-            case "NONE" -> "Уже первая ступень неуспешна";
-            case "INDETERMINATE" -> "Определить максимум нельзя";
-            default -> k;
-        };
-    }
-
     public String runStatus(String s) {
         return switch (s == null ? "" : s) {
             case "FINISHED" -> "Завершён";
@@ -67,6 +57,8 @@ public class ReportFormat {
             case "ABORTED" -> "Прерван";
             case "RUNNING" -> "Выполняется";
             case "STOPPING" -> "Останавливается";
+            case "QUEUED" -> "В очереди";
+            case "PREPARING" -> "Подготовка";
             default -> s;
         };
     }

@@ -12,17 +12,6 @@
         <div class="text-danger small" th:errors="*{credentialId}"></div>
     </div>
     <div class="col-md-4">
-        <label class="form-label">Пул</label>
-        <select class="form-select" th:field="*{poolId}">
-            <option value="">— без пула —</option>
-            <option th:each="p : ${pools}" th:value="${p.id}" th:text="${p.name}"></option>
-        </select>
-    </div>
-    <div class="col-md-4">
-        <label class="form-label">Метки (через запятую)</label>
-        <input class="form-control" th:field="*{labels}" placeholder="dc1, 10g">
-    </div>
-    <div class="col-md-4">
         <label class="form-label">Режим установки</label>
         <select class="form-select" th:field="*{mode}">
             <option value="SYSTEM">Системный (через sudo)</option>

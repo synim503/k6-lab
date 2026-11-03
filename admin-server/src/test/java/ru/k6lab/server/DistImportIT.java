@@ -1,5 +1,6 @@
 package ru.k6lab.server;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +23,16 @@ class DistImportIT extends AbstractIT {
     DistributionService distributions;
     @Autowired
     DistributionRepository repo;
+
+    /** Фиктивные дистрибутивы теста не должны мешать другим тестам, которые ставят агента по умолчанию. */
+    @AfterEach
+    void removeFakeDistributions() throws Exception {
+        for (var a : repo.findAll()) {
+            if (a.getVersion().startsWith("9.9.9") || a.getVersion().equals("9.0.0")) {
+                distributions.delete(a.getId());
+            }
+        }
+    }
 
     @Test
     void importsFromManifestOnceAndSkipsBrokenEntries(@TempDir Path dir) throws Exception {

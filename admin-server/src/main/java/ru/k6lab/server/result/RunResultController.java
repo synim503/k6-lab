@@ -14,31 +14,25 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import ru.k6lab.server.run.Run;
 import ru.k6lab.server.run.RunService;
-import ru.k6lab.server.scenario.Scenario;
 
 import java.nio.charset.StandardCharsets;
 
-/** Результаты run: итоги по ступеням, вывод инженера, эталон, подтверждение максимума, отчёты HTML/PDF. */
+/** Результаты запуска: итоги по ступеням, вывод инженера, отчёты HTML/PDF. */
 @Controller
 @RequestMapping("/runs/{id}")
 public class RunResultController {
 
-    static final java.util.List<String> CONCLUSIONS = java.util.List.of("Система выдерживает нагрузку", "Максимум найден",
-            "Максимум не достигнут", "Деградация", "Тест недостоверен");
+    static final java.util.List<String> CONCLUSIONS = java.util.List.of("Нагрузка выдерживается", "Есть нарушения SLA",
+            "Деградация", "Результат недостоверен");
 
     private final RunService runService;
     private final StepResultService results;
     private final ReportService reports;
-    private final ConfirmationService confirmation;
-    private final RunCompareService compare;
 
-    public RunResultController(RunService runService, StepResultService results, ReportService reports,
-                               ConfirmationService confirmation, RunCompareService compare) {
+    public RunResultController(RunService runService, StepResultService results, ReportService reports) {
         this.runService = runService;
         this.results = results;
         this.reports = reports;
-        this.confirmation = confirmation;
-        this.compare = compare;
     }
 
     /** htmx-фрагмент вкладки «Результаты». */
@@ -50,7 +44,6 @@ public class RunResultController {
         model.addAttribute("conclusions", CONCLUSIONS);
         model.addAttribute("data", results.load(id).orElse(null));
         model.addAttribute("terminal", run.getStatus().isTerminal());
-        model.addAttribute("baselineCompare", run.isBaseline() ? null : compare.compareWithBaseline(run).orElse(null));
         return "runs/_results :: results";
     }
 
@@ -71,25 +64,6 @@ public class RunResultController {
         runService.setConclusion(id, conclusion, comment);
         ra.addFlashAttribute("info", "Вывод сохранён");
         return "redirect:/runs/" + id + "#results";
-    }
-
-    @PostMapping("/baseline")
-    public String baseline(@PathVariable Long id, @RequestParam boolean on, RedirectAttributes ra) {
-        runService.setBaseline(id, on);
-        ra.addFlashAttribute("info", on ? "Run помечен эталонным для сценария" : "Пометка эталона снята");
-        return "redirect:/runs/" + id + "#results";
-    }
-
-    @PostMapping("/confirm-max")
-    public String confirmMax(@PathVariable Long id, RedirectAttributes ra) {
-        try {
-            Scenario s = confirmation.create(id);
-            ra.addFlashAttribute("info", "Создан сценарий «" + s.getName() + "» с профилем подтверждения максимума");
-            return "redirect:/scenarios/" + s.getId();
-        } catch (RuntimeException e) {
-            ra.addFlashAttribute("error", e.getMessage());
-            return "redirect:/runs/" + id + "#results";
-        }
     }
 
     @GetMapping(value = "/report.html", produces = MediaType.TEXT_HTML_VALUE)

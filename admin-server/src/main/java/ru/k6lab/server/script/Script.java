@@ -8,9 +8,14 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import ru.k6lab.server.common.Auditable;
 
-/** Скрипт - контейнер версий. Нагрузочная модель привязывается к скрипту, а не к версии. */
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/** Скрипт: контейнер версий и описание нагрузки (операции, интенсивность, длительность). Нагрузка относится к скрипту, а не к версии. */
 @Getter
 @Setter
 @Entity
@@ -35,4 +40,29 @@ public class Script extends Auditable {
 
     @Column(name = "git_entrypoint")
     private String gitEntrypoint;
+
+    /** Переменные окружения k6; значения вида ${secret:имя} подставляются из секретов при запуске. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(nullable = false)
+    private Map<String, String> env = new LinkedHashMap<>();
+
+    /** Критерии остановки (пусто - по умолчанию), см. {@code LoadCriteria}. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "stop_criteria", nullable = false)
+    private Map<String, Object> stopCriteria = new LinkedHashMap<>();
+
+    /** {minRatePct, maxDropped, maxCpuPct}. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "success_criteria", nullable = false)
+    private Map<String, Object> successCriteria = new LinkedHashMap<>();
+
+    /** Уровень нагрузки в процентах от заданной интенсивности операций. */
+    @Column(name = "level_pct", nullable = false)
+    private double levelPct = 100;
+
+    @Column(name = "ramp_sec", nullable = false)
+    private int rampSec = 30;
+
+    @Column(name = "hold_sec", nullable = false)
+    private int holdSec = 300;
 }

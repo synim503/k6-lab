@@ -253,7 +253,7 @@ public class PrometheusDiagnostics implements AgentEventListener {
         Map<String, String> tags = new LinkedHashMap<>();
         tags.put("test_run_id", runId);
         tags.put("generator", session.generatorName());
-        tags.put("test_scenario", "prometheus-diagnostics");
+        tags.put("test_script", "prometheus-diagnostics");
         Map<String, String> env = Map.of("TARGET", target);
         Messages.PrometheusParams promParams = new Messages.PrometheusParams(p.rwUrl(), p.authHeaders(), "2s", true, settings.classicHistograms());
         String cmdId = UUID.randomUUID().toString();

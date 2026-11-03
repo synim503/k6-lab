@@ -60,7 +60,7 @@ class WebSecurityIT extends AbstractIT {
         for (String path : new String[]{"/distributions", "/ssh-credentials", "/users", "/generators/new"}) {
             mvc.perform(get(path)).andExpect(status().isForbidden());
         }
-        mvc.perform(post("/generators/pools").param("name", "p").with(csrf())).andExpect(status().isForbidden());
+        mvc.perform(post("/generators/update-all").with(csrf())).andExpect(status().isForbidden());
         mvc.perform(post("/generators/1/restart").with(csrf())).andExpect(status().isForbidden());
         // но просматривать генераторы и операции можно
         mvc.perform(get("/generators")).andExpect(status().isOk());

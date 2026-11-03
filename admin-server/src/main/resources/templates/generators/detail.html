@@ -16,8 +16,6 @@
                 <div class="card-header">Состояние</div>
                 <table class="table table-sm mb-0">
                     <tr><th class="w-50">Хост</th><td th:text="${v.g().host} + ':' + ${v.g().sshPort}"></td></tr>
-                    <tr><th>Пул</th><td th:text="${v.poolName} ?: '—'"></td></tr>
-                    <tr><th>Метки</th><td th:text="${v.g().labels.isEmpty()} ? '—' : ${#strings.listJoin(v.g().labels, ', ')}"></td></tr>
                     <tr><th>Режим установки</th><td th:text="${v.g().installMode} + ' · ' + ${v.g().installDir} + ' · ' + (${v.g().supervisor} ?: '?')"></td></tr>
                     <tr><th>ОС / архитектура</th><td th:text="(${v.g().osName} ?: '—') + ' / ' + (${v.g().arch} ?: '—')"></td></tr>
                     <tr><th>Агент</th><td>
@@ -69,13 +67,7 @@
                 </div>
                 <div class="card-body border-top">
                     <form th:action="@{/generators/{id}/settings(id=${v.g().id})}" method="post" class="row g-2">
-                        <div class="col-md-4"><label class="form-label small">Пул</label>
-                            <select class="form-select form-select-sm" name="poolId">
-                                <option value="">— без пула —</option>
-                                <option th:each="p : ${pools}" th:value="${p.id}" th:text="${p.name}" th:selected="${p.id == v.g().poolId}"></option></select></div>
-                        <div class="col-md-4"><label class="form-label small">Метки</label>
-                            <input class="form-control form-control-sm" name="labels" th:value="${#strings.listJoin(v.g().labels, ', ')}"></div>
-                        <div class="col-md-2"><label class="form-label small">Макс. run</label>
+                        <div class="col-md-2"><label class="form-label small">Макс. запусков</label>
                             <input class="form-control form-control-sm" type="number" min="1" name="maxConcurrentRuns" th:value="${v.g().maxConcurrentRuns}"></div>
                         <div class="col-md-2 d-flex align-items-end"><button class="btn btn-sm btn-outline-primary w-100">Сохранить</button></div>
                     </form>
