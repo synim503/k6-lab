@@ -4,16 +4,15 @@
 <head><title th:text="'Run #' + ${run.id}">Run</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-        <h3 class="mb-0">Run #<span th:text="${run.id}"></span>: <a th:if="${run.scenarioId != null}" th:href="@{/scenarios/{id}(id=${run.scenarioId})}" th:text="${run.scenarioName}"></a>
+    <div class="page-head mb-2">
+        <h3>Run #<span th:text="${run.id}"></span>: <a th:if="${run.scenarioId != null}" th:href="@{/scenarios/{id}(id=${run.scenarioId})}" th:text="${run.scenarioName}"></a>
             <span th:if="${run.scenarioId == null}" th:text="${run.scenarioName}"></span>
             <span class="badge text-bg-warning fs-6" th:if="${run.baseline}">эталон</span></h3>
-        <a class="btn btn-link" th:href="@{/runs}">← история</a>
+        <a class="btn btn-outline-secondary btn-sm" th:href="@{/runs}"><i class="bi bi-arrow-left me-1"></i>История</a>
     </div>
     <div class="small text-muted mb-3">
         Скрипт <strong th:text="${snap.script.name}"></strong> v<span th:text="${snap.script.versionNumber}"></span>
         <span th:if="${snap.script.commit}" th:text="'(' + ${#strings.substring(snap.script.commit, 0, 8)} + ')'"></span> ·
-        модель <strong th:text="${snap.model.name}"></strong> · профиль <strong th:text="${snap.profile.name}"></strong> (<span th:text="${snap.profile.type}"></span>) ·
         политика отвала: <span th:text="${run.failurePolicy.title}"></span>
     </div>
 

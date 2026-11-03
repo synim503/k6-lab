@@ -60,6 +60,16 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 code { background: #eef0fb; color: #4338ca; padding: .1rem .38rem; border-radius: 6px; font-size: .86em; }
 
 /* ---------- формы и кнопки ---------- */
+/* карточка-форма с сеткой: card - это flex-колонка, из-за чего колонки .col-* не раскладывались в ряд */
+.card.row { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
+.card.row > * { padding-top: .35rem; }
+.form-card { max-width: 760px; }
+.form-card-wide { max-width: 980px; }
+.form-section { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--k6-muted); font-weight: 650; margin: .35rem 0 -.25rem; }
+.form-actions { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap; padding-top: .35rem; }
+details > summary { cursor: pointer; user-select: none; }
+.table input.form-control-sm { min-width: 90px; }
+.text-nowrap-cell { white-space: nowrap; }
 .form-control, .form-select { border-radius: 10px; border-color: #d9dce8; padding: .5rem .8rem; }
 .form-control-sm, .form-select-sm { border-radius: 8px; padding: .3rem .6rem; }
 .form-control:focus, .form-select:focus { border-color: #a5a1f5; box-shadow: 0 0 0 .22rem rgba(79, 70, 229, .15); }
@@ -71,7 +81,9 @@ code { background: #eef0fb; color: #4338ca; padding: .1rem .38rem; border-radius
 .btn-primary { background: linear-gradient(135deg, var(--k6-primary), var(--k6-accent)); border: 0; box-shadow: 0 2px 8px rgba(79, 70, 229, .35); }
 .btn-primary:hover, .btn-primary:focus { background: linear-gradient(135deg, var(--k6-primary-dark), #6d28d9); box-shadow: 0 4px 14px rgba(79, 70, 229, .45); }
 .btn-success { box-shadow: 0 2px 8px rgba(25, 135, 84, .3); }
-.btn-outline-primary { --bs-btn-color: #4f46e5; --bs-btn-border-color: #c7c4f8; --bs-btn-hover-bg: #4f46e5; --bs-btn-hover-border-color: #4f46e5; }
+.btn-outline-primary { --bs-btn-color: #4f46e5; --bs-btn-border-color: #c7c4f8; --bs-btn-hover-bg: #4f46e5; --bs-btn-hover-border-color: #4f46e5;
+  --bs-btn-active-bg: #4f46e5; --bs-btn-active-border-color: #4f46e5; --bs-btn-focus-shadow-rgb: 79, 70, 229; }
+.btn-check:checked + .btn-outline-primary { background: linear-gradient(135deg, var(--k6-primary), var(--k6-accent)); border-color: transparent; color: #fff; }
 .btn-outline-secondary { --bs-btn-border-color: #d3d6e3; }
 .btn-link { text-decoration: none; }
 

@@ -9,7 +9,7 @@
         <div sec:authorize="hasRole('ADMIN')" class="d-flex gap-2 flex-wrap">
             <form th:action="@{/generators/update-all}" method="post"
                   onsubmit="return confirm('Обновить агент и k6 на всех генераторах с устаревшей версией? Занятые будут пропущены.')">
-                <button class="btn btn-outline-warning" th:classappend="${outdated > 0} ? 'fw-semibold'">
+                <button class="btn" th:classappend="${outdated > 0} ? 'btn-outline-warning' : 'btn-outline-secondary'">
                     <i class="bi bi-arrow-repeat me-1"></i>Обновить агент на всех
                     <span class="badge text-bg-warning ms-1" th:if="${outdated > 0}" th:text="${outdated}"></span></button></form>
             <div class="btn-group">

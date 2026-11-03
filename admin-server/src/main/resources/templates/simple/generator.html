@@ -4,8 +4,8 @@
 <head><title>Добавить сервер</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-hdd-network"></i></span>Добавить сервер-генератор</h3>
-    <form class="card card-body row g-3 mx-0" style="max-width: 640px" th:action="@{/quick/generator}" method="post">
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-hdd-network"></i></span>Добавить сервер-генератор</h3></div>
+    <form class="card card-body row g-3 mx-0 form-card" th:action="@{/quick/generator}" method="post">
         <div class="col-8"><label class="form-label">Адрес сервера</label><input class="form-control" name="host" th:value="${host}" placeholder="10.0.0.5" required></div>
         <div class="col-4"><label class="form-label">SSH-порт</label><input class="form-control" type="number" name="port" th:value="${port} ?: 22"></div>
         <div class="col-12"><label class="form-label">Логин</label><input class="form-control" name="username" th:value="${username} ?: 'root'" required></div>

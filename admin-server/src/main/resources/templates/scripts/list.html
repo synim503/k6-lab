@@ -26,7 +26,7 @@
             <td th:text="${v != '' ? (v.usesHelper ? 'да' : 'нет') : '—'}"></td>
             <td><span th:if="${v != ''}" class="badge" th:classappend="${v.validForModel} ? 'text-bg-success' : 'text-bg-danger'"
                       th:text="${v.validForModel} ? 'да' : 'нет'"></span></td>
-            <td th:text="${s.updatedAt}"></td>
+            <td class="text-muted small text-nowrap" th:text="${#temporals.format(s.updatedAt, 'dd.MM.yyyy HH:mm')}"></td>
         </tr></tbody></table></div>
 </th:block>
 </body>

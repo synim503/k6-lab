@@ -26,7 +26,7 @@
             <div><div class="stat-value" th:classappend="${!running.isEmpty()} ? 'text-primary'" th:text="${running.size()}">0</div>
                 <div class="stat-label">тестов выполняется</div></div></div></div></a></div>
         <div class="col-6 col-lg-3"><a class="text-reset" th:href="@{/quick/tests}"><div class="card stat-card h-100 tile-link"><div class="card-body d-flex align-items-center gap-3">
-            <span class="icon-tile stat-ic"><i class="bi bi-beaker"></i></span>
+            <span class="icon-tile stat-ic"><i class="bi bi-clipboard2-check"></i></span>
             <div><div class="stat-value" th:text="${testsCount}">0</div><div class="stat-label">тестов создано</div></div></div></div></a></div>
         <div class="col-6 col-lg-3"><a class="text-reset" th:href="@{/scripts}"><div class="card stat-card h-100 tile-link"><div class="card-body d-flex align-items-center gap-3">
             <span class="icon-tile stat-ic"><i class="bi bi-file-earmark-code"></i></span>

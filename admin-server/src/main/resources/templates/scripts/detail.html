@@ -4,11 +4,11 @@
 <head><title th:text="${script.name}">Скрипт</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-        <h3 class="mb-0" th:text="${script.name}"></h3>
-        <a class="btn btn-link" th:href="@{/scripts}">← к списку</a>
+    <div class="page-head">
+        <h3><span class="icon-tile"><i class="bi bi-file-earmark-code"></i></span><span th:text="${script.name}"></span></h3>
+        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts}"><i class="bi bi-arrow-left me-1"></i>К списку</a>
     </div>
-    <p class="text-muted" th:text="${script.description}"></p>
+    <p class="text-muted" th:if="${script.description != null and !script.description.isBlank()}" th:text="${script.description}"></p>
 
     <div class="row g-3">
         <div class="col-lg-8">
@@ -24,7 +24,7 @@
                             <td th:text="${v.operations.size()}"></td>
                             <td><span class="badge" th:classappend="${v.validForModel} ? 'text-bg-success' : 'text-bg-danger'"
                                       th:text="${v.validForModel} ? 'пригодна' : 'непригодна'" th:title="${v.invalidReason}"></span></td>
-                            <td class="small" th:text="${v.createdAt} + ' ' + ${v.createdBy}"></td>
+                            <td class="small text-muted text-nowrap" th:text="${#temporals.format(v.createdAt, 'dd.MM.yyyy HH:mm')} + ' · ' + ${v.createdBy}"></td>
                         </tr></tbody></table>
             </div>
         </div>
@@ -58,9 +58,8 @@
                             </ul>
                         </div>
                     </div>
-                    <hr>
-                    <form th:action="@{/scripts/{id}/git-import(id=${script.id})}" method="post">
-                        <select class="form-select form-select-sm mb-2" name="repoId" required>
+                    <div class="text-muted small" th:if="${repos.isEmpty()}">Git-репозиториев нет. Добавьте их в «Ещё → Git-репозитории», чтобы импортировать версии из Git.</div>
+                    <form th:unless="${repos.isEmpty()}" th:action="@{/scripts/{id}/git-import(id=${script.id})}" method="post">                        <select class="form-select form-select-sm mb-2" name="repoId" required>
                             <option th:each="r : ${repos}" th:value="${r.id}" th:text="${r.name}" th:selected="${gitRepo != null and gitRepo.id == r.id}"></option></select>
                         <input class="form-control form-control-sm mb-2" name="ref" list="refs" placeholder="ветка / тег / коммит" required>
                         <datalist id="refs"><option th:each="r : ${refs}" th:value="${r.name}" th:text="${r.kind}"></option></datalist>

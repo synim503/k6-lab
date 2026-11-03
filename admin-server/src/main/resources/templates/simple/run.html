@@ -4,8 +4,8 @@
 <head><title>Запустить тест</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-play-circle"></i></span>Запустить: <span th:text="${test.name}"></span></h3>
-    <form class="card card-body mx-0" style="max-width: 640px" th:action="@{/quick/test/{id}/run(id=${test.id})}" method="post">
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-play-circle"></i></span>Запустить: <span th:text="${test.name}"></span></h3></div>
+    <form class="card card-body mx-0 form-card" th:action="@{/quick/test/{id}/run(id=${test.id})}" method="post">
         <div class="text-muted" th:if="${generators.isEmpty()}">Серверов нет — <a th:href="@{/quick/generator}">добавьте сервер</a>.</div>
         <div th:unless="${generators.isEmpty()}">
             <label class="form-label fw-semibold" for="gen-count">Количество генераторов</label>
