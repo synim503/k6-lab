@@ -1,0 +1,55 @@
+name: release
+
+# По тегу v* собирает все архивы и публикует их в GitHub Releases. Вручную (workflow_dispatch) - только сборка с артефактами.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true            # vendor/: k6, k6 с расширениями xk6 и JRE 17 лежат в Git LFS
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Сборка (jar, Go-агенты, k6, JRE, архивы)
+        run: ./build.sh --with-tests
+      - name: Контрольные суммы
+        run: cd portable && sha256sum k6-lab-linux-amd64.tar.gz k6-lab-linux-arm64.tar.gz k6-lab-portable.zip > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k6-lab
+          path: |
+            portable/k6-lab-linux-amd64.tar.gz
+            portable/k6-lab-linux-arm64.tar.gz
+            portable/k6-lab-portable.zip
+            portable/SHA256SUMS
+      - name: Публикация релиза
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            **Linux** — `k6-lab-linux-amd64.tar.gz` / `k6-lab-linux-arm64.tar.gz`: JRE 17 внутри, Java ставить не нужно.
+            `tar -xzf k6-lab-linux-amd64.tar.gz && cd k6-lab && ./start.sh`, затем в браузере мастер настройки PostgreSQL.
+
+            **Windows** — `k6-lab-portable.zip` (нужна Java 17+): `start.bat`.
+
+            В каждом архиве: админка, агенты на Go (linux-amd64/arm64), k6 и k6 с расширениями xk6. Интернет при развёртывании не нужен.
+            Контрольные суммы — `SHA256SUMS`.
+          files: |
+            portable/k6-lab-linux-amd64.tar.gz
+            portable/k6-lab-linux-arm64.tar.gz
+            portable/k6-lab-portable.zip
+            portable/SHA256SUMS
