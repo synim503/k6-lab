@@ -772,14 +772,43 @@ public class DeployEngine {
         }
     }
 
-    /** Последние N строк журнала агента (синхронно, для карточки генератора). */
+    /**
+     * Последние N строк журнала агента (синхронно, для карточки генератора). Файл logs/agent.log принадлежит служебному
+     * пользователю агента, поэтому при отказе читаем через sudo, а если файла нет - берём журнал службы (journalctl).
+     */
     public String tailAgentLog(Target t, int lines) {
         validate(t);
         DeployLog quiet = new DeployLog(0, new SecretMasker(), "");
+        int n = Math.max(1, Math.min(lines, 2000));
         try (SshConnection ssh = connect(t, quiet)) {
+            Remote r = new Remote(ssh, quiet, t);
             String dir = t.dir().startsWith("~") ? "\"$HOME" + t.dir().substring(1) + "\"" : q(t.dir());
-            ExecResult r = ssh.exec("tail -n " + Math.max(1, Math.min(lines, 2000)) + " " + dir + "/logs/agent.log 2>&1", SHORT);
-            return quiet.masker().mask(r.stdout() + r.stderr());
+            String file = dir + "/logs/agent.log";
+            String tail = "tail -n " + n + " " + file + " 2>&1";
+            ExecResult res = r.tryExec(tail, SHORT);
+            if (res.ok()) {
+                return quiet.masker().mask(res.stdout());
+            }
+            StringBuilder note = new StringBuilder();
+            if (t.system()) {
+                ExecResult sudo = r.trySudo(tail, SHORT);
+                if (sudo.ok()) {
+                    return quiet.masker().mask(sudo.stdout());
+                }
+                // файла может не быть (агент пишет в журнал службы): показываем journalctl
+                ExecResult jr = r.trySudo("journalctl -u " + Units.SERVICE_NAME + " -n " + n + " --no-pager 2>&1", SHORT);
+                if (jr.ok() && !jr.stdout().isBlank()) {
+                    return quiet.masker().mask("(журнал службы k6-agent, journalctl)\n" + jr.stdout());
+                }
+                note.append(res.stdout()).append(res.stderr()).append(sudo.stdout()).append(sudo.stderr());
+            } else {
+                ExecResult jr = r.tryExec("XDG_RUNTIME_DIR=/run/user/$(id -u) journalctl --user -u " + Units.SERVICE_NAME + " -n " + n + " --no-pager 2>&1", SHORT);
+                if (jr.ok() && !jr.stdout().isBlank()) {
+                    return quiet.masker().mask("(журнал службы k6-agent, journalctl --user)\n" + jr.stdout());
+                }
+                note.append(res.stdout()).append(res.stderr());
+            }
+            return quiet.masker().mask(note.toString().isBlank() ? "Журнал агента недоступен" : note.toString());
         }
     }
 }
