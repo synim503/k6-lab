@@ -15,7 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true            # vendor/: k6, k6 с расширениями xk6 и JRE 17 лежат в Git LFS
+          lfs: false           # тянем из LFS только нужное (ниже): vendor/maven на GitHub не нужен, там есть интернет
+      - name: Git LFS - k6, k6 с расширениями xk6 и JRE 17 (без vendor/maven, чтобы не тратить трафик LFS)
+        run: git lfs pull --include="vendor/k6/*,vendor/xk6/*,vendor/jre/*"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

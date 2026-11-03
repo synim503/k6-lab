@@ -6,3 +6,4 @@
 vendor/k6/* filter=lfs diff=lfs merge=lfs -text
 vendor/xk6/* filter=lfs diff=lfs merge=lfs -text
 vendor/jre/* filter=lfs diff=lfs merge=lfs -text
+vendor/maven/* filter=lfs diff=lfs merge=lfs -text

@@ -7,7 +7,8 @@
 # (и локальный кеш Maven: ~/.m2, см. --offline).
 #
 #   ./build.sh                    # сборка из того, что лежит в репозитории
-#   ./build.sh --offline          # Maven в офлайн-режиме (зависимости только из ~/.m2)
+#   ./build.sh --online           # Maven из интернета/кеша ~/.m2 вместо vendor/maven (по умолчанию берётся vendor/maven)
+#   ./build.sh --offline          # mvnw в офлайн-режиме (зависимости только из ~/.m2); нужен только без vendor/maven
 #   ./build.sh --with-tests       # перед сборкой прогнать все тесты (./mvnw verify)
 #   ./build.sh --with-jre         # добавить JRE 21 для Java-агента (для Go-агента не нужна; требует интернет)
 #   ./build.sh --download         # ТОЛЬКО на машине с интернетом: скачать k6, собрать xk6 и обновить vendor/
@@ -21,7 +22,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 K6_DIR="vendor/k6"; XK6_DIR="vendor/xk6"; K6_VERSION="v1.7.1"
-WITH_TESTS=0; WITH_JRE=0; CHECK=0; DOWNLOAD=0; OFFLINE=0
+WITH_TESTS=0; WITH_JRE=0; CHECK=0; DOWNLOAD=0; OFFLINE=0; ONLINE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --k6) K6_VERSION="$2"; shift 2 ;;
@@ -29,6 +30,7 @@ while [ $# -gt 0 ]; do
     --xk6-dir) XK6_DIR="$2"; shift 2 ;;
     --download) DOWNLOAD=1; shift ;;
     --offline) OFFLINE=1; shift ;;
+    --online) ONLINE=1; shift ;;
     --with-tests) WITH_TESTS=1; shift ;;
     --with-jre) WITH_JRE=1; shift ;;
     --check) CHECK=1; shift ;;
@@ -92,6 +94,16 @@ if [ "$DOWNLOAD" -eq 1 ]; then
   (cd vendor && sha256sum k6/* xk6/* > SHA256SUMS)
   echo "vendor/ обновлён. Закоммитьте изменения (файлы хранятся в Git LFS)."
   K6_DIR="vendor/k6"; XK6_DIR="vendor/xk6"
+fi
+
+# Maven: если в репозитории лежит vendor/maven (Git LFS) - собираем встроенным Maven и локальным репозиторием зависимостей, ничего
+# не скачивая. Иначе (нет vendor/maven, клонировали без LFS, или --online) - ./mvnw (нужен интернет или кеш ~/.m2).
+VM_ZIP="vendor/maven/apache-maven-3.9.11-bin.zip"; VM_REPO="vendor/maven/m2-repo.tar.gz"
+if [ "$ONLINE" -eq 0 ] && [ -f "$VM_REPO" ] && [ "$(wc -c < "$VM_REPO")" -gt 1000000 ] && [ -f "$VM_ZIP" ]; then
+  echo "== Maven из vendor/maven (без интернета)"
+  if [ ! -f .tools/apache-maven-3.9.11/bin/mvn ]; then mkdir -p .tools && (cd .tools && jar xf "../$VM_ZIP"); fi
+  if [ ! -f .m2-vendor/.ready ]; then rm -rf .m2-vendor; mkdir -p .m2-vendor && tar -xzf "$VM_REPO" -C .m2-vendor && touch .m2-vendor/.ready; fi
+  MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.repo.local=$PWD/.m2-vendor"
 fi
 
 rm -rf portable

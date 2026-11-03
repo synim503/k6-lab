@@ -235,12 +235,13 @@ export function getPayment() {
 
 Комплект собирается **одной командой** и содержит всё, кроме PostgreSQL и Prometheus. **Интернет не нужен**: бинари k6 и
 k6 с расширениями xk6 лежат в репозитории (`vendor/`, Git LFS), Go-зависимости агента — в `agent-go/vendor`.
-Нужны только JDK 17+ и Go 1.22+ (на Windows — Git for Windows: его bash); Maven берёт зависимости из локального кеша `~/.m2`.
+Нужны только JDK 17+ и Go 1.22+ (на Windows — Git for Windows: его bash). Maven и все его зависимости тоже лежат в репозитории
+(`vendor/maven`, Git LFS: Maven 3.9.11 и локальный репозиторий ~250 МБ): `./build.sh` использует их и в сеть не ходит.
 
 ```bash
 git lfs install && git clone git@github.com:synim503/k6-lab.git   # LFS нужен для бинарей k6 в vendor/
 ./build.sh                  # Linux / macOS / Git Bash;  Windows: build.cmd
-./build.sh --offline        # Maven в офлайн-режиме (ничего не качает, зависимости из ~/.m2)
+./build.sh --online         # вместо vendor/maven взять ./mvnw (интернет или кеш ~/.m2)
 ./build.sh --with-tests     # сначала прогнать все тесты
 ./build.sh --check          # только проверить, что всё необходимое установлено
 ./build.sh --download       # ТОЛЬКО с интернетом: обновить k6 и xk6 в vendor/
@@ -251,7 +252,7 @@ git lfs install && git clone git@github.com:synim503/k6-lab.git   # LFS нуже
   (`tar -xzf k6-lab-linux-amd64.tar.gz && cd k6-lab && ./start.sh`, затем `sudo ./install-service.sh` для автозапуска);
 - `k6-lab-portable.zip` — для Windows и систем с уже установленной Java 17+.
 
-Проверено: `GOPROXY=off ./build.sh --offline` собирает архив целиком без обращений к сети (при тёплом кеше Maven).
+Проверено: `GOPROXY=off ./build.sh` собирает все архивы целиком без обращений к сети (Maven запускается с `-o` и репозиторием из `vendor/maven`).
 
 **Работа в изолированной сети.** Готовый архив самодостаточен: интерфейс (Bootstrap, иконки, Chart.js, Monaco, diff2html,
 типы k6) лежит внутри jar и не обращается к CDN, агент и k6 доставляются на генераторы с сервера админки по SFTP, k6 на

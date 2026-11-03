@@ -10,6 +10,8 @@
 
 | `jre/temurin-jre17-linux-amd64.tar.gz`, `…-arm64.tar.gz` | Eclipse Temurin JRE 17 для Linux: встраивается в `k6-lab-linux-*.tar.gz`, чтобы на сервере админки не нужна была Java |
 
+| `maven/apache-maven-3.9.11-bin.zip`, `maven/m2-repo.tar.gz` | Maven и локальный репозиторий всех зависимостей и плагинов, нужных для `package` (~250 МБ). `./build.sh` распаковывает их в `.tools/` и `.m2-vendor/` и собирает с `mvn -o` |
+
 Контрольные суммы - в `SHA256SUMS` (`cd vendor && sha256sum -c SHA256SUMS`).
 
 ## Как обновить
@@ -21,3 +23,9 @@
 
 После этого закоммитьте обновлённые файлы. Версии расширений xk6 закреплены в `scripts/build-portable.sh`
 (свежие релизы расширений собираются под k6 v2 и в бинаре k6 1.x не регистрируются).
+
+Обновить `maven/m2-repo.tar.gz` после изменения зависимостей (с интернетом):
+
+```bash
+rm -rf /tmp/m2 && ./mvnw -Dmaven.repo.local=/tmp/m2 -DskipTests package && (cd /tmp/m2 && tar -czf - .) > vendor/maven/m2-repo.tar.gz
+```
