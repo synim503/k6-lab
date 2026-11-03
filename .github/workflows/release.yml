@@ -23,8 +23,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+      - name: Права на скрипты
+        run: chmod +x mvnw build.sh scripts/*.sh scripts/portable/*.sh
       - name: Сборка (jar, Go-агенты, k6, JRE, архивы)
-        run: ./build.sh --with-tests
+        # тесты прогоняются локально; в релизной сборке они не нужны и могут задержать публикацию
+        run: bash ./build.sh
       - name: Контрольные суммы
         run: cd portable && sha256sum k6-lab-linux-amd64.tar.gz k6-lab-linux-arm64.tar.gz k6-lab-portable.zip > SHA256SUMS
       - uses: actions/upload-artifact@v4

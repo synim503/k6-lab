@@ -5,7 +5,7 @@ data/
 .vscode/
 .env
 *.log
-portable/
+/portable/
 config/k6lab.properties
 *.exe
 admin-server/target/dev-pg/
