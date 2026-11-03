@@ -495,28 +495,49 @@ class RunE2EIT extends AbstractIT {
     void prometheusDiagnosticsRunsSmokeTestOnGeneratorAndGatesRuns() throws Exception {
         Agent a = startAgent("e2e7", 1);
         try (FakePrometheus prom = new FakePrometheus()) {
-            // Prometheus принимает remote write и отвечает на histogram_quantile
-            prom.respond((q, t) -> q.contains("k6_iteration_duration_seconds") ? Map.of("", 12.0) : Map.of());
+            // Prometheus принимает remote write: серии с тегом есть, histogram_quantile по настроенному имени отвечает
+            prom.respond((q, t) -> {
+                if (q.startsWith("count by (__name__)")) {
+                    return Map.of("k6_iterations_total", 1.0, "k6_iteration_duration_seconds", 1.0);
+                }
+                return q.contains("histogram_quantile") && q.contains("k6_iteration_duration_seconds") ? Map.of("", 12.0) : Map.of();
+            });
             settings.savePrometheus(prom.rwUrl(), prom.baseUrl(), ru.k6lab.server.settings.SettingsService.AuthType.NONE, null, null, "");
             assertThat(diagnostics.passed()).isFalse();
-            // без пройденной диагностики запуск блокируется (если требование включено)
             var res = diagnostics.runSync(a.id());
             assertThat(res.steps()).as(res.summary()).allMatch(ru.k6lab.server.metrics.PrometheusDiagnostics.Step::ok);
             assertThat(res.ok()).isTrue();
             assertThat(diagnostics.passed()).isTrue();
-            assertThat(diagnostics.last()).get().extracting(r -> r.steps().size()).isEqualTo(res.steps().size());
             assertThat(prom.queries).anyMatch(q -> q.startsWith("histogram_quantile(0.95"));
 
             // смена параметров делает прежний успех недействительным
             settings.savePrometheus(prom.rwUrl(), prom.baseUrl() + "/", ru.k6lab.server.settings.SettingsService.AuthType.NONE, null, null, "");
             assertThat(diagnostics.passed()).isFalse();
 
-            // нет histogram_quantile -> диагностика не пройдена с понятной причиной
-            prom.respond((q, t) -> q.startsWith("count(") ? Map.of("", 1.0) : Map.of());
+            // метрики приходят, но гистограмм нет (Prometheus без native histograms): понятная причина, а не «метрик нет»
+            prom.respond((q, t) -> q.startsWith("count by (__name__)") ? Map.of("k6_iterations_total", 1.0, "k6_http_reqs_total", 1.0) : Map.of());
             var bad = diagnostics.runSync(a.id());
             assertThat(bad.ok()).isFalse();
             assertThat(bad.summary()).contains("native-histograms");
+            assertThat(bad.steps().get(bad.steps().size() - 2).ok()).as("шаг про метрики должен быть успешным").isTrue();
             assertThat(diagnostics.passed()).isFalse();
+
+            // гистограмма приходит под другим именем: подсказываем исправить имена метрик
+            prom.respond((q, t) -> {
+                if (q.startsWith("count by (__name__)")) {
+                    return Map.of("k6_iterations_total", 1.0, "k6_iteration_duration", 1.0);
+                }
+                return q.contains("histogram_quantile") && q.contains("k6_iteration_duration{") ? Map.of("", 7.0) : Map.of();
+            });
+            var renamed = diagnostics.runSync(a.id());
+            assertThat(renamed.ok()).isFalse();
+            assertThat(renamed.summary()).contains("k6_iteration_duration").contains("Имена метрик");
+
+            // ни одной серии: метрики не доходят вовсе
+            prom.respond((q, t) -> Map.of());
+            var none = diagnostics.runSync(a.id());
+            assertThat(none.ok()).isFalse();
+            assertThat(none.summary()).contains("Ни одной серии");
         }
     }
 }

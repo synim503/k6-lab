@@ -55,6 +55,8 @@ public final class FakePrometheus implements AutoCloseable {
         queries.add(q);
         double t = Double.parseDouble(p.getOrDefault("time", "0"));
         Map<String, Double> res = "1".equals(q) ? Map.of("", 1.0) : responder.apply(q, t);
+        // агрегация по имени метрики: ключи ответа - имена метрик (метка __name__), иначе - значение метки scenario
+        String labelName = q.startsWith("count by (__name__)") ? "__name__" : "scenario";
         StringBuilder sb = new StringBuilder("{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":[");
         if (res != null) {
             boolean first = true;
@@ -63,7 +65,7 @@ public final class FakePrometheus implements AutoCloseable {
                     sb.append(',');
                 }
                 first = false;
-                sb.append("{\"metric\":{").append(e.getKey().isEmpty() ? "" : "\"scenario\":\"" + e.getKey() + "\"")
+                sb.append("{\"metric\":{").append(e.getKey().isEmpty() ? "" : "\"" + labelName + "\":\"" + e.getKey() + "\"")
                         .append("},\"value\":[").append(t).append(",\"").append(e.getValue()).append("\"]}");
             }
         }

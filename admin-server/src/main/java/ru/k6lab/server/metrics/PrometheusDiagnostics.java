@@ -288,16 +288,18 @@ public class PrometheusDiagnostics implements AgentEventListener {
     }
 
     private void checkMetrics(List<Step> steps, SettingsService.Prometheus p, String runId, Instant started) throws Exception {
-        PromNames n = new PromNames(names);
-        String sel = n.iter + "{test_run_id=\"" + runId + "\"}";
-        // remote write приходит с задержкой: ждём до 40 с
-        boolean seen = false;
+        String configured = names.names().iterationDuration();
+        String tag = "{test_run_id=\"" + runId + "\"}";
+        String sel = configured + tag;
+        // remote write приходит с задержкой: ждём до 40 с. Сначала ищем ЛЮБЫЕ серии с нашим тегом (а не одну конкретную метрику):
+        // так видно и когда метрики идут, но имя гистограммы другое или гистограммы не принимаются.
+        List<String> found = List.of();
         Double q = null;
         String lastErr = "";
-        for (int i = 0; i < 20 && (q == null); i++) {
+        for (int i = 0; i < 20 && q == null; i++) {
             try {
-                seen = seen || prom.single(p, "count(" + sel + ")", Instant.now()).isPresent()
-                        || prom.single(p, "count(count_over_time(" + sel + "[2m]))", Instant.now()).isPresent();
+                List<PrometheusClient.Sample> series = prom.query(p, "count by (__name__) ({test_run_id=\"" + runId + "\"})", Instant.now());
+                found = series.stream().map(x -> x.labels().get("__name__")).filter(x -> x != null).sorted().toList();
                 q = prom.single(p, "histogram_quantile(0.95, sum(increase(" + sel + "[2m]))) * 1000", Instant.now()).orElse(null);
             } catch (IOException e) {
                 lastErr = e.getMessage();
@@ -306,20 +308,35 @@ public class PrometheusDiagnostics implements AgentEventListener {
                 Thread.sleep(2000);
             }
         }
-        if (!seen) {
-            step(steps, "Метрики k6 в Prometheus", false, "Метрики с тегом test_run_id=" + runId
-                    + " не появились. Проверьте URL remote write, аутентификацию и что Prometheus запущен с "
+        if (found.isEmpty() && q == null) {
+            step(steps, "Метрики k6 в Prometheus", false, "Ни одной серии с тегом test_run_id=" + runId
+                    + " не появилось. Проверьте URL remote write, аутентификацию и что Prometheus запущен с "
                     + "--web.enable-remote-write-receiver. " + lastErr);
             return;
         }
-        step(steps, "Метрики k6 в Prometheus", true, "серия " + n.iter + " найдена");
-        if (q == null) {
-            step(steps, "histogram_quantile (native histograms)", false,
-                    "Метрика есть, но histogram_quantile не вернул значение. Включите в Prometheus "
-                            + "--enable-feature=native-histograms; k6 передаёт K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true");
-        } else {
-            step(steps, "histogram_quantile (native histograms)", true, String.format(java.util.Locale.ROOT, "p95 = %.1f мс", q));
+        String sample = found.stream().limit(6).collect(java.util.stream.Collectors.joining(", "));
+        step(steps, "Метрики k6 в Prometheus", true, "серий с тегом test_run_id: " + found.size()
+                + (found.isEmpty() ? "" : " (" + sample + (found.size() > 6 ? ", …" : "") + ")"));
+        if (q != null) {
+            step(steps, "histogram_quantile (native histograms)", true, String.format(java.util.Locale.ROOT, "p95 = %.1f мс по " + configured, q));
+            return;
         }
+        // метрики идут, а гистограммы по настроенному имени нет: ищем, под каким именем она приходит
+        String other = found.stream().filter(x -> x.contains("iteration_duration") && !x.equals(configured)).findFirst().orElse(null);
+        if (other != null) {
+            Double alt = prom.single(p, "histogram_quantile(0.95, sum(increase(" + other + tag + "[2m]))) * 1000", Instant.now()).orElse(null);
+            if (alt != null) {
+                step(steps, "histogram_quantile (native histograms)", false, "Гистограмма приходит под именем " + other
+                        + ", а в настройках указано " + configured + ". Исправьте «Имена метрик k6» (iterationDuration, opDuration, ...): имена зависят от версии k6 и remote write.");
+                return;
+            }
+            step(steps, "histogram_quantile (native histograms)", false, "Приходят классические серии " + other
+                    + " (не native histogram). Запустите Prometheus с --enable-feature=native-histograms (версия 2.40+; в 3.x флаг тоже нужен) и перезапустите его.");
+            return;
+        }
+        step(steps, "histogram_quantile (native histograms)", false, "Метрики приходят (" + sample + "), но гистограммы времени итерации нет: "
+                + "Prometheus не принимает native histograms. Включите --enable-feature=native-histograms; k6 передаёт "
+                + "K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true. Если имена метрик у вас другие - поправьте «Имена метрик k6».");
     }
 
     private record PromNames(String iter) {
