@@ -54,6 +54,13 @@ class QuickFlowIT extends AbstractIT {
         mvc.perform(get(loc)).andExpect(status().isOk()).andExpect(content().string(containsString("Запустить тест")));
         mvc.perform(get("/quick/tests")).andExpect(content().string(containsString("Быстрый тест")));
 
+        // удаление теста из списка: сценарий исчезает, страница не падает
+        mvc.perform(post("/quick/test/" + id + "/delete").with(csrf())).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl("/quick/tests"));
+        mvc.perform(get("/quick/tests")).andExpect(content().string(org.hamcrest.Matchers.not(containsString("Быстрый тест"))));
+        mvc.perform(post("/quick/test/999999/delete").with(csrf())).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl("/quick/tests"));
+        loc = mvc.perform(post("/quick/test").with(csrf()).param("name", "Быстрый тест").param("scriptId", String.valueOf(v.getScriptId()))
+                        .param("minutes", "2").param("percent", "100").param("op", "login").param("rate", "5").param("sla", "800"))
+                .andReturn().getResponse().getRedirectedUrl();
         // число генераторов без отмеченных хостов: свободных нет - понятная ошибка, а не 500
         mvc.perform(post(loc).with(csrf())).andExpect(status().isOk()).andExpect(content().string(containsString("Свободных генераторов")));
         mvc.perform(post(loc).with(csrf()).param("count", "0")).andExpect(status().isOk()).andExpect(content().string(containsString("не меньше 1")));

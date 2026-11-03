@@ -210,6 +210,35 @@ public class SimpleController {
         }
     }
 
+    /** Удаление теста вместе с его моделью и профилем, если они не нужны другим сценариям. История запусков сохраняется. */
+    @PostMapping("/test/{id}/delete")
+    public String testDelete(@PathVariable Long id, RedirectAttributes ra) {
+        try {
+            Scenario s = scenarios.get(id);
+            boolean running = runs.activeRuns().stream()
+                    .anyMatch(r -> id.equals(r.getScenarioId()));
+            if (running) {
+                throw new IllegalStateException("Тест сейчас выполняется - дождитесь окончания или остановите запуск");
+            }
+            String name = s.getName();
+            scenarios.delete(id);
+            try {
+                models.delete(s.getModelId());
+            } catch (RuntimeException ignored) {
+                // модель нужна другому сценарию - остаётся
+            }
+            try {
+                profiles.delete(s.getProfileId());
+            } catch (RuntimeException ignored) {
+                // профиль нужен другому сценарию - остаётся
+            }
+            ra.addFlashAttribute("info", "Тест «" + name + "» удалён. История его запусков сохранена.");
+        } catch (RuntimeException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/quick/tests";
+    }
+
     // ------------------------------------------------------------------ запуск
 
     @GetMapping("/test/{id}/run")
