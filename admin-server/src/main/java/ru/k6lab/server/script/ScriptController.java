@@ -30,15 +30,13 @@ import java.util.Map;
 public class ScriptController {
 
     private final ScriptService service;
-    private final ScriptDiffService diffService;
     private final GitRepoService gitRepos;
     private final AdminHelper helper;
     private final K6Tool k6;
 
-    public ScriptController(ScriptService service, ScriptDiffService diffService, GitRepoService gitRepos,
+    public ScriptController(ScriptService service, GitRepoService gitRepos,
                             AdminHelper helper, K6Tool k6) {
         this.service = service;
-        this.diffService = diffService;
         this.gitRepos = gitRepos;
         this.helper = helper;
         this.k6 = k6;
@@ -212,20 +210,6 @@ public class ScriptController {
             ra.addFlashAttribute("error", e.getMessage());
             return "redirect:/scripts/" + id + "/versions/" + vid + "/edit?file=" + file;
         }
-    }
-
-    @GetMapping("/{id}/diff")
-    public String diff(@PathVariable Long id, @RequestParam Long from, @RequestParam Long to, Model model) throws IOException {
-        ScriptVersion a = service.version(id, from);
-        ScriptVersion b = service.version(id, to);
-        List<ScriptDiffService.FileDiff> diffs = diffService.diff(service.zipBytes(a), service.zipBytes(b));
-        model.addAttribute("script", service.get(id));
-        model.addAttribute("a", a);
-        model.addAttribute("b", b);
-        model.addAttribute("diffs", diffs);
-        model.addAttribute("unified", String.join("\n", diffs.stream().map(ScriptDiffService.FileDiff::unified)
-                .filter(java.util.Objects::nonNull).toList()));
-        return "scripts/diff";
     }
 
     @PostMapping("/{id}/delete")

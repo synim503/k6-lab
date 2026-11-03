@@ -214,21 +214,42 @@ public class SimpleController {
 
     @GetMapping("/test/{id}/run")
     public String runForm(@PathVariable Long id, Model model) {
-        model.addAttribute("test", scenarios.get(id));
-        List<Generator> all = generators.findAll();
-        model.addAttribute("generators", all);
+        fillRunForm(id, model);
         return "simple/run";
     }
 
+    private void fillRunForm(Long id, Model model) {
+        model.addAttribute("test", scenarios.get(id));
+        List<Generator> all = generators.findAll();
+        model.addAttribute("generators", all);
+        model.addAttribute("freeCount", all.stream().filter(Generator::isAvailableForRuns).count());
+    }
+
+    /**
+     * Число генераторов задаётся числом; конкретные хосты - по желанию. Если хосты отмечены, берутся они, иначе
+     * нужное число свободных генераторов выбирается автоматически.
+     */
     @PostMapping("/test/{id}/run")
     public String run(@PathVariable Long id, @RequestParam(name = "generatorId", required = false) List<Long> generatorIds,
-                      Model model, RedirectAttributes ra) {
+                      @RequestParam(required = false) Integer count, Model model, RedirectAttributes ra) {
         try {
-            if (generatorIds == null || generatorIds.isEmpty()) {
-                throw new IllegalArgumentException("Выберите хотя бы один сервер-генератор");
+            List<Long> chosen;
+            if (generatorIds != null && !generatorIds.isEmpty()) {
+                chosen = generatorIds.stream().sorted().toList();
+            } else {
+                int n = count == null ? 1 : count;
+                if (n < 1) {
+                    throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
+                }
+                List<Long> free = generators.findAll().stream().filter(Generator::isAvailableForRuns)
+                        .sorted(java.util.Comparator.comparing(Generator::getName)).map(Generator::getId).toList();
+                if (free.size() < n) {
+                    throw new IllegalArgumentException("Свободных генераторов: " + free.size() + ", а нужно " + n);
+                }
+                chosen = free.subList(0, n);
             }
             List<RunService.GeneratorSel> sel = new ArrayList<>();
-            for (Long g : generatorIds.stream().sorted().toList()) {
+            for (Long g : chosen) {
                 sel.add(new RunService.GeneratorSel(g, 1));
             }
             Run run;
@@ -240,8 +261,7 @@ public class SimpleController {
             return "redirect:/runs/" + run.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
-            model.addAttribute("test", scenarios.get(id));
-            model.addAttribute("generators", generators.findAll());
+            fillRunForm(id, model);
             return "simple/run";
         }
     }

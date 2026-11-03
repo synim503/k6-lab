@@ -27,11 +27,7 @@
                     <ul class="dropdown-menu">
                         <li><a class="dropdown-item" th:href="@{/deployments}"><i class="bi bi-tools me-2 text-muted"></i>Операции с серверами</a></li>
                         <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item" th:href="@{/scenarios}"><i class="bi bi-diagram-3 me-2 text-muted"></i>Сценарии (расширенно)</a></li>
-                        <li><a class="dropdown-item" th:href="@{/models}"><i class="bi bi-bar-chart-steps me-2 text-muted"></i>Модели нагрузки</a></li>
-                        <li><a class="dropdown-item" th:href="@{/profiles}"><i class="bi bi-graph-up-arrow me-2 text-muted"></i>Профили и шаблоны</a></li>
                         <li><a class="dropdown-item" th:href="@{/git-repos}"><i class="bi bi-git me-2 text-muted"></i>Git-репозитории</a></li>
-                        <li><a class="dropdown-item" th:href="@{/sut}"><i class="bi bi-bullseye me-2 text-muted"></i>Тестируемые системы</a></li>
                         <li><a class="dropdown-item" th:href="@{/secrets}"><i class="bi bi-key me-2 text-muted"></i>Секреты</a></li>
                         <li sec:authorize="hasRole('ADMIN')"><hr class="dropdown-divider"></li>
                         <li sec:authorize="hasRole('ADMIN')"><a class="dropdown-item" th:href="@{/distributions}"><i class="bi bi-box-seam me-2 text-muted"></i>Дистрибутивы</a></li>

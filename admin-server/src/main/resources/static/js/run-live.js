@@ -11,6 +11,7 @@
     var lines = [];          // все полученные строки (в браузере хранится не больше MAX)
     var MAX = 5000;
     var autoscroll = true;
+    var NL = String.fromCharCode(10);
 
     function fmt(l) {
         var d = new Date(l.t);
@@ -23,23 +24,38 @@
         var q = search.value.trim().toLowerCase();
         return !q || l.m.toLowerCase().indexOf(q) >= 0;
     }
+    // выделение в логе: пока пользователь что-то выделяет, DOM не перерисовываем и не прокручиваем (иначе выделение пропадает)
+    function selecting() {
+        var sel = window.getSelection();
+        return !!sel && !sel.isCollapsed && sel.rangeCount > 0 && log.contains(sel.anchorNode);
+    }
+    var dirty = false;       // полный пересбор отложен до снятия выделения
     function render() {
+        if (selecting()) { dirty = true; return; }
+        dirty = false;
         var out = [];
         for (var i = 0; i < lines.length; i++) { if (visible(lines[i])) { out.push(fmt(lines[i])); } }
-        log.textContent = out.join('\n');
+        log.textContent = out.join(NL);
         counter.textContent = out.length + ' из ' + lines.length + ' строк';
         if (autoscroll) { log.scrollTop = log.scrollHeight; }
     }
     function append(batch) {
         var added = [];
         batch.forEach(function (l) { lines.push(l); if (visible(l)) { added.push(fmt(l)); } });
-        if (lines.length > MAX) { lines.splice(0, lines.length - MAX); render(); return; }
+        if (lines.length > MAX) {
+            lines.splice(0, lines.length - MAX);
+            // в буфере режем сразу, на экране - когда не выделяют текст
+            dirty = true;
+            if (!selecting()) { render(); return; }
+        }
         if (added.length) {
-            log.textContent += (log.textContent ? '\n' : '') + added.join('\n');
-            if (autoscroll) { log.scrollTop = log.scrollHeight; }
+            // дописываем текстовым узлом: существующие узлы (и выделение в них) остаются нетронутыми
+            log.appendChild(document.createTextNode((log.firstChild ? NL : '') + added.join(NL)));
+            if (autoscroll && !selecting()) { log.scrollTop = log.scrollHeight; }
         }
         counter.textContent = lines.length + ' строк в буфере';
     }
+    document.addEventListener('selectionchange', function () { if (dirty && !selecting()) { render(); } });
     [genSel, levelSel].forEach(function (e) { e.addEventListener('change', render); });
     search.addEventListener('input', render);
     pauseBtn.addEventListener('click', function () {

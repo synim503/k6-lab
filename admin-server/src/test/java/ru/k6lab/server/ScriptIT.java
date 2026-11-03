@@ -14,7 +14,6 @@ import ru.k6lab.server.git.GitRepo;
 import ru.k6lab.server.git.GitRepoService;
 import ru.k6lab.server.script.K6Tool;
 import ru.k6lab.server.script.Script;
-import ru.k6lab.server.script.ScriptDiffService;
 import ru.k6lab.server.script.ScriptService;
 import ru.k6lab.server.script.ScriptVersion;
 
@@ -36,13 +35,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Скрипты: загрузка, валидация (k6 inspect), версии, редактор, откат, diff, Git (локальный репозиторий). */
+/** Скрипты: загрузка, валидация (k6 inspect), версии, редактор, откат, Git (локальный репозиторий). */
 class ScriptIT extends AbstractIT {
 
     @Autowired
     ScriptService scripts;
-    @Autowired
-    ScriptDiffService diffs;
     @Autowired
     GitRepoService gitRepos;
     @Autowired
@@ -159,7 +156,7 @@ class ScriptIT extends AbstractIT {
     }
 
     @Test
-    void editorSaveRollbackDiffAndManualOperations() throws Exception {
+    void editorSaveRollbackAndManualOperations() throws Exception {
         ScriptVersion v1 = upload(name(), "m.js", "export function a() {}\nexport default function () {}\n");
         Long sid = v1.getScriptId();
 
@@ -170,15 +167,6 @@ class ScriptIT extends AbstractIT {
         assertThat(v2.getSource()).isEqualTo(ScriptVersion.Source.EDITOR);
         assertThat(v2.operationNames()).containsExactly("a", "b");
         assertThat(scripts.version(sid, v1.getId()).operationNames()).containsExactly("a");
-
-        // diff
-        var d = diffs.diff(scripts.zipBytes(v1), scripts.zipBytes(v2));
-        assertThat(d).singleElement().satisfies(fd -> {
-            assertThat(fd.path()).isEqualTo("m.js");
-            assertThat(fd.status()).isEqualTo(ScriptDiffService.FileDiff.Status.MODIFIED);
-            assertThat(fd.unified()).contains("diff --git a/m.js b/m.js").contains("+export function b() {}");
-        });
-        assertThat(diffs.diff(scripts.zipBytes(v1), scripts.zipBytes(v1))).isEmpty();
 
         // откат = новая версия с содержимым старой
         ScriptVersion v3 = scripts.rollback(sid, v1.getId());
@@ -271,7 +259,7 @@ class ScriptIT extends AbstractIT {
         ScriptVersion v2 = scripts.saveEdit(v.getScriptId(), v.getId(), "page.js", GOOD + "\n// change\n", "c");
         String base = "/scripts/" + v.getScriptId();
         for (String path : new String[]{"/scripts", "/scripts/new", base, base + "/versions/" + v.getId(),
-                base + "/versions/" + v.getId() + "/edit", base + "/diff?from=" + v.getId() + "&to=" + v2.getId(),
+                base + "/versions/" + v.getId() + "/edit",
                 "/git-repos"}) {
             mvc.perform(get(path)).andExpect(status().isOk());
         }

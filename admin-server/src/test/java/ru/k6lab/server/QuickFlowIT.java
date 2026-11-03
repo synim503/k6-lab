@@ -54,8 +54,9 @@ class QuickFlowIT extends AbstractIT {
         mvc.perform(get(loc)).andExpect(status().isOk()).andExpect(content().string(containsString("Запустить тест")));
         mvc.perform(get("/quick/tests")).andExpect(content().string(containsString("Быстрый тест")));
 
-        // без выбора генераторов - понятная ошибка, а не 500
-        mvc.perform(post(loc).with(csrf())).andExpect(status().isOk()).andExpect(content().string(containsString("Выберите хотя бы один")));
+        // число генераторов без отмеченных хостов: свободных нет - понятная ошибка, а не 500
+        mvc.perform(post(loc).with(csrf())).andExpect(status().isOk()).andExpect(content().string(containsString("Свободных генераторов")));
+        mvc.perform(post(loc).with(csrf()).param("count", "0")).andExpect(status().isOk()).andExpect(content().string(containsString("не меньше 1")));
         // без нагрузки ни на одной операции
         mvc.perform(post("/quick/test").with(csrf()).param("name", "x").param("scriptId", String.valueOf(v.getScriptId()))
                         .param("op", "login").param("rate", "").param("sla", "1000"))
