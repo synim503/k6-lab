@@ -29,15 +29,17 @@ func buildLinuxTar(root, jreTgz, out string) error {
 		if strings.HasSuffix(name, ".sh") || strings.Contains(name, "/dist/agent/") || strings.HasSuffix(name, "/k6") {
 			mode = 0o755
 		}
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: info.Size(), ModTime: info.ModTime(), Typeflag: tar.TypeReg}); err != nil {
-			return err
-		}
-		in, err := os.Open(p)
+		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		defer in.Close()
-		_, err = io.Copy(tw, in)
+		if strings.HasSuffix(name, ".sh") { // скрипты Linux - только с LF
+			data = []byte(strings.ReplaceAll(string(data), "\r\n", "\n"))
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(data)), ModTime: info.ModTime(), Typeflag: tar.TypeReg}); err != nil {
+			return err
+		}
+		_, err = tw.Write(data)
 		return err
 	})
 	if err != nil {
