@@ -141,6 +141,22 @@
             <artifactId>bootstrap-icons</artifactId>
             <version>1.11.3</version>
         </dependency>
+        <!-- все фронтенд-ресурсы поставляются внутри jar: работа в изолированной сети без CDN -->
+        <dependency>
+            <groupId>org.webjars.npm</groupId>
+            <artifactId>chart.js</artifactId>
+            <version>4.4.9</version>
+        </dependency>
+        <dependency>
+            <groupId>org.webjars.npm</groupId>
+            <artifactId>monaco-editor</artifactId>
+            <version>0.52.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.webjars.npm</groupId>
+            <artifactId>diff2html</artifactId>
+            <version>3.4.56</version>
+        </dependency>
         <dependency>
             <groupId>org.webjars.npm</groupId>
             <artifactId>htmx.org</artifactId>

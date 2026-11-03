@@ -2,7 +2,7 @@
 <html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
       layout:decorate="~{layout/main}">
 <head><title>Сравнение версий</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
+    <link rel="stylesheet" th:href="@{/webjars/diff2html/bundles/css/diff2html.min.css}">
 </head>
 <body>
 <th:block layout:fragment="content">
@@ -20,7 +20,7 @@
     <div id="diff-out"></div>
 </th:block>
 <th:block layout:fragment="scripts">
-    <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
+    <script th:src="@{/webjars/diff2html/bundles/js/diff2html-ui.min.js}"></script>
     <script>
         (function () {
             var text = document.getElementById('unified').value;

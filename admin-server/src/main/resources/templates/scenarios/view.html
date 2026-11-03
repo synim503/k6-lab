@@ -96,8 +96,8 @@
     </div>
 </th:block>
 <th:block layout:fragment="scripts">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+    <script th:src="@{/webjars/chart.js/dist/chart.umd.js}"></script>
+    <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script>
         (function () {
             var palette = ['#0d6efd', '#198754', '#fd7e14', '#6f42c1', '#dc3545', '#20c997', '#0dcaf0', '#6c757d', '#d63384', '#ffc107'];
@@ -113,7 +113,7 @@
             }
             var box = document.getElementById('config-editor');
             if (box && window.require) {
-                var base = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
+                var base = location.origin + '/webjars/monaco-editor/min/vs';
                 require.config({paths: {vs: base}});
                 window.MonacoEnvironment = {getWorkerUrl: function () {
                     return 'data:text/javascript;charset=utf-8,' + encodeURIComponent("self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");

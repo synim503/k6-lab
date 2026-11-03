@@ -25,11 +25,11 @@
     </form>
 </th:block>
 <th:block layout:fragment="scripts">
-    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+    <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script>
         (function () {
             var box = document.getElementById('editor');
-            var base = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs';
+            var base = location.origin + '/webjars/monaco-editor/min/vs';
             require.config({paths: {vs: base}});
             window.MonacoEnvironment = {
                 getWorkerUrl: function () {
@@ -37,10 +37,10 @@
                         "self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
                 }
             };
-            // типы k6 для подсказок: @types/k6 подгружаются с CDN и регистрируются как node_modules
+            // типы k6 для подсказок: @types/k6 (лежат в jar, без интернета) регистрируются как node_modules
             var k6Types = ['index.d.ts', 'http/index.d.ts', 'metrics/index.d.ts', 'execution/index.d.ts', 'data/index.d.ts',
                 'encoding/index.d.ts', 'crypto/index.d.ts', 'html/index.d.ts', 'ws/index.d.ts', 'options/index.d.ts',
-                'net/grpc/index.d.ts', 'timers/index.d.ts', 'experimental/csv/index.d.ts'];
+                'net/grpc/index.d.ts', 'timers/index.d.ts', 'experimental/csv/index.d.ts', 'experimental/fs/index.d.ts', 'websockets/index.d.ts', 'global.d.ts'];
             require(['vs/editor/editor.main'], function () {
                 var path = new URLSearchParams(location.search).get('file') || '';
                 var lang = /\.(json)$/i.test(path) ? 'json' : 'javascript';
@@ -52,9 +52,9 @@
                         target: ts.ScriptTarget.ES2020, moduleResolution: ts.ModuleResolutionKind.NodeJs,
                         module: ts.ModuleKind.ESNext});
                     k6Types.forEach(function (f) {
-                        fetch('https://cdn.jsdelivr.net/npm/@types/k6/' + f).then(function (r) { return r.ok ? r.text() : ''; })
+                        fetch('/vendor/k6-types/' + f).then(function (r) { return r.ok ? r.text() : ''; })
                             .then(function (t) { if (t) { ts.javascriptDefaults.addExtraLib(t, 'file:///node_modules/@types/k6/' + f); } })
-                            .catch(function () { /* офлайн: редактор работает без подсказок k6 */ });
+                            .catch(function () { /* редактор работает и без подсказок k6 */ });
                     });
                     document.getElementById('edit-form').addEventListener('submit', function () {
                         document.getElementById('content').value = editor.getValue();
