@@ -141,6 +141,9 @@ cp scripts/portable/start.sh scripts/portable/start.bat scripts/portable/install
    scripts/portable/install-service.bat scripts/portable/uninstall-service.bat scripts/portable/README-PORTABLE.txt "$OUT/"
 chmod +x "$OUT/"*.sh
 echo "== manifest.json и архив"
-(cd agent-go && GOFLAGS=-mod=vendor go run ./tools/pack "../portable" "$K6_NUM" "$AGENT_VERSION")
+(cd agent-go && GOFLAGS=-mod=vendor go run ./tools/pack "../portable" "$K6_NUM" "$AGENT_VERSION" "../vendor/jre")
 echo
-echo "Готово. Распакуйте portable/k6-lab-portable.zip и запустите start.bat / start.sh (нужна Java 17+ и PostgreSQL 16)."
+echo "Готово:"
+echo "  portable/k6-lab-portable.zip           - для Windows (нужна Java 17+) и любой ОС с Java"
+echo "  portable/k6-lab-linux-amd64.tar.gz     - для Linux x86_64, JRE внутри (Java ставить не нужно)"
+echo "  portable/k6-lab-linux-arm64.tar.gz     - для Linux ARM64, JRE внутри"

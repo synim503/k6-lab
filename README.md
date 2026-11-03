@@ -246,6 +246,11 @@ git lfs install && git clone git@github.com:synim503/k6-lab.git   # LFS нуже
 ./build.sh --download       # ТОЛЬКО с интернетом: обновить k6 и xk6 в vendor/
 ```
 
+Результат сборки (`portable/`):
+- `k6-lab-linux-amd64.tar.gz` и `k6-lab-linux-arm64.tar.gz` — для Linux, **JRE 17 внутри**: Java на сервере ставить не нужно
+  (`tar -xzf k6-lab-linux-amd64.tar.gz && cd k6-lab && ./start.sh`, затем `sudo ./install-service.sh` для автозапуска);
+- `k6-lab-portable.zip` — для Windows и систем с уже установленной Java 17+.
+
 Проверено: `GOPROXY=off ./build.sh --offline` собирает архив целиком без обращений к сети (при тёплом кеше Maven).
 
 **Работа в изолированной сети.** Готовый архив самодостаточен: интерфейс (Bootstrap, иконки, Chart.js, Monaco, diff2html,

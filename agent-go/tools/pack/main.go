@@ -108,4 +108,17 @@ func main() {
 	}
 	st, _ := os.Stat(out)
 	fmt.Printf("Готово: %s (%d МБ, дистрибутивов: %d)\n", out, st.Size()/1e6, len(items))
+	// Linux-сборки со встроенной JRE: четвёртый аргумент - каталог с temurin-jre17-linux-<arch>.tar.gz
+	if len(os.Args) > 4 {
+		for _, a := range []string{"amd64", "arm64"} {
+			jre := filepath.Join(os.Args[4], "temurin-jre17-linux-"+a+".tar.gz")
+			if !exists(jre) {
+				continue
+			}
+			if err := buildLinuxTar(root, jre, filepath.Join(root, "k6-lab-linux-"+a+".tar.gz")); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+	}
 }

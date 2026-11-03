@@ -8,6 +8,8 @@
 | `k6/k6-linux-amd64`, `k6/k6-linux-arm64` | k6 v1.7.1, официальный релиз grafana/k6 |
 | `xk6/xk6-linux-amd64`, `xk6/xk6-linux-arm64` | k6 v1.7.1, собран xk6 с расширениями: xk6-kafka v1.3.0, xk6-sql v1.0.5 (+ драйверы postgres v0.1.1, mysql v0.2.1), xk6-faker v0.4.4, xk6-mqtt v0.40.3, xk6-sse v0.1.11 |
 
+| `jre/temurin-jre17-linux-amd64.tar.gz`, `…-arm64.tar.gz` | Eclipse Temurin JRE 17 для Linux: встраивается в `k6-lab-linux-*.tar.gz`, чтобы на сервере админки не нужна была Java |
+
 Контрольные суммы - в `SHA256SUMS` (`cd vendor && sha256sum -c SHA256SUMS`).
 
 ## Как обновить
