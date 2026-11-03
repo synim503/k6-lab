@@ -188,7 +188,7 @@ class ResultsIT extends AbstractIT {
         // сохранено и читается обратно
         assertThat(results.load(run.getId())).get().extracting(d -> d.max().candidateStep()).isEqualTo(2);
         // перцентили запрашивались только как histogram_quantile по сумме всех генераторов
-        assertThat(prom.queries).anyMatch(q -> q.startsWith("histogram_quantile(0.95, sum by (scenario)"));
+        assertThat(prom.queries).anyMatch(q -> q.startsWith("histogram_quantile(0.95, sum by (scenario, le)"));
         assertThat(prom.queries).noneMatch(q -> q.contains("avg(") && q.contains("quantile"));
 
         mvc.perform(get("/runs/" + run.getId() + "/results")).andExpect(status().isOk())

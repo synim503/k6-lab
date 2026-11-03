@@ -55,6 +55,7 @@ type Run struct {
 	exitCode      *int
 	apiPort       int
 	api           *K6Api
+	proxy         *RWProxy
 }
 
 func NewRunManager(cfg *Config, emit func(factory func(seq int64) any)) *RunManager {
@@ -427,6 +428,19 @@ func (m *RunManager) launch(r *Run) {
 		r.mu.Lock()
 		work, env, masker, notes := r.work, r.env, r.masker, r.notes
 		r.mu.Unlock()
+		if pr := p.Prometheus; pr != nil && pr.ClassicHistograms && strings.TrimSpace(pr.URL) != "" {
+			// k6 шлёт метрики локальному приёмнику, тот переводит native histograms в классические и пересылает в Prometheus
+			proxy, perr := StartRWProxy(pr.URL, pr.Headers)
+			if perr != nil {
+				err = fmt.Errorf("не удалось запустить приёмник метрик: %w", perr)
+				goto failed
+			}
+			r.mu.Lock()
+			r.proxy = proxy
+			r.mu.Unlock()
+			env = withProxyEnv(env, proxy.URL)
+			notes = append(notes, "Метрики k6 идут через локальный приёмник агента: native histograms -> классические (_bucket{le}) для Prometheus")
+		}
 		args := buildArgs(p, filepath.Join(r.dir, "config.json"), summary, port)
 		cmd := exec.Command(m.cfg.K6Path, args...)
 		cmd.Dir = work
@@ -471,6 +485,7 @@ func (m *RunManager) launch(r *Run) {
 			return
 		}
 	}
+failed:
 	logf("Не удалось запустить k6 для run %s: %v", p.RunID, err)
 	code := 127
 	r.mu.Lock()
@@ -546,10 +561,17 @@ func (m *RunManager) awaitExit(r *Run, cmd *exec.Cmd, wg *sync.WaitGroup, summar
 	if r.pollStop != nil {
 		close(r.pollStop)
 	}
+	proxy := r.proxy
 	r.exitCode = &code
 	logs := r.logs
 	aborted, stopReq := r.aborted, r.stopRequested
 	r.mu.Unlock()
+	if proxy != nil {
+		time.Sleep(6 * time.Second) // k6 досылает последние метрики при завершении
+		logf("run %s: приёмник метрик: гистограмм преобразовано %d, запросов в Prometheus %d, ошибок %d", r.id,
+			proxy.Converted.Load(), proxy.Forwarded.Load(), proxy.Failed.Load())
+		proxy.Close()
+	}
 	if logs != nil {
 		logs.Close()
 		if d := logs.TotalDropped(); d > 0 {
@@ -828,3 +850,17 @@ func extractZip(archive, dest string) error {
 }
 
 func nowMs() int64 { return time.Now().UnixMilli() }
+
+// withProxyEnv направляет remote write k6 в локальный приёмник агента; заголовки аутентификации добавляет приёмник.
+func withProxyEnv(env map[string]string, url string) map[string]string {
+	out := map[string]string{}
+	for k, v := range env {
+		if strings.HasPrefix(k, "K6_PROMETHEUS_RW_HEADERS_") {
+			continue
+		}
+		out[k] = v
+	}
+	out["K6_PROMETHEUS_RW_SERVER_URL"] = url
+	out["K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM"] = "true"
+	return out
+}

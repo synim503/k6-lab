@@ -122,6 +122,11 @@ cp admin-server/target/k6-lab-admin.jar "$OUT/"
 echo "== Агент на Go (статический бинарь, JRE на генераторах не нужна)"
 AGENT_VERSION="$(grep -m1 -o '<version>0\.[^<]*</version>' pom.xml | sed 's/<[^>]*>//g')"
 AGENT_VERSION="${AGENT_VERSION:-dev}"
+# к версии добавляем идентификатор сборки (коммит; для изменённого дерева - ещё время): новый бинарь агента с тем же номером версии
+# иначе не импортировался бы как новый дистрибутив, а генераторы получали бы старого агента
+GIT_ID="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then GIT_ID="$GIT_ID-$(date +%Y%m%d%H%M)"; fi
+AGENT_VERSION="$AGENT_VERSION+$GIT_ID"
 for arch in amd64 arm64; do
   (cd agent-go && GOFLAGS=-mod=vendor GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
      -ldflags "-s -w -X main.version=$AGENT_VERSION" -o "../$DIST/agent/linux-$arch/k6-agent" .)

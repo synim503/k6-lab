@@ -23,6 +23,16 @@ class PromQueriesTest {
     }
 
     @Test
+    void classicBucketsAreSummedAcrossGeneratorsKeepingLeThenQuantile() {
+        Names c = n.withClassic(true);
+        String q = PromQueries.percentileMs(c, true, 95, 42, 60);
+        assertThat(q).isEqualTo("histogram_quantile(0.95, sum by (scenario, le) (increase(k6_op_duration_seconds_bucket{test_run_id=\"42\"}[60s]))) * 1000");
+        assertThat(PromQueries.percentileMs(c, false, 99, 7, 30)).contains("k6_iteration_duration_seconds_bucket").contains("sum by (scenario, le)");
+        // остальные запросы от режима не зависят
+        assertThat(PromQueries.ratePerSec(c, 5, 120)).isEqualTo(PromQueries.ratePerSec(n, 5, 120));
+    }
+
+    @Test
     void rateUsesIncreaseOverTheWindow() {
         assertThat(PromQueries.ratePerSec(n, 5, 120)).isEqualTo(
                 "sum by (scenario) (increase(k6_iterations_total{test_run_id=\"5\"}[120s])) / 120");

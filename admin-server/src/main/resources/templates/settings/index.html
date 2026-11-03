@@ -22,11 +22,17 @@
                         <div class="col-4"><label class="form-label">Пароль / токен</label>
                             <input class="form-control" type="password" name="secret" autocomplete="new-password" th:placeholder="${hasSecret} ? '(сохранён, пусто — не менять)' : ''"></div>
                     </div>
+                    <div class="mb-2"><label class="form-label">Режим гистограмм (для перцентилей)</label>
+                        <select class="form-select" name="histMode">
+                            <option value="CLASSIC" th:selected="${classicHist}">Классические (_bucket) — работает на любом Prometheus</option>
+                            <option value="NATIVE" th:selected="${!classicHist}">Native histograms — нужен Prometheus с --enable-feature=native-histograms</option>
+                        </select>
+                        <div class="form-text">В классическом режиме агент на генераторе сам преобразует метрики k6; перцентили считаются тем же histogram_quantile по суммарным корзинам всех генераторов.</div></div>
                     <div class="mb-2"><label class="form-label">Шаблон ссылки на Grafana</label>
                         <input class="form-control" name="grafana" th:value="${grafana}" placeholder="http://grafana/d/k6?var-run={{run_id}}&amp;from={{start}}&amp;to={{end}}"></div>
                     <button class="btn btn-primary">Сохранить</button>
                 </form>
-                <div class="form-text mt-2">Prometheus должен быть запущен с <code>--web.enable-remote-write-receiver</code> и <code>--enable-feature=native-histograms</code>.</div>
+                <div class="form-text mt-2">Prometheus должен быть запущен с <code>--web.enable-remote-write-receiver</code>; для режима native histograms — ещё и с <code>--enable-feature=native-histograms</code>.</div>
             </div></div>
 
             <div class="card mt-3" id="diag"><div class="card-header">Диагностика связки k6 → Prometheus</div><div class="card-body">

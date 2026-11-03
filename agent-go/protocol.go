@@ -35,6 +35,8 @@ type PrometheusParams struct {
 	Headers               map[string]string `json:"headers"`
 	PushInterval          string            `json:"pushInterval"`
 	TrendAsNativeHistogram bool             `json:"trendAsNativeHistogram"`
+	// ClassicHistograms: агент превращает native histograms в классические серии <имя>_bucket{le} перед отправкой в Prometheus
+	ClassicHistograms bool `json:"classicHistograms"`
 }
 
 type DataRule struct {

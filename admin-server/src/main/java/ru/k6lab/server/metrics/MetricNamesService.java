@@ -20,6 +20,10 @@ public class MetricNamesService {
     }
 
     public PromQueries.Names names() {
+        return namesFromSettings().withClassic(settings.classicHistograms());
+    }
+
+    private PromQueries.Names namesFromSettings() {
         PromQueries.Names d = PromQueries.Names.defaults();
         String json = settings.get(SettingsService.METRIC_NAMES, "");
         if (json.isBlank()) {

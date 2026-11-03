@@ -52,7 +52,7 @@
             </div></div>
 
             <h5>Ступени и операции</h5>
-            <div class="small text-muted mb-2">Перцентили — histogram_quantile по native histograms суммарно по всем генераторам. Окно ступени — удержание без первых секунд выхода на режим.</div>
+            <div class="small text-muted mb-2">Перцентили — histogram_quantile по гистограммам, просуммированным по всем генераторам. Окно ступени — удержание без первых секунд выхода на режим.</div>
             <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
 
             <h5 class="mt-4">Генераторы (справочно)</h5>

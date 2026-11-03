@@ -514,7 +514,8 @@ class RunE2EIT extends AbstractIT {
             settings.savePrometheus(prom.rwUrl(), prom.baseUrl() + "/", ru.k6lab.server.settings.SettingsService.AuthType.NONE, null, null, "");
             assertThat(diagnostics.passed()).isFalse();
 
-            // метрики приходят, но гистограмм нет (Prometheus без native histograms): понятная причина, а не «метрик нет»
+            // режим native histograms: метрики приходят, но гистограмм нет (Prometheus без флага): понятная причина, а не «метрик нет»
+            settings.set(ru.k6lab.server.settings.SettingsService.HISTOGRAM_MODE, "NATIVE");
             prom.respond((q, t) -> q.startsWith("count by (__name__)") ? Map.of("k6_iterations_total", 1.0, "k6_http_reqs_total", 1.0) : Map.of());
             var bad = diagnostics.runSync(a.id());
             assertThat(bad.ok()).isFalse();
@@ -532,6 +533,13 @@ class RunE2EIT extends AbstractIT {
             var renamed = diagnostics.runSync(a.id());
             assertThat(renamed.ok()).isFalse();
             assertThat(renamed.summary()).contains("k6_iteration_duration").contains("Имена метрик");
+
+            // классический режим: метрики приходят, корзин нет (агент без поддержки режима) - подсказка про агента
+            settings.set(ru.k6lab.server.settings.SettingsService.HISTOGRAM_MODE, "CLASSIC");
+            prom.respond((q, t) -> q.startsWith("count by (__name__)") ? Map.of("k6_iterations_total", 1.0) : Map.of());
+            var noBuckets = diagnostics.runSync(a.id());
+            assertThat(noBuckets.ok()).isFalse();
+            assertThat(noBuckets.summary()).contains("_bucket").contains("агент");
 
             // ни одной серии: метрики не доходят вовсе
             prom.respond((q, t) -> Map.of());

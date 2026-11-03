@@ -255,7 +255,7 @@ public class PrometheusDiagnostics implements AgentEventListener {
         tags.put("generator", session.generatorName());
         tags.put("test_scenario", "prometheus-diagnostics");
         Map<String, String> env = Map.of("TARGET", target);
-        Messages.PrometheusParams promParams = new Messages.PrometheusParams(p.rwUrl(), p.authHeaders(), "2s", true);
+        Messages.PrometheusParams promParams = new Messages.PrometheusParams(p.rwUrl(), p.authHeaders(), "2s", true, settings.classicHistograms());
         String cmdId = UUID.randomUUID().toString();
         session.send(new Messages.Prepare(cmdId, runId, artifactUrl, pend.sha, cfg, env, Map.of(), "0:1", null, tags, List.of(),
                 promParams, 6565, ConfigInput.SYSTEM_TAGS, "script.js", 50));
@@ -289,6 +289,7 @@ public class PrometheusDiagnostics implements AgentEventListener {
 
     private void checkMetrics(List<Step> steps, SettingsService.Prometheus p, String runId, Instant started) throws Exception {
         String configured = names.names().iterationDuration();
+        boolean classic = settings.classicHistograms();
         String tag = "{test_run_id=\"" + runId + "\"}";
         String sel = configured + tag;
         // remote write приходит с задержкой: ждём до 40 с. Сначала ищем ЛЮБЫЕ серии с нашим тегом (а не одну конкретную метрику):
@@ -300,7 +301,7 @@ public class PrometheusDiagnostics implements AgentEventListener {
             try {
                 List<PrometheusClient.Sample> series = prom.query(p, "count by (__name__) ({test_run_id=\"" + runId + "\"})", Instant.now());
                 found = series.stream().map(x -> x.labels().get("__name__")).filter(x -> x != null).sorted().toList();
-                q = prom.single(p, "histogram_quantile(0.95, sum(increase(" + sel + "[2m]))) * 1000", Instant.now()).orElse(null);
+                q = prom.single(p, quantileQuery(configured, tag, classic), Instant.now()).orElse(null);
             } catch (IOException e) {
                 lastErr = e.getMessage();
             }
@@ -318,13 +319,20 @@ public class PrometheusDiagnostics implements AgentEventListener {
         step(steps, "Метрики k6 в Prometheus", true, "серий с тегом test_run_id: " + found.size()
                 + (found.isEmpty() ? "" : " (" + sample + (found.size() > 6 ? ", …" : "") + ")"));
         if (q != null) {
-            step(steps, "histogram_quantile (native histograms)", true, String.format(java.util.Locale.ROOT, "p95 = %.1f мс по " + configured, q));
+            step(steps, classic ? "histogram_quantile (классические гистограммы)" : "histogram_quantile (native histograms)", true,
+                    String.format(java.util.Locale.ROOT, "p95 = %.1f мс по " + configured + (classic ? "_bucket" : ""), q));
+            return;
+        }
+        if (classic) {
+            step(steps, "histogram_quantile (классические гистограммы)", false, "Метрики приходят (" + sample + "), но корзин " + configured
+                    + "_bucket нет. Классические гистограммы формирует агент генератора: нужен агент на Go версии с поддержкой этого режима "
+                    + "(обновите агента на генераторе). Либо переключите «Режим гистограмм» на native и включите в Prometheus --enable-feature=native-histograms.");
             return;
         }
         // метрики идут, а гистограммы по настроенному имени нет: ищем, под каким именем она приходит
         String other = found.stream().filter(x -> x.contains("iteration_duration") && !x.equals(configured)).findFirst().orElse(null);
         if (other != null) {
-            Double alt = prom.single(p, "histogram_quantile(0.95, sum(increase(" + other + tag + "[2m]))) * 1000", Instant.now()).orElse(null);
+            Double alt = prom.single(p, quantileQuery(other, tag, false), Instant.now()).orElse(null);
             if (alt != null) {
                 step(steps, "histogram_quantile (native histograms)", false, "Гистограмма приходит под именем " + other
                         + ", а в настройках указано " + configured + ". Исправьте «Имена метрик k6» (iterationDuration, opDuration, ...): имена зависят от версии k6 и remote write.");
@@ -337,6 +345,12 @@ public class PrometheusDiagnostics implements AgentEventListener {
         step(steps, "histogram_quantile (native histograms)", false, "Метрики приходят (" + sample + "), но гистограммы времени итерации нет: "
                 + "Prometheus не принимает native histograms. Включите --enable-feature=native-histograms; k6 передаёт "
                 + "K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true. Если имена метрик у вас другие - поправьте «Имена метрик k6».");
+    }
+
+    private static String quantileQuery(String metric, String tag, boolean classic) {
+        return classic
+                ? "histogram_quantile(0.95, sum by (le) (increase(" + metric + "_bucket" + tag + "[2m]))) * 1000"
+                : "histogram_quantile(0.95, sum(increase(" + metric + tag + "[2m]))) * 1000";
     }
 
     private record PromNames(String iter) {

@@ -24,6 +24,8 @@ public class SettingsService {
     public static final String GRAFANA_URL_TPL = "grafana.url.template";
     public static final String DIAGNOSTICS = "diagnostics.last";
     public static final String METRIC_NAMES = "metrics.names";
+    /** NATIVE - k6 шлёт native histograms прямо в Prometheus; CLASSIC - агент переводит их в классические _bucket{le}. */
+    public static final String HISTOGRAM_MODE = "metrics.histogram.mode";
     public static final String LOG_LINES_PER_SEC = "agent.log.lines_per_second";
     public static final String RETENTION_LOG_DAYS = "retention.logs.days";
     public static final String RETENTION_METRICS_DAYS = "retention.metrics.days";
@@ -117,6 +119,11 @@ public class SettingsService {
 
     public boolean hasPrometheusSecret() {
         return get(PROM_AUTH_SECRET).isPresent();
+    }
+
+    /** По умолчанию классические гистограммы: работают на любом Prometheus, без флага native-histograms. */
+    public boolean classicHistograms() {
+        return !"NATIVE".equals(get(HISTOGRAM_MODE, "CLASSIC"));
     }
 
     public int logLinesPerSecond() {

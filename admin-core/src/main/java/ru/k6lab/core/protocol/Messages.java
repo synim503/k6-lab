@@ -24,8 +24,16 @@ public final class Messages {
     public record LogLine(long ts, String stream, String line) {
     }
 
+    /**
+     * classicHistograms: агент принимает remote write k6 локально и отправляет в Prometheus классические серии
+     * (_bucket{le}, _count, _sum) вместо native histograms - для Prometheus без --enable-feature=native-histograms.
+     */
     public record PrometheusParams(String url, Map<String, String> headers, String pushInterval,
-                                   boolean trendAsNativeHistogram) {
+                                   boolean trendAsNativeHistogram, boolean classicHistograms) {
+
+        public PrometheusParams(String url, Map<String, String> headers, String pushInterval, boolean trendAsNativeHistogram) {
+            this(url, headers, pushInterval, trendAsNativeHistogram, false);
+        }
     }
 
     public record DataRule(String path, String mode, boolean hasHeader) {

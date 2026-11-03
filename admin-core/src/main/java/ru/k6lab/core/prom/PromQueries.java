@@ -1,7 +1,7 @@
 package ru.k6lab.core.prom;
 
 /**
- * Построение PromQL-запросов к метрикам k6 (remote write, native histograms).
+ * Построение PromQL-запросов к метрикам k6 (remote write; гистограммы - native либо классические _bucket{le}).
  * <p>
  * Все перцентили считаются ТОЛЬКО через {@code histogram_quantile} по native histograms за окно: сначала
  * суммирование гистограмм по всем генераторам (sum), затем квантиль - это единственный корректный способ агрегации.
@@ -15,12 +15,23 @@ public final class PromQueries {
 
     /** Имена метрик в Prometheus (с суффиксами единиц). По умолчанию - по документации k6 для native histograms. */
     public record Names(String opDuration, String iterationDuration, String iterations, String dropped, String opCount,
-                        String opErrors, String httpReqFailed, String checks, String vus) {
+                        String opErrors, String httpReqFailed, String checks, String vus, boolean classic) {
+
+        /** native histograms (по умолчанию в этом конструкторе). */
+        public Names(String opDuration, String iterationDuration, String iterations, String dropped, String opCount,
+                     String opErrors, String httpReqFailed, String checks, String vus) {
+            this(opDuration, iterationDuration, iterations, dropped, opCount, opErrors, httpReqFailed, checks, vus, false);
+        }
 
         public static Names defaults() {
             return new Names("k6_op_duration_seconds", "k6_iteration_duration_seconds", "k6_iterations_total",
                     "k6_dropped_iterations_total", "k6_op_count_total", "k6_op_errors_total", "k6_http_req_failed_rate",
                     "k6_checks_rate", "k6_vus");
+        }
+
+        /** Те же имена, но гистограммы - классические (_bucket{le}), которые агент формирует из native histograms. */
+        public Names withClassic(boolean classic) {
+            return new Names(opDuration, iterationDuration, iterations, dropped, opCount, opErrors, httpReqFailed, checks, vus, classic);
         }
     }
 
@@ -46,6 +57,11 @@ public final class PromQueries {
     /** Перцентиль времени отклика, мс, по каждой операции (scenario) за окно. */
     public static String percentileMs(Names n, boolean helper, int percentile, long runId, long rangeSec) {
         String metric = helper ? n.opDuration() : n.iterationDuration();
+        if (n.classic()) {
+            // классические корзины: суммируем по всем генераторам с сохранением le, затем квантиль
+            return "histogram_quantile(" + (percentile / 100.0) + ", sum by (scenario, le) (increase(" + selector(metric + "_bucket", runId, null)
+                    + "[" + range(rangeSec) + "]))) * 1000";
+        }
         return "histogram_quantile(" + (percentile / 100.0) + ", sum by (scenario) (increase(" + selector(metric, runId, null)
                 + "[" + range(rangeSec) + "]))) * 1000";
     }
