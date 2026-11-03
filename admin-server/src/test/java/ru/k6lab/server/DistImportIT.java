@@ -43,7 +43,16 @@ class DistImportIT extends AbstractIT {
         props.setDistDir(dir);
         DistributionImporter importer = new DistributionImporter(distributions, repo, props);
 
+        // старая версия агента, загруженная раньше: после импорта новой остаётся только актуальная
+        distributions.upload(DistributionArtifact.Kind.AGENT, "", "9.0.0", DistributionArtifact.Arch.LINUX_AMD64, "k6-agent",
+                new java.io.ByteArrayInputStream("old-agent".getBytes(StandardCharsets.UTF_8)), true);
         assertThat(importer.importAll()).isEqualTo(3); // отсутствующий файл и путь вне каталога пропущены
+        var agents = repo.findByKindOrderByCreatedAtDesc(DistributionArtifact.Kind.AGENT).stream()
+                .filter(a -> a.getArch() == DistributionArtifact.Arch.LINUX_AMD64).toList();
+        assertThat(agents).singleElement().satisfies(a -> {
+            assertThat(a.getVersion()).isEqualTo("9.9.9");
+            assertThat(a.isDefault()).isTrue();
+        });
         assertThat(importer.importAll()).isZero();     // повторный старт ничего не дублирует
         var k6 = repo.findFirstByKindAndVersionAndArchAndLabel(DistributionArtifact.Kind.K6, "9.9.9", DistributionArtifact.Arch.LINUX_AMD64, "");
         assertThat(k6).isPresent();

@@ -6,10 +6,17 @@
 <th:block layout:fragment="content">
     <div class="page-head">
         <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-hdd-network"></i></span>Генераторы</h3>
-        <div sec:authorize="hasRole('ADMIN')" class="btn-group">
+        <div sec:authorize="hasRole('ADMIN')" class="d-flex gap-2 flex-wrap">
+            <form th:action="@{/generators/update-all}" method="post"
+                  onsubmit="return confirm('Обновить агент и k6 на всех генераторах с устаревшей версией? Занятые будут пропущены.')">
+                <button class="btn btn-outline-warning" th:classappend="${outdated > 0} ? 'fw-semibold'">
+                    <i class="bi bi-arrow-repeat me-1"></i>Обновить агент на всех
+                    <span class="badge text-bg-warning ms-1" th:if="${outdated > 0}" th:text="${outdated}"></span></button></form>
+            <div class="btn-group">
             <a class="btn btn-primary" th:href="@{/quick/generator}"><i class="bi bi-plus-lg me-1"></i>Добавить сервер</a>
             <a class="btn btn-outline-secondary" th:href="@{/generators/new}">Расширенно</a>
             <a class="btn btn-outline-primary" th:href="@{/generators/bulk}">Массовое добавление</a>
+            </div>
         </div>
     </div>
 

@@ -84,6 +84,35 @@ public class DistributionService {
         return saved;
     }
 
+    /**
+     * Оставляет по одной версии агента на архитектуру: ту, что по умолчанию (иначе самую новую). Старые версии не нужны:
+     * обновление генераторов всегда ставит актуальную.
+     * @return сколько версий удалено
+     */
+    @Transactional
+    public int pruneAgents() throws IOException {
+        int removed = 0;
+        for (Arch arch : Arch.values()) {
+            List<DistributionArtifact> all = repo.findByKindOrderByCreatedAtDesc(Kind.AGENT).stream()
+                    .filter(a -> a.getArch() == arch).toList();
+            if (all.size() < 2) {
+                continue;
+            }
+            DistributionArtifact keep = all.stream().filter(DistributionArtifact::isDefault).findFirst().orElse(all.get(0));
+            keep.setDefault(true);
+            for (DistributionArtifact a : all) {
+                if (!a.getId().equals(keep.getId())) {
+                    repo.delete(a);
+                    repo.flush();
+                    storage.delete(a.getStorageKey());
+                    audit.record("distribution.prune", "distribution", a.getId(), Map.of("version", a.getVersion()));
+                    removed++;
+                }
+            }
+        }
+        return removed;
+    }
+
     @Transactional
     public void setDefault(Long id) {
         DistributionArtifact a = repo.findById(id).orElseThrow();

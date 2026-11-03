@@ -70,6 +70,9 @@ class QuickFlowIT extends AbstractIT {
                 .andExpect(content().string(containsString("Генераторы")))
                 .andExpect(content().string(containsString("Последние запуски")))
                 .andExpect(content().string(containsString("Разделы")));
+        // кнопка «обновить агент на всех»: на странице есть, при отсутствии устаревших - понятное сообщение
+        mvc.perform(get("/generators")).andExpect(content().string(containsString("Обновить агент на всех")));
+        mvc.perform(post("/generators/update-all").with(csrf())).andExpect(status().is3xxRedirection());
         mvc.perform(get("/dashboard/running")).andExpect(status().isOk()).andExpect(content().string(containsString("running-box")));
     }
 

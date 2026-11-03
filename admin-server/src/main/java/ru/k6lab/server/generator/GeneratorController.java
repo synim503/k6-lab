@@ -56,7 +56,9 @@ public class GeneratorController {
 
     @GetMapping
     public String list(Model model) {
-        model.addAttribute("generators", views.all());
+        List<GeneratorView> all = views.all();
+        model.addAttribute("generators", all);
+        model.addAttribute("outdated", all.stream().filter(GeneratorView::hasDrift).count());
         model.addAttribute("pools", service.pools());
         return "generators/list";
     }
@@ -232,6 +234,34 @@ public class GeneratorController {
     @PreAuthorize("hasRole('ADMIN')")
     public String uninstall(@PathVariable Long id, RedirectAttributes ra) {
         return run(id, ra, () -> deploy.startUninstall(id));
+    }
+
+    /** Обновляет агент (и k6) на всех генераторах, версия которых отличается от актуальной; занятые пропускаются. */
+    @PostMapping("/update-all")
+    @PreAuthorize("hasRole('ADMIN')")
+    public String updateAll(RedirectAttributes ra) {
+        int started = 0;
+        List<String> skipped = new ArrayList<>();
+        for (GeneratorView v : views.all()) {
+            if (!v.hasDrift()) {
+                continue;
+            }
+            try {
+                deploy.startUpdate(v.g().getId(), null, null);
+                started++;
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                skipped.add(v.g().getName() + " (" + e.getMessage() + ")");
+            }
+        }
+        if (started == 0 && skipped.isEmpty()) {
+            ra.addFlashAttribute("info", "Все генераторы уже на актуальной версии агента");
+            return "redirect:/generators";
+        }
+        ra.addFlashAttribute("info", "Обновление запущено на генераторах: " + started);
+        if (!skipped.isEmpty()) {
+            ra.addFlashAttribute("error", "Пропущены: " + String.join("; ", skipped));
+        }
+        return "redirect:/deployments";
     }
 
     /** Массовое обновление агента/k6 по пулу: простаивающие обновляются, занятые пропускаются. */

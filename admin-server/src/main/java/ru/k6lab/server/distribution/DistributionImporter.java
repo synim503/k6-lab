@@ -56,6 +56,15 @@ public class DistributionImporter {
         if (!Files.isRegularFile(manifest)) {
             return 0;
         }
+        int imported = importManifest(dir, manifest);
+        int pruned = distributions.pruneAgents();
+        if (pruned > 0) {
+            log.info("Удалено устаревших версий агента: {}", pruned);
+        }
+        return imported;
+    }
+
+    private int importManifest(Path dir, Path manifest) throws IOException {
         JsonNode root = MAPPER.readTree(manifest.toFile());
         int imported = 0;
         for (JsonNode item : root.path("items")) {
