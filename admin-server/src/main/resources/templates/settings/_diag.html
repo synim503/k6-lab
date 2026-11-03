@@ -22,7 +22,7 @@
                 <b th:text="${s.name}"></b> — <span th:text="${s.detail}"></span></li>
         </ul>
     </div>
-    <div th:if="${!diagRunning and diagLast == null}" class="text-muted">Диагностика ещё не выполнялась. Запуски тестов заблокированы до её успешного прохождения.</div>
+    <div th:if="${!diagRunning and diagLast == null}" class="text-muted">Диагностика ещё не выполнялась. Запуски скриптов заблокированы до её успешного прохождения.</div>
 </div>
 </body>
 </html>

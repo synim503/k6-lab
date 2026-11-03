@@ -43,7 +43,7 @@
                     <div class="col-auto"><button class="btn btn-outline-primary" th:disabled="${connected.isEmpty() or diagRunning}">Проверить</button></div>
                 </form>
                 <div th:replace="~{settings/_diag :: panel}"></div>
-                <div class="form-text mt-2" th:if="${requireDiagnostics}">Запуск тестов разрешён только после успешной диагностики.</div>
+                <div class="form-text mt-2" th:if="${requireDiagnostics}">Запуск скриптов разрешён только после успешной диагностики.</div>
             </div></div>
         </div>
 

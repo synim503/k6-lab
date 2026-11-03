@@ -25,9 +25,9 @@
         <input class="form-control" th:field="*{dir}" placeholder="/opt/k6-agent или ~/k6-agent">
     </div>
     <div class="col-md-4">
-        <label class="form-label">Максимум одновременных run</label>
+        <label class="form-label">Максимум одновременных запусков</label>
         <input class="form-control" type="number" min="1" th:field="*{maxConcurrentRuns}">
-        <div class="form-text">Больше 1 — тесты будут конкурировать за ресурсы генератора.</div>
+        <div class="form-text">Больше 1 — запуски будут конкурировать за ресурсы генератора.</div>
         <div class="text-danger small" th:errors="*{maxConcurrentRuns}"></div>
     </div>
     <div class="col-md-12">

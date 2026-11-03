@@ -24,9 +24,9 @@
                     <tr><th>k6</th><td>
                         <span th:text="${v.g().k6Version} ?: '—'" th:classappend="${v.k6Drift} ? 'text-warning fw-bold'"></span>
                         <span class="text-warning small" th:if="${v.k6Drift}">(по умолчанию: [[${v.defaultK6}]])</span></td></tr>
-                    <tr><th>Макс. одновременных run</th><td><span th:text="${v.g().maxConcurrentRuns}"></span>
-                        <span class="text-warning small" th:if="${v.g().maxConcurrentRuns > 1}">— тесты конкурируют за ресурсы генератора</span></td></tr>
-                    <tr><th>Активных run</th><td th:text="${v.g().activeRuns}"></td></tr>
+                    <tr><th>Макс. одновременных запусков</th><td><span th:text="${v.g().maxConcurrentRuns}"></span>
+                        <span class="text-warning small" th:if="${v.g().maxConcurrentRuns > 1}">— запуски конкурируют за ресурсы генератора</span></td></tr>
+                    <tr><th>Активных запусков</th><td th:text="${v.g().activeRuns}"></td></tr>
                     <tr><th>Смещение часов</th><td th:classappend="${v.clockBad} ? 'metric-hot'" th:text="${v.clockOffsetMs != null} ? ${v.clockOffsetMs} + ' мс' : '—'"></td></tr>
                     <tr><th>Последний heartbeat</th><td th:text="${v.g().lastHeartbeatAt} ?: '—'"></td></tr>
                     <tr><th>CPU</th><td th:classappend="${v.cpuHot} ? 'metric-hot'" th:text="${v.cpu != null} ? ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%' : '—'"></td></tr>
@@ -62,7 +62,7 @@
                                 <option value="">по умолчанию</option>
                                 <option th:each="a : ${k6s}" th:value="${a.id}" th:text="${a.version} + ' ' + ${a.arch.title}"></option></select></div>
                         <div class="col-md-2 d-flex align-items-end"><button class="btn btn-sm btn-primary w-100" th:disabled="${v.g().busy}">Обновить</button></div>
-                        <div class="form-text" th:if="${v.g().busy}">Обновление недоступно, пока генератор занят тестом.</div>
+                        <div class="form-text" th:if="${v.g().busy}">Обновление недоступно, пока генератор занят запуском.</div>
                     </form>
                 </div>
                 <div class="card-body border-top">
