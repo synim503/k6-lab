@@ -194,6 +194,7 @@ type Prepare struct {
 	SystemTags               []string          `json:"systemTags"`
 	Entrypoint               string            `json:"entrypoint"`
 	LogLinesPerSecond        int               `json:"logLinesPerSecond"`
+	K6Flags                  []string          `json:"k6Flags"`
 }
 
 type Start struct {

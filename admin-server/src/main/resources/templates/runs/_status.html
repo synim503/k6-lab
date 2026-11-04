@@ -19,14 +19,6 @@
         <form th:action="@{/runs/{id}/stop(id=${run.id})}" method="post"><button class="btn btn-warning" th:disabled="${run.status.name() == 'STOPPING'}">Stop (graceful)</button></form>
         <form th:action="@{/runs/{id}/abort(id=${run.id})}" method="post" onsubmit="return confirm('Abort убьёт k6 (SIGKILL) на всех генераторах, метрики последних секунд могут потеряться. Продолжить?')">
             <button class="btn btn-danger">Abort</button></form>
-        <th:block th:if="${v.canControl}">
-            <form th:action="@{/runs/{id}/control(id=${run.id})}" method="post"><input type="hidden" name="action" value="PAUSE"><button class="btn btn-outline-secondary">Pause</button></form>
-            <form th:action="@{/runs/{id}/control(id=${run.id})}" method="post"><input type="hidden" name="action" value="RESUME"><button class="btn btn-outline-secondary">Resume</button></form>
-            <form th:action="@{/runs/{id}/control(id=${run.id})}" method="post" class="d-flex gap-1"><input type="hidden" name="action" value="SCALE_VUS">
-                <input class="form-control" style="width:90px" type="number" min="0" name="vus" placeholder="VU"><button class="btn btn-outline-secondary">Изменить VU</button></form>
-        </th:block>
-        <span class="small text-muted align-self-center" th:if="${run.status.name() == 'RUNNING' and !v.canControl}"
-              title="k6 не поддерживает pause/resume и смену VU для arrival-rate и ramping-vus">Pause/Resume и смена VU доступны только для externally-controlled (экспертный режим)</span>
     </div>
 
     <div class="card mb-3"><div class="card-header">Генераторы</div>

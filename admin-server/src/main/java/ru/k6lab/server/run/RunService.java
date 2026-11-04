@@ -43,7 +43,11 @@ public class RunService {
     }
 
     public record CreateRequest(Long scriptId, List<GeneratorSel> generators, Run.FailurePolicy failurePolicy,
-                                Integer prepareTimeoutSec) {
+                                Integer prepareTimeoutSec, List<K6Flag> flags) {
+
+        public CreateRequest(Long scriptId, List<GeneratorSel> generators, Run.FailurePolicy failurePolicy, Integer prepareTimeoutSec) {
+            this(scriptId, generators, failurePolicy, prepareTimeoutSec, List.of());
+        }
     }
 
     private final RunRepository runs;
@@ -127,6 +131,9 @@ public class RunService {
         run.setPrepareTimeoutSec(req.prepareTimeoutSec() == null || req.prepareTimeoutSec() < 10 ? 120 : req.prepareTimeoutSec());
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("generators", sel.stream().map(g -> Map.of("id", g.generatorId(), "weight", g.weight())).toList());
+        if (req.flags() != null && !req.flags().isEmpty()) {
+            request.put("k6Flags", req.flags().stream().map(Enum::name).toList());
+        }
         run.setRequest(request);
         run.setK6Config(plan.config());
         run.setScriptVersionId(plan.version().getId());

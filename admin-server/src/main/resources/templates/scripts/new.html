@@ -4,7 +4,8 @@
 <head><title>Новый скрипт</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-file-earmark-plus"></i></span>Новый скрипт</h3></div>
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-file-earmark-plus"></i></span>Новый скрипт</h3>
+        <a class="btn btn-outline-primary btn-sm" th:href="@{/scripts/sandbox}"><i class="bi bi-bug me-1"></i>Написать и отладить в браузере</a></div>
     <ul class="nav nav-tabs mb-3">
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-upload" type="button">Загрузить файл</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-git" type="button">Из Git</button></li>

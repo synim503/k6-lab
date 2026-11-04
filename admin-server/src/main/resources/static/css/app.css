@@ -110,7 +110,46 @@ details > summary { cursor: pointer; user-select: none; }
 /* ---------- прочее ---------- */
 .log-view { background: #0b1020; color: #d7dae0; font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
   font-size: 12.5px; padding: 14px; border-radius: 12px; max-height: 70vh; min-height: 200px; overflow: auto; white-space: pre-wrap; border: 1px solid #1c2440; }
+/* строки лога: время приглушено, уровень и генератор цветом */
+.log-view .ll { display: block; line-height: 1.5; padding: 0 4px; border-radius: 4px; }
+.log-view .ll:hover { background: rgba(255, 255, 255, .05); }
+.log-view .ll-t { color: #6b7694; }
+.log-view .ll-g { color: #8b9cf7; }
+.log-view .ll-l { font-weight: 700; display: inline-block; min-width: 4.2em; }
+.log-view .ll-INFO .ll-l { color: #5eead4; }
+.log-view .ll-DEBUG .ll-l { color: #94a3b8; }
+.log-view .ll-DEBUG .ll-m { color: #94a3b8; }
+.log-view .ll-WARN .ll-l { color: #fbbf24; }
+.log-view .ll-WARN { background: rgba(251, 191, 36, .08); }
+.log-view .ll-ERROR .ll-l, .log-view .ll-ERROR .ll-m { color: #f87171; }
+.log-view .ll-ERROR { background: rgba(248, 113, 113, .12); }
 .metric-hot { color: #dc3545; font-weight: 600; }
+
+/* ---------- итоги запуска (вкладка «Результаты») ---------- */
+#results-panel h5 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--k6-muted); font-weight: 700; margin: 1.5rem 0 .6rem; }
+#results-panel .step-block { background: var(--k6-surface); border: 1px solid var(--k6-border); border-radius: var(--k6-radius);
+  box-shadow: var(--k6-shadow); padding: 1rem 1.2rem; margin-bottom: 1rem; overflow-x: auto; }
+#results-panel .step-h { font-size: 1.05rem; font-weight: 650; display: flex; align-items: center; gap: .7rem; margin: 0 0 .3rem; }
+#results-panel .muted { color: var(--k6-muted); font-size: .85rem; margin-bottom: .6rem; }
+#results-panel .pill { display: inline-block; padding: .18rem .7rem; border-radius: 999px; font-size: .72rem; font-weight: 700;
+  letter-spacing: .03em; color: #fff; background: #6b7280; }
+#results-panel .pill.ok { background: #16a34a; }
+#results-panel .pill.bad { background: #dc2626; }
+#results-panel .pill.warn { background: #f59e0b; }
+#results-panel .bad-text { color: #dc2626; font-weight: 650; }
+#results-panel .reasons { list-style: none; margin: 0 0 .75rem; padding: .6rem .9rem; background: #fef2f2; border-left: 3px solid #dc2626;
+  border-radius: 8px; color: #991b1b; font-size: .88rem; }
+#results-panel .reasons li + li { margin-top: .2rem; }
+#results-panel .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .86rem; font-variant-numeric: tabular-nums; }
+#results-panel .tbl th { background: #f8f9fd; color: var(--k6-muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+  font-weight: 650; padding: .5rem .7rem; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--k6-border); }
+#results-panel .tbl th:first-child, #results-panel .tbl td:first-child { text-align: left; font-weight: 600; }
+#results-panel .tbl td { padding: .5rem .7rem; border-bottom: 1px solid #eef0f6; text-align: right; white-space: nowrap; }
+#results-panel .tbl tbody tr:last-child td { border-bottom: 0; }
+#results-panel .tbl tbody tr:hover td { background: #f6f7fd; }
+#results-panel .tbl .row-bad td { background: #fef2f2; }
+#results-panel .tbl .row-bad:hover td { background: #fee2e2; }
+#results-panel .tbl .row-bad td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
 .step-RUNNING { color: #4f46e5; } .step-OK { color: #198754; } .step-FAILED { color: #dc3545; } .step-SKIPPED { color: #6c757d; }
 .secret-hint { font-size: 12px; color: var(--k6-muted); }
 #deploy-log { border-radius: 12px; }

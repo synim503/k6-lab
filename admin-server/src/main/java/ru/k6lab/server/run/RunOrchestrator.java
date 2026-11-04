@@ -224,7 +224,8 @@ public class RunOrchestrator implements AgentEventListener {
         session.send(new Messages.Prepare(cmdId, String.valueOf(run.getId()), artifactUrl(gen.getServerUrl(), run.getId(), token),
                 artifact.sha256(), run.getK6Config(), snap.env(), secretValues, rg.segment(), snap.segmentSequence(),
                 tags, rules, promParams, rg.getK6ApiPort(), ConfigInput.SYSTEM_TAGS, snap.script().entrypoint(),
-                settings.logLinesPerSecond()));
+                settings.logLinesPerSecond(), K6Flag.args(run.getRequest() == null ? null
+                        : run.getRequest().get("k6Flags") instanceof List<?> l ? l : null)));
     }
 
     /** ws://host:port/agent/ws -> http://host:port/agent/artifact/{run}/{token}: агент качает архив с тем же сервером. */

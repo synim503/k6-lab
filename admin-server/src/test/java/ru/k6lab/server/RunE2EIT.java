@@ -311,6 +311,21 @@ class RunE2EIT extends AbstractIT {
     }
 
     @Test
+    @Order(9)
+    void k6FlagsFromRunRequestReachK6OnTheAgent() throws Exception {
+        Agent a = startAgent("e2eflags", 1);
+        Script s = scriptWithLoad("flags", 8, false, "work");
+        Run run = runService.create(new RunService.CreateRequest(s.getId(), List.of(new RunService.GeneratorSel(a.id(), 1)),
+                Run.FailurePolicy.CONTINUE, 90, List.of(ru.k6lab.server.run.K6Flag.VERBOSE, ru.k6lab.server.run.K6Flag.NO_THRESHOLDS)));
+        long id = run.getId();
+        assertThat(run.getRequest().get("k6Flags")).isEqualTo(List.of("VERBOSE", "NO_THRESHOLDS"));
+        Run finished = awaitStatus(id, Duration.ofSeconds(120), RunStatus.FINISHED, RunStatus.FAILED);
+        assertThat(finished.getStatus()).as(dump(id)).isEqualTo(RunStatus.FINISHED);
+        // --verbose включил debug-уровень k6: такие строки есть в логе запуска только с этим флагом
+        await().atMost(Duration.ofSeconds(15)).until(() -> logLines(id).stream().anyMatch(l -> l.contains("level=debug")));
+    }
+
+    @Test
     @Order(2)
     void twoGeneratorsShareLoadByWeightsAndSplitData() throws Exception {
         Agent a = startAgent("e2e2a", 1);

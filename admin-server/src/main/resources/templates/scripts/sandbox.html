@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Отладка скрипта</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3><span class="icon-tile"><i class="bi bi-bug"></i></span>Отладка скрипта</h3>
+        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/new}"><i class="bi bi-arrow-left me-1"></i>К созданию скрипта</a>
+    </div>
+    <div class="alert alert-warning py-2 small" th:if="${k6Version == null}">k6 на сервере админки не найден: загрузите k6 для архитектуры сервера в «Дистрибутивы» или задайте <code>K6LAB_K6_PATH</code>.</div>
+    <div class="text-muted small mb-3">Соберите скрипт из файлов (перетащите файлы и папки на список), запустите его здесь же и смотрите лог. Выполняется <strong>на сервере админки</strong>
+        (<span th:text="${k6Version ?: 'k6 не найден'}"></span>), поэтому доступность адресов может отличаться от генераторов. Окружение процесса пустое: переменные и секреты админки скрипту не видны.
+        Готовый набор файлов сохраняется как обычный скрипт.</div>
+
+    <div class="row g-3">
+        <div class="col-lg-3">
+            <div class="card" id="sb-drop">
+                <div class="card-header d-flex justify-content-between align-items-center">Файлы
+                    <span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-add"><i class="bi bi-file-earmark-plus"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-pick" title="Выбрать файлы"><i class="bi bi-upload"></i></button>
+                    </span></div>
+                <div class="list-group list-group-flush" id="sb-files"></div>
+                <div class="card-body text-center text-muted small sb-hint"><i class="bi bi-cloud-arrow-up fs-4 d-block"></i>Перетащите сюда файлы или папки:
+                    модули, данные, сертификаты</div>
+                <input type="file" id="sb-input" multiple hidden>
+            </div>
+            <div class="form-text mt-2">Звёздочка — основной файл (entrypoint). Файлы читаются из скрипта по относительному пути: <code>open('./data/users.csv')</code>.</div>
+        </div>
+        <div class="col-lg-9">
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center"><code id="sb-cur">—</code>
+                    <span class="small text-muted">Ctrl+Enter — запустить</span></div>
+                <div id="sb-editor" style="height: 46vh"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mt-0">
+        <div class="col-lg-5">
+            <div class="card card-body">
+                <div class="row g-2">
+                    <div class="col-12"><label class="form-label mb-1">Функция <span class="text-muted small">(пусто — default)</span></label>
+                        <input class="form-control form-control-sm" id="sb-exec" list="sb-fns" placeholder="default" autocomplete="off">
+                        <datalist id="sb-fns"></datalist></div>
+                    <div class="col-4"><label class="form-label mb-1">VU</label><input class="form-control form-control-sm" id="sb-vus" type="number" min="1" max="50" value="1"></div>
+                    <div class="col-4"><label class="form-label mb-1">Итераций на VU</label><input class="form-control form-control-sm" id="sb-iter" type="number" min="1" max="1000" value="1"></div>
+                    <div class="col-4"><label class="form-label mb-1">Лимит, с</label><input class="form-control form-control-sm" id="sb-max" type="number" min="10" max="3600" value="300"></div>
+                    <div class="col-12"><label class="form-label mb-1">Переменные окружения</label>
+                        <textarea class="form-control form-control-sm font-monospace" id="sb-env" rows="3" placeholder="BASE_URL=http://stand.example"></textarea>
+                        <div class="form-text">KEY=VALUE по строкам. Секреты здесь не подставляются: впишите тестовое значение.</div></div>
+                </div>
+                <details class="mt-3">
+                    <summary class="text-muted">Флаги k6</summary>
+                    <div class="mt-2">
+                        <label class="form-label fw-semibold mb-1" for="sb-httpdebug">HTTP-отладка</label>
+                        <select class="form-select form-select-sm" id="sb-httpdebug">
+                            <option value="">выключена</option>
+                            <option value="HTTP_DEBUG">заголовки запросов и ответов (--http-debug)</option>
+                            <option value="HTTP_DEBUG_FULL">заголовки и тела (--http-debug=full)</option>
+                        </select>
+                        <div class="form-text mb-3">Каждый запрос и ответ попадает в лог ниже. В телах могут быть секреты.</div>
+                        <div class="form-check mb-2" th:each="f : ${k6Flags}" th:unless="${f.httpDebug}">
+                            <input class="form-check-input sb-flag" type="checkbox" th:id="'sf-' + ${f.name()}" th:value="${f.name()}">
+                            <label class="form-check-label" th:for="'sf-' + ${f.name()}">
+                                <span class="fw-semibold" th:text="${f.title}"></span> <code class="small" th:text="${f.arg}"></code>
+                                <span class="d-block form-text mt-0" th:text="${f.description}"></span></label></div>
+                    </div>
+                </details>
+            </div>
+        </div>
+        <div class="col-lg-7">
+            <div class="card card-body mb-3 py-2">
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <button type="button" class="btn btn-success" id="sb-run"><i class="bi bi-play-fill me-1"></i>Запустить</button>
+                    <button type="button" class="btn btn-outline-danger" id="sb-stop" disabled><i class="bi bi-stop-fill me-1"></i>Остановить</button>
+                    <span class="badge text-bg-secondary" id="sb-status">не запущено</span>
+                    <span class="ms-auto d-flex gap-2">
+                        <input class="form-control form-control-sm" id="sb-name" placeholder="имя скрипта" style="width:190px">
+                        <button type="button" class="btn btn-primary btn-sm" id="sb-save"><i class="bi bi-check-lg me-1"></i>Сохранить как скрипт</button></span>
+                </div>
+                <div class="alert alert-danger py-2 mt-2 mb-0 d-none" id="sb-err"></div>
+            </div>
+            <pre id="sb-log" class="log-view mb-0" style="max-height:44vh">Лог появится после запуска.</pre>
+        </div>
+    </div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <style>
+        #sb-drop.sb-over { outline: 2px dashed var(--k6-primary); outline-offset: 2px; background: #eef0fb; }
+        #sb-files .list-group-item { display: flex; align-items: center; gap: .4rem; padding: .35rem .6rem; cursor: pointer; font-size: .88rem; }
+        #sb-files .list-group-item.active { background: #eef0fb; color: var(--k6-primary); border-color: #eef0fb; font-weight: 600; }
+        #sb-files .sb-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #sb-files .sb-act { border: 0; background: none; padding: 0 .15rem; color: #9aa0b8; }
+        #sb-files .sb-act:hover { color: var(--k6-primary); }
+        #sb-files .sb-entry.on { color: #f59e0b; }
+        #sb-files:not(:empty) + .sb-hint { display: none; }
+    </style>
+    <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
+    <script>
+        (function () {
+            var TEXT_EXT = /\.(js|mjs|cjs|ts|json|csv|tsv|txt|md|yaml|yml|xml|html|env|properties|sql)$/i;
+            // именованные функции — это операции: в модели нагрузки им задаётся интенсивность; default нужен для обычного запуска k6
+            var TEMPLATE = "import http from 'k6/http';\nimport { check } from 'k6';\n\n" +
+                "const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';\n\n" +
+                "export function login() {\n  const res = http.get(BASE_URL + '/');\n" +
+                "  check(res, { 'status 200': (r) => r.status === 200 });\n  console.log('status ' + res.status);\n}\n\n" +
+                "export default function () {\n  login();\n}\n";
+            var files = {};          // path -> {text: string | null, b64: string | null, size: number}
+            var entry = 'main.js';
+            var current = null;
+            var models = {};
+            var editor = null;
+            var sid = null;
+            var polling = false;
+
+            var $ = function (id) { return document.getElementById(id); };
+            function headers(json) {
+                var h = {}, meta = document.querySelector('meta[name="_csrf"]');
+                if (json) { h['Content-Type'] = 'application/json'; }
+                if (meta) { h['X-CSRF-TOKEN'] = meta.content; }
+                return h;
+            }
+            function lang(p) { return /\.json$/i.test(p) ? 'json' : /\.(js|mjs|cjs)$/i.test(p) ? 'javascript' : 'plaintext'; }
+            function isJs(p) { return /\.(js|mjs|cjs)$/i.test(p); }
+            function showErr(m) { var e = $('sb-err'); e.textContent = m || ''; e.classList.toggle('d-none', !m); }
+
+            // ---------- список файлов
+            function renderFiles() {
+                var box = $('sb-files'); box.textContent = '';
+                Object.keys(files).sort().forEach(function (p) {
+                    var row = document.createElement('div');
+                    row.className = 'list-group-item' + (p === current ? ' active' : '');
+                    var star = document.createElement('button');
+                    star.type = 'button'; star.className = 'sb-act sb-entry' + (p === entry ? ' on' : '');
+                    star.title = 'Основной файл'; star.innerHTML = '<i class="bi ' + (p === entry ? 'bi-star-fill' : 'bi-star') + '"></i>';
+                    star.style.visibility = isJs(p) ? 'visible' : 'hidden';
+                    star.onclick = function (ev) { ev.stopPropagation(); entry = p; renderFiles(); refreshFns(); };
+                    var name = document.createElement('span'); name.className = 'sb-path'; name.textContent = p; name.title = p;
+                    var del = document.createElement('button');
+                    del.type = 'button'; del.className = 'sb-act'; del.title = 'Удалить'; del.innerHTML = '<i class="bi bi-x-lg"></i>';
+                    del.onclick = function (ev) { ev.stopPropagation(); removeFile(p); };
+                    row.appendChild(star); row.appendChild(name); row.appendChild(del);
+                    row.onclick = function () { open(p); };
+                    box.appendChild(row);
+                });
+            }
+            function removeFile(p) {
+                delete files[p];
+                if (models[p]) { models[p].dispose(); delete models[p]; }
+                if (entry === p) { entry = Object.keys(files).filter(isJs)[0] || ''; }
+                if (current === p) { current = null; var k = Object.keys(files)[0]; if (k) { open(k); } else { showEmpty(); } }
+                renderFiles(); refreshFns();
+            }
+            function showEmpty() { $('sb-cur').textContent = '—'; if (editor) { editor.setModel(monaco.editor.createModel('', 'plaintext')); editor.updateOptions({readOnly: true}); } }
+            function open(p) {
+                if (!editor || !files[p]) { return; }
+                current = p; $('sb-cur').textContent = p;
+                if (!models[p]) {
+                    var f = files[p];
+                    models[p] = monaco.editor.createModel(f.text !== null ? f.text : '[бинарный файл, ' + Math.ceil(f.size / 1024) + ' КБ — в редакторе не показывается]',
+                        f.text !== null ? lang(p) : 'plaintext');
+                }
+                editor.setModel(models[p]);
+                editor.updateOptions({readOnly: files[p].text === null});
+                renderFiles();
+            }
+            function addFile(path, text, b64, size) {
+                path = path.replace(/^\/+/, '');
+                if (models[path]) { models[path].dispose(); delete models[path]; }
+                files[path] = {text: text, b64: b64, size: size};
+                if (!entry || !files[entry]) { entry = isJs(path) ? path : entry; }
+                if (!current) { open(path); }
+                renderFiles(); refreshFns();
+            }
+            function textOf(p) { return models[p] ? models[p].getValue() : files[p].text; }
+
+            // ---------- чтение перетащенных файлов и папок
+            function b64(buf) {
+                var s = '', bytes = new Uint8Array(buf), chunk = 0x8000;
+                for (var i = 0; i < bytes.length; i += chunk) { s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)); }
+                return btoa(s);
+            }
+            function readFile(file, path) {
+                return new Promise(function (resolve) {
+                    if (TEXT_EXT.test(file.name)) {
+                        file.text().then(function (t) { addFile(path, t, null, file.size); resolve(); });
+                    } else {
+                        file.arrayBuffer().then(function (buf) { addFile(path, null, b64(buf), file.size); resolve(); });
+                    }
+                });
+            }
+            function walk(entryNode) {
+                return new Promise(function (resolve) {
+                    if (entryNode.isFile) {
+                        entryNode.file(function (f) { readFile(f, entryNode.fullPath).then(resolve); });
+                    } else if (entryNode.isDirectory) {
+                        var reader = entryNode.createReader(), all = [];
+                        (function next() {
+                            reader.readEntries(function (batch) {
+                                if (batch.length) { all = all.concat(Array.prototype.slice.call(batch)); next(); }
+                                else { Promise.all(all.map(walk)).then(resolve); }
+                            });
+                        })();
+                    } else { resolve(); }
+                });
+            }
+            var drop = $('sb-drop');
+            ['dragenter', 'dragover'].forEach(function (n) { drop.addEventListener(n, function (e) { e.preventDefault(); drop.classList.add('sb-over'); }); });
+            ['dragleave', 'drop'].forEach(function (n) { drop.addEventListener(n, function (e) { e.preventDefault(); drop.classList.remove('sb-over'); }); });
+            drop.addEventListener('drop', function (e) {
+                var items = e.dataTransfer.items, jobs = [];
+                if (items && items.length && items[0].webkitGetAsEntry) {
+                    var nodes = [];
+                    for (var i = 0; i < items.length; i++) { var n = items[i].webkitGetAsEntry(); if (n) { nodes.push(n); } }
+                    jobs = nodes.map(walk);
+                } else {
+                    jobs = Array.prototype.map.call(e.dataTransfer.files, function (f) { return readFile(f, f.name); });
+                }
+                Promise.all(jobs).then(function () { showErr(''); });
+            });
+            $('sb-pick').onclick = function () { $('sb-input').click(); };
+            $('sb-input').onchange = function (e) {
+                Array.prototype.forEach.call(e.target.files, function (f) { readFile(f, f.name); });
+                e.target.value = '';
+            };
+            $('sb-add').onclick = function () {
+                var p = prompt('Имя нового файла (можно с папкой, например lib/utils.js)');
+                if (p && p.trim()) { addFile(p.trim(), '', null, 0); open(p.trim().replace(/^\/+/, '')); }
+            };
+
+            // ---------- функции скрипта для списка «Функция»
+            function refreshFns() {
+                var dl = $('sb-fns'); dl.textContent = '';
+                if (!entry || !files[entry]) { return; }
+                var re = /export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g, m, src = textOf(entry) || '', seen = {};
+                while ((m = re.exec(src))) {
+                    if (!seen[m[1]]) { seen[m[1]] = 1; var o = document.createElement('option'); o.value = m[1]; dl.appendChild(o); }
+                }
+            }
+
+            // ---------- запуск и лог
+            function payloadFiles() {
+                return Object.keys(files).map(function (p) {
+                    var f = files[p];
+                    return {path: p, text: f.text !== null ? textOf(p) : null, base64: f.b64};
+                });
+            }
+            function envMap() {
+                var out = {};
+                $('sb-env').value.split(/\r?\n/).forEach(function (l) {
+                    l = l.trim(); if (!l || l[0] === '#') { return; }
+                    var i = l.indexOf('='); if (i > 0) { out[l.substring(0, i).trim()] = l.substring(i + 1).trim(); }
+                });
+                return out;
+            }
+            function flagList() {
+                var out = [];
+                if ($('sb-httpdebug').value) { out.push($('sb-httpdebug').value); }
+                document.querySelectorAll('.sb-flag:checked').forEach(function (c) { out.push(c.value); });
+                return out;
+            }
+            function logLine(l) {
+                var log = $('sb-log');
+                // строки лога k6 (time=... level=... msg="...") разворачиваем: уровень, текст с переводами строк, служебные поля приглушены
+                var parsed = /^time="[^"]*" level=(\w+) msg="((?:[^"\\]|\\.)*)"(.*)$/.exec(l.text);
+                var text = l.text, extra = '', level = l.level;
+                if (parsed) {
+                    level = parsed[1].toUpperCase().replace('WARNING', 'WARN');
+                    text = parsed[2].replace(/\\(.)/g, function (_, c) { return c === 'n' ? '\n' : c === 't' ? '\t' : c === 'r' ? '' : c; }).replace(/\s+$/, '');
+                    extra = parsed[3].trim();
+                }
+                var row = document.createElement('div'); row.className = 'll ll-' + level;
+                var t = document.createElement('span'); t.className = 'll-t'; t.textContent = new Date(l.t).toTimeString().substring(0, 8);
+                row.appendChild(t);
+                if (parsed) {
+                    var lv = document.createElement('span'); lv.className = 'll-l'; lv.textContent = level;
+                    row.appendChild(document.createTextNode(' ')); row.appendChild(lv);
+                }
+                var m = document.createElement('span'); m.className = 'll-m'; m.textContent = text;
+                row.appendChild(document.createTextNode(' ')); row.appendChild(m);
+                if (extra) {
+                    var ex = document.createElement('span'); ex.className = 'll-t'; ex.textContent = '  ' + extra;
+                    row.appendChild(ex);
+                }
+                var stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+                log.appendChild(row);
+                if (stick) { log.scrollTop = log.scrollHeight; }
+            }
+            function setRunning(on) {
+                $('sb-run').disabled = on; $('sb-stop').disabled = !on;
+            }
+            function setStatus(text, cls) { var s = $('sb-status'); s.textContent = text; s.className = 'badge ' + cls; }
+            function poll(from) {
+                polling = true;
+                fetch('/scripts/sandbox/' + sid + '/log?from=' + from).then(function (r) { return r.json(); }).then(function (c) {
+                    if (c.error) { showErr(c.error); polling = false; setRunning(false); return; }
+                    c.lines.forEach(logLine);
+                    if (c.done) {
+                        polling = false; setRunning(false);
+                        var ok = c.exitCode === 0;
+                        if (c.note) { logLine({t: Date.now(), level: 'WARN', text: c.note}); }
+                        setStatus(ok ? 'завершён (код 0)' : 'код выхода ' + c.exitCode, ok ? 'text-bg-success' : 'text-bg-danger');
+                    } else { setTimeout(function () { poll(c.next); }, 600); }
+                }).catch(function () { setTimeout(function () { poll(from); }, 1500); });
+            }
+            function run() {
+                if (polling) { return; }
+                showErr('');
+                if (!entry) { showErr('Выберите основной файл (звёздочка) среди .js-файлов'); return; }
+                $('sb-log').textContent = '';
+                setRunning(true); setStatus('выполняется…', 'text-bg-primary');
+                fetch('/scripts/sandbox/run', {method: 'POST', headers: headers(true), body: JSON.stringify({
+                    files: payloadFiles(), entrypoint: entry, exec: $('sb-exec').value, vus: +$('sb-vus').value || 1,
+                    iterations: +$('sb-iter').value || 1, maxDurationSec: +$('sb-max').value || 300, env: envMap(), flags: flagList()})})
+                    .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+                    .then(function (res) {
+                        if (!res.ok) { showErr(res.j.error || 'Не удалось запустить'); setRunning(false); setStatus('не запущено', 'text-bg-secondary'); return; }
+                        sid = res.j.id; poll(0);
+                    })
+                    .catch(function (e) { showErr('Ошибка запроса: ' + e); setRunning(false); setStatus('не запущено', 'text-bg-secondary'); });
+            }
+            $('sb-run').onclick = run;
+            $('sb-stop').onclick = function () { if (sid) { fetch('/scripts/sandbox/' + sid + '/stop', {method: 'POST', headers: headers(false)}); } };
+            $('sb-save').onclick = function () {
+                showErr('');
+                var name = $('sb-name').value.trim();
+                if (!name) { showErr('Введите имя скрипта'); $('sb-name').focus(); return; }
+                if (!entry) { showErr('Выберите основной файл (звёздочка) среди .js-файлов'); return; }
+                fetch('/scripts/sandbox/save', {method: 'POST', headers: headers(true),
+                    body: JSON.stringify({name: name, description: '', entrypoint: entry, files: payloadFiles()})})
+                    .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+                    .then(function (res) { if (res.ok) { location.href = res.j.redirect; } else { showErr(res.j.error || 'Не удалось сохранить'); } })
+                    .catch(function (e) { showErr('Ошибка запроса: ' + e); });
+            };
+
+            // ---------- редактор
+            var base = location.origin + '/webjars/monaco-editor/min/vs';
+            require.config({paths: {vs: base}});
+            window.MonacoEnvironment = {getWorkerUrl: function () {
+                return 'data:text/javascript;charset=utf-8,' + encodeURIComponent("self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
+            }};
+            var k6Types = ['index.d.ts', 'http/index.d.ts', 'metrics/index.d.ts', 'execution/index.d.ts', 'data/index.d.ts',
+                'encoding/index.d.ts', 'crypto/index.d.ts', 'html/index.d.ts', 'ws/index.d.ts', 'options/index.d.ts',
+                'net/grpc/index.d.ts', 'timers/index.d.ts', 'experimental/csv/index.d.ts', 'experimental/fs/index.d.ts', 'websockets/index.d.ts', 'global.d.ts'];
+            require(['vs/editor/editor.main'], function () {
+                editor = monaco.editor.create($('sb-editor'), {value: '', language: 'javascript', automaticLayout: true,
+                    minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
+                var ts = monaco.languages.typescript;
+                ts.javascriptDefaults.setCompilerOptions({allowJs: true, checkJs: false, allowNonTsExtensions: true,
+                    target: ts.ScriptTarget.ES2020, moduleResolution: ts.ModuleResolutionKind.NodeJs, module: ts.ModuleKind.ESNext});
+                k6Types.forEach(function (f) {
+                    fetch('/vendor/k6-types/' + f).then(function (r) { return r.ok ? r.text() : ''; })
+                        .then(function (t) { if (t) { ts.javascriptDefaults.addExtraLib(t, 'file:///node_modules/@types/k6/' + f); } })
+                        .catch(function () { /* редактор работает и без подсказок k6 */ });
+                });
+                editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, run);
+                editor.onDidChangeModelContent(function () { if (current === entry) { refreshFns(); } });
+                addFile('main.js', TEMPLATE, null, TEMPLATE.length);
+            });
+        })();
+    </script>
+</th:block>
+</body>
+</html>

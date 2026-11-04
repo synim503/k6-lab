@@ -49,6 +49,7 @@ public class RunStartController {
         List<Generator> all = generators.findAll().stream().sorted(Comparator.comparing(Generator::getName)).toList();
         RunPlan plan = planner.plan(id, 1);
         model.addAttribute("script", scripts.get(id));
+        model.addAttribute("k6Flags", java.util.Arrays.stream(K6Flag.values()).filter(f -> !f.isHttpDebug()).toList());
         model.addAttribute("generators", all);
         model.addAttribute("freeCount", all.stream().filter(Generator::isAvailableForRuns).count());
         model.addAttribute("errors", plan.errors());
@@ -61,8 +62,17 @@ public class RunStartController {
      */
     @PostMapping("/run")
     public String start(@PathVariable Long id, @RequestParam(name = "generatorId", required = false) List<Long> generatorIds,
-                        @RequestParam(required = false) Integer count, Model model) {
+                        @RequestParam(required = false) Integer count,
+                        @RequestParam(name = "httpDebug", required = false) String httpDebug,
+                        @RequestParam(name = "flag", required = false) List<String> flagIds, Model model) {
         try {
+            List<String> ids = new ArrayList<>(flagIds == null ? List.of() : flagIds);
+            if ("headers".equals(httpDebug)) {
+                ids.add(K6Flag.HTTP_DEBUG.name());
+            } else if ("full".equals(httpDebug)) {
+                ids.add(K6Flag.HTTP_DEBUG_FULL.name());
+            }
+            List<K6Flag> flags = K6Flag.parse(ids);
             List<Long> chosen;
             if (generatorIds != null && !generatorIds.isEmpty()) {
                 chosen = generatorIds.stream().sorted().toList();
@@ -84,7 +94,7 @@ public class RunStartController {
             }
             Run run;
             try {
-                run = runs.create(new RunService.CreateRequest(id, sel, Run.FailurePolicy.CONTINUE, 120));
+                run = runs.create(new RunService.CreateRequest(id, sel, Run.FailurePolicy.CONTINUE, 120, flags));
             } catch (IOException e) {
                 throw new IllegalStateException(e.getMessage(), e);
             }

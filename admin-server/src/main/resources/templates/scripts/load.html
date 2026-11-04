@@ -71,6 +71,20 @@
             <a class="btn btn-link" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a></div>
     </form>
 
+    <!-- та же нагрузка текстом: можно править, копировать между скриптами и хранить в git -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <a class="text-decoration-none" data-bs-toggle="collapse" href="#json-box" role="button"><i class="bi bi-braces me-1"></i>Конфиг нагрузки (JSON)</a>
+            <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/load.json(id=${script.id})}">Скачать</a></div>
+        <div id="json-box" class="collapse" th:classappend="${jsonOpen} ? 'show'">
+            <form class="card-body" th:action="@{/scripts/{id}/load/json(id=${script.id})}" method="post">
+                <textarea class="form-control font-monospace" name="json" rows="18" spellcheck="false" th:text="${formJson}"></textarea>
+                <div class="form-text mb-2">Те же настройки, что в форме выше: <code>operations</code> (execFn, name, ratePerSec, slaPercentile, slaThresholdMs, maxErrorPct,
+                    expectedDurationSec, failureSource), <code>levelPct</code>, <code>rampSec</code>, <code>holdMinutes</code>, <code>env</code>, <code>dataFiles</code>.
+                    Конфиг заменяет текущую нагрузку целиком; проверки те же, что у формы.</div>
+                <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить из конфига</button>
+            </form></div></div>
+
     <!-- расчёт по сохранённой нагрузке -->
     <h5 class="mb-2">Расчёт по сохранённой нагрузке</h5>
     <div class="alert alert-danger py-2" th:each="e : ${plan.errors}" th:text="${e}"></div>

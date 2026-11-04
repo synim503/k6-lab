@@ -102,7 +102,18 @@ public final class Messages {
                           String executionSegment, String executionSegmentSequence,
                           Map<String, String> tags, List<DataRule> dataRules,
                           PrometheusParams prometheus, int k6ApiPort, List<String> systemTags,
-                          String entrypoint, int logLinesPerSecond) implements Command {
+                          String entrypoint, int logLinesPerSecond, List<String> k6Flags) implements Command {
+
+        /** Без дополнительных флагов k6 (прежняя форма сообщения). */
+        public Prepare(String cmdId, String runId, String artifactUrl, String artifactSha256,
+                       JsonNode k6Config, Map<String, String> env, Map<String, String> secrets,
+                       String executionSegment, String executionSegmentSequence,
+                       Map<String, String> tags, List<DataRule> dataRules,
+                       PrometheusParams prometheus, int k6ApiPort, List<String> systemTags,
+                       String entrypoint, int logLinesPerSecond) {
+            this(cmdId, runId, artifactUrl, artifactSha256, k6Config, env, secrets, executionSegment, executionSegmentSequence,
+                    tags, dataRules, prometheus, k6ApiPort, systemTags, entrypoint, logLinesPerSecond, List.of());
+        }
     }
 
     /**

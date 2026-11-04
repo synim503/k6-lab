@@ -13,6 +13,8 @@
         Скрипт <strong th:text="${snap.script.name}"></strong> v<span th:text="${snap.script.versionNumber}"></span>
         <span th:if="${snap.script.commit}" th:text="'(' + ${#strings.substring(snap.script.commit, 0, 8)} + ')'"></span> ·
         политика отвала: <span th:text="${run.failurePolicy.title}"></span>
+        <th:block th:if="${run.request != null and run.request.get('k6Flags') != null}">
+            · флаги k6: <span class="badge text-bg-warning" th:each="f : ${run.request.get('k6Flags')}" th:text="${f}"></span></th:block>
     </div>
 
     <div id="run-live" th:attr="data-run-id=${run.id},data-status-url=@{/runs/{id}/status(id=${run.id})},data-status-stream=@{/runs/{id}/stream/status(id=${run.id})},data-log-stream=@{/runs/{id}/stream/logs(id=${run.id})},data-metrics-stream=@{/runs/{id}/stream/metrics(id=${run.id})},data-final=${run.status.terminal}">

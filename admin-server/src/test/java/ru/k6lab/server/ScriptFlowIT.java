@@ -13,6 +13,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -68,7 +69,10 @@ class ScriptFlowIT extends AbstractIT {
 
         mvc.perform(get("/scripts/" + id)).andExpect(content().string(containsString("Запустить")))
                 .andExpect(content().string(containsString("login")));
-        mvc.perform(get("/scripts/" + id + "/run")).andExpect(status().isOk()).andExpect(content().string(containsString("Количество генераторов")));
+        // нагрузка описана: блокировки нет; форма с числом генераторов - только если в базе есть серверы
+        mvc.perform(get("/scripts/" + id + "/run")).andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Не описана нагрузка"))))
+                .andExpect(content().string(org.hamcrest.Matchers.anyOf(containsString("Количество генераторов"), containsString("Серверов нет"))));
         mvc.perform(get("/scripts/" + id + "/config.json")).andExpect(status().isOk()).andExpect(content().string(containsString("login")));
 
         // свободных генераторов нет - понятная ошибка, а не 500
@@ -78,6 +82,140 @@ class ScriptFlowIT extends AbstractIT {
                 .andExpect(content().string(containsString("не меньше 1")));
         // остановка без выполняющихся запусков безвредна
         mvc.perform(post("/scripts/" + id + "/stop").with(csrf())).andExpect(redirectedUrl("/scripts/" + id));
+    }
+
+    @Autowired
+    ru.k6lab.server.script.SandboxService sandbox;
+    @Autowired
+    ru.k6lab.server.script.K6Tool k6tool;
+
+    @Autowired
+    ru.k6lab.server.run.RunService runService;
+    @Autowired
+    ru.k6lab.server.generator.GeneratorRepository generatorRepo;
+
+    @Test
+    void runFormWithServersShowsFlagsAndRunPageShowsChosenOnes() throws Exception {
+        long id = script("flow-flags-ui").getScriptId();
+        var f = new ru.k6lab.server.load.LoadForm();
+        var o = new ru.k6lab.server.load.LoadForm.OpForm();
+        o.setName("login");
+        o.setExecFn("login");
+        o.setRatePerSec(2.0);
+        f.getOps().add(o);
+        f.setHoldMinutes(1);
+        f.setRampSec(0);
+        load.save(id, f);
+        var g = new ru.k6lab.server.generator.Generator();
+        g.setName("flags-ui-" + java.util.UUID.randomUUID().toString().substring(0, 6));
+        g.setHost("127.0.0.1");
+        g.setInstallDir("/opt/k6-agent");
+        g.setServerUrl("ws://127.0.0.1:1/agent/ws");
+        g.setStatus(ru.k6lab.server.generator.Generator.Status.INSTALLING);
+        g = generatorRepo.save(g);
+
+        // форма запуска при наличии серверов: выбор HTTP-отладки и флаги с пояснениями
+        mvc.perform(get("/scripts/" + id + "/run")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("Параметры k6 и отладка")))
+                .andExpect(content().string(containsString("--http-debug=full")))
+                .andExpect(content().string(containsString("--no-thresholds")))
+                .andExpect(content().string(containsString("меняет нагрузку")));
+
+        var run = runService.create(new ru.k6lab.server.run.RunService.CreateRequest(id,
+                java.util.List.of(new ru.k6lab.server.run.RunService.GeneratorSel(g.getId(), 1)),
+                ru.k6lab.server.run.Run.FailurePolicy.CONTINUE, 90, java.util.List.of(ru.k6lab.server.run.K6Flag.HTTP_DEBUG_FULL)));
+        mvc.perform(get("/runs/" + run.getId())).andExpect(status().isOk())
+                .andExpect(content().string(containsString("флаги k6")))
+                .andExpect(content().string(containsString("HTTP_DEBUG_FULL")))
+                // кнопок Pause/Resume больше нет
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Resume"))));
+        mvc.perform(get("/runs/" + run.getId() + "/results")).andExpect(status().isOk());
+    }
+
+    @Test
+    void sandboxPageValidatesFilesAndSavesScript() throws Exception {
+        mvc.perform(get("/scripts/sandbox")).andExpect(status().isOk()).andExpect(content().string(containsString("Отладка скрипта")));
+        mvc.perform(get("/scripts/new")).andExpect(content().string(containsString("/scripts/sandbox")));
+        // небезопасные пути и неизвестные флаги отклоняются
+        mvc.perform(post("/scripts/sandbox/save").with(csrf()).contentType("application/json")
+                        .content("{\"name\":\"sb-bad\",\"entrypoint\":\"a.js\",\"files\":[{\"path\":\"../a.js\",\"text\":\"x\"}]}"))
+                .andExpect(status().isBadRequest()).andExpect(content().string(containsString("Недопустимый путь")));
+        // сохранение: файлы и данные попадают в версию, основной файл выбран
+        String body = "{\"name\":\"sb-saved\",\"entrypoint\":\"main.js\",\"files\":["
+                + "{\"path\":\"main.js\",\"text\":\"export default function () {}\\nexport function pay() {}\\n\"},"
+                + "{\"path\":\"certs/client.pem\",\"base64\":\"LS0tLS1CRUdJTg==\"}]}";
+        String resp = mvc.perform(post("/scripts/sandbox/save").with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(resp).contains("/scripts/");
+        var saved = scripts.list().stream().filter(s -> s.getName().equals("sb-saved")).findFirst().orElseThrow();
+        var v = scripts.latest(saved.getId()).orElseThrow();
+        assertThat(v.getEntrypoint()).isEqualTo("main.js");
+        assertThat(v.getFiles()).extracting(f -> f.path()).contains("main.js", "certs/client.pem");
+    }
+
+    @Test
+    void sandboxRunsScriptWithRealK6AndStreamsLog() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(k6tool.locate().isPresent(), "k6 не найден");
+        var req = new ru.k6lab.server.script.SandboxService.RunRequest(java.util.List.of(
+                new ru.k6lab.server.script.SandboxService.FileIn("main.js",
+                        "export default function () { console.log('hello ' + __ENV.WHO); }\n"
+                                + "export function other() { console.log('other-fn'); }\n", null),
+                new ru.k6lab.server.script.SandboxService.FileIn("data.txt", "x", null)),
+                "main.js", "other", 1, 2, 60, java.util.Map.of("WHO", "sandbox"), java.util.List.of("VERBOSE"));
+        String id = sandbox.start(req);
+        ru.k6lab.server.script.SandboxService.Chunk c;
+        long end = System.currentTimeMillis() + 60_000;
+        do {
+            Thread.sleep(300);
+            c = sandbox.read(id, 0);
+        } while (!c.done() && System.currentTimeMillis() < end);
+        String all = String.join("\n", c.lines().stream().map(l -> l.text()).toList());
+        assertThat(c.done()).isTrue();
+        assertThat(c.exitCode()).as(all).isEqualTo(0);
+        assertThat(all).contains("other-fn").doesNotContain("hello");
+        assertThatThrownBy(() -> sandbox.start(new ru.k6lab.server.script.SandboxService.RunRequest(java.util.List.of(
+                new ru.k6lab.server.script.SandboxService.FileIn("a.js", "x", null)), "missing.js", null, 1, 1, 10, null, null)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void k6FlagsCatalogIsValidatedAndShownOnRunForm() throws Exception {
+        assertThat(ru.k6lab.server.run.K6Flag.parse(java.util.List.of("HTTP_DEBUG", "HTTP_DEBUG_FULL", "NO_SETUP")))
+                .containsExactly(ru.k6lab.server.run.K6Flag.HTTP_DEBUG_FULL, ru.k6lab.server.run.K6Flag.NO_SETUP);
+        assertThat(ru.k6lab.server.run.K6Flag.args(java.util.List.of("HTTP_DEBUG_FULL", "UNKNOWN")))
+                .containsExactly("--http-debug=full");
+        assertThatThrownBy(() -> ru.k6lab.server.run.K6Flag.parse(java.util.List.of("--evil")))
+                .isInstanceOf(IllegalArgumentException.class);
+        long id = script("flow-flags").getScriptId();
+        mvc.perform(get("/scripts/" + id + "/run")).andExpect(status().isOk());
+        // неизвестный флаг отклоняется с сообщением, а не игнорируется
+        mvc.perform(post("/scripts/" + id + "/run").with(csrf()).param("flag", "EVIL"))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("Неизвестный флаг k6")));
+    }
+
+    @Test
+    void loadCanBeEditedAsJsonConfig() throws Exception {
+        long id = script("flow-json").getScriptId();
+        String json = "{\"operations\":[{\"execFn\":\"login\",\"name\":\"login\",\"ratePerSec\":7,\"slaPercentile\":95,"
+                + "\"slaThresholdMs\":700,\"maxErrorPct\":1,\"expectedDurationSec\":0.3,\"failureSource\":\"HTTP\"}],"
+                + "\"levelPct\":100,\"rampSec\":10,\"holdMinutes\":3,\"env\":{\"BASE_URL\":\"http://x\"},\"dataFiles\":[]}";
+        mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json", json))
+                .andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(load.operations(id)).extracting(LoadOperation::getName).containsExactly("login");
+        assertThat(scripts.get(id).getHoldSec()).isEqualTo(180);
+        // сохранённое видно в конфиге и скачивается обратно
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("BASE_URL")));
+        mvc.perform(get("/scripts/" + id + "/load.json")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"ratePerSec\" : 7.0")));
+        // ошибки - понятное сообщение, текст пользователя сохраняется
+        mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json", "{\"nope\":1}"))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("Некорректный конфиг")));
+        mvc.perform(post("/scripts/" + id + "/load/json").with(csrf())
+                        .param("json", "{\"operations\":[{\"execFn\":\"login\",\"name\":\"login\",\"ratePerSec\":\"abc\"}]}"))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("operations[0].ratePerSec")))
+                .andExpect(content().string(containsString("ожидается число")));
+        mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json", "["))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("Некорректный конфиг")));
     }
 
     @Test

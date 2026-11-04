@@ -695,6 +695,13 @@ func buildArgs(p Prepare, config, summary string, apiPort int) []string {
 		}
 		a = append(a, "--tag", k+"="+p.Tags[k])
 	}
+	// дополнительные флаги k6 (отладка и т.п.): сервер отправляет только значения из своего фиксированного списка,
+	// агент дополнительно пропускает всё, что не похоже на длинный флаг
+	for _, f := range p.K6Flags {
+		if strings.HasPrefix(f, "--") && !strings.ContainsAny(f, " \t\r\n") {
+			a = append(a, f)
+		}
+	}
 	return append(a, "--address", fmt.Sprintf("127.0.0.1:%d", apiPort), "--summary-export", summary, p.Entrypoint)
 }
 

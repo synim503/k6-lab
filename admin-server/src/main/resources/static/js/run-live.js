@@ -11,12 +11,21 @@
     var lines = [];          // все полученные строки (в браузере хранится не больше MAX)
     var MAX = 5000;
     var autoscroll = true;
-    var NL = String.fromCharCode(10);
 
+    // строка лога = div из span-ов (время, генератор, уровень, текст); между span-ами пробелы, чтобы копировалось как обычный текст
+    function part(parent, cls, text) {
+        var s = document.createElement('span'); s.className = cls; s.textContent = text;
+        if (parent.firstChild) { parent.appendChild(document.createTextNode(' ')); }
+        parent.appendChild(s);
+    }
     function fmt(l) {
-        var d = new Date(l.t);
-        var ts = d.toTimeString().substring(0, 8);
-        return ts + ' ' + (l.g ? '[' + l.g + '] ' : '') + l.l + ' ' + l.m;
+        var row = document.createElement('div');
+        row.className = 'll ll-' + l.l;
+        part(row, 'll-t', new Date(l.t).toTimeString().substring(0, 8));
+        if (l.g) { part(row, 'll-g', '[' + l.g + ']'); }
+        part(row, 'll-l', l.l);
+        part(row, 'll-m', l.m);
+        return row;
     }
     function visible(l) {
         if (genSel.value && l.g !== genSel.value) { return false; }
@@ -33,24 +42,27 @@
     function render() {
         if (selecting()) { dirty = true; return; }
         dirty = false;
-        var out = [];
-        for (var i = 0; i < lines.length; i++) { if (visible(lines[i])) { out.push(fmt(lines[i])); } }
-        log.textContent = out.join(NL);
-        counter.textContent = out.length + ' из ' + lines.length + ' строк';
+        var frag = document.createDocumentFragment();
+        var shown = 0;
+        for (var i = 0; i < lines.length; i++) { if (visible(lines[i])) { frag.appendChild(fmt(lines[i])); shown++; } }
+        log.textContent = '';
+        log.appendChild(frag);
+        counter.textContent = shown + ' из ' + lines.length + ' строк';
         if (autoscroll) { log.scrollTop = log.scrollHeight; }
     }
     function append(batch) {
-        var added = [];
-        batch.forEach(function (l) { lines.push(l); if (visible(l)) { added.push(fmt(l)); } });
+        var added = document.createDocumentFragment();
+        var addedCount = 0;
+        batch.forEach(function (l) { lines.push(l); if (visible(l)) { added.appendChild(fmt(l)); addedCount++; } });
         if (lines.length > MAX) {
             lines.splice(0, lines.length - MAX);
             // в буфере режем сразу, на экране - когда не выделяют текст
             dirty = true;
             if (!selecting()) { render(); return; }
         }
-        if (added.length) {
-            // дописываем текстовым узлом: существующие узлы (и выделение в них) остаются нетронутыми
-            log.appendChild(document.createTextNode((log.firstChild ? NL : '') + added.join(NL)));
+        if (addedCount) {
+            // дописываем новые узлы: существующие (и выделение в них) остаются нетронутыми
+            log.appendChild(added);
             if (autoscroll && !selecting()) { log.scrollTop = log.scrollHeight; }
         }
         counter.textContent = lines.length + ' строк в буфере';

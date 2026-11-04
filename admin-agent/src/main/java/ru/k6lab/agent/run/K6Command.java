@@ -48,6 +48,13 @@ public final class K6Command {
                 a.add(t.getKey() + "=" + t.getValue());
             }
         }
+        if (p.k6Flags() != null) {
+            for (String f : p.k6Flags()) {
+                if (f != null && f.startsWith("--") && f.chars().noneMatch(Character::isWhitespace)) {
+                    a.add(f);
+                }
+            }
+        }
         a.add("--address");
         a.add("127.0.0.1:" + apiPort);
         a.add("--summary-export");

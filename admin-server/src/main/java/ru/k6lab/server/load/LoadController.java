@@ -75,7 +75,31 @@ public class LoadController {
         }
     }
 
+    /** Сохранение нагрузки из JSON-конфига (та же валидация, что у формы). */
+    @PostMapping("/load/json")
+    public String saveJson(@PathVariable Long id, @RequestParam String json, Model model, RedirectAttributes ra) {
+        try {
+            load.save(id, LoadJson.fromJson(json));
+            ra.addFlashAttribute("info", "Нагрузка сохранена из конфига");
+            return "redirect:/scripts/" + id;
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            fill(model, id, load.toForm(id), 1);
+            model.addAttribute("error", e.getMessage());
+            model.addAttribute("formJson", json);
+            model.addAttribute("jsonOpen", true);
+            return "scripts/load";
+        }
+    }
+
+    @GetMapping(value = "/load.json", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> loadJson(@PathVariable Long id) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("load-" + id + ".json").build().toString())
+                .body(LoadJson.toJson(load.toForm(id)));
+    }
+
     private void fill(Model model, Long id, LoadForm f, int generators) {
+        model.addAttribute("formJson", LoadJson.toJson(f));
         RunPlan plan = planner.plan(id, Math.max(1, generators));
         model.addAttribute("script", scripts.get(id));
         model.addAttribute("form", f);
