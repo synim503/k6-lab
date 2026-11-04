@@ -29,7 +29,8 @@
             <input class="form-control" type="password" name="passphrase" autocomplete="new-password"></div>
         <div class="col-md-6 auth-key d-none"><label class="form-label">Пароль sudo <span class="text-muted fw-normal">(если вход не под root)</span></label>
             <input class="form-control" type="password" name="sudoPassword" autocomplete="new-password">
-            <div class="form-text">Без пароля sudo агент ставится в пользовательском режиме (без root).</div></div>
+            <div class="form-text">Агент ставится системным сервисом systemd (<code>systemctl</code>). Пусто — sudo без пароля (NOPASSWD).
+                Если sudo нет совсем, используйте «Расширенно» (пользовательский режим).</div></div>
         <div class="col-12"><label class="form-label">Адрес админки для агента</label>
             <input class="form-control" name="serverUrl" th:value="${serverUrl}" required>
             <div class="form-text">Агент сам подключится по этому адресу, поэтому он должен быть доступен с сервера-генератора (порт агентов открыт).</div></div>

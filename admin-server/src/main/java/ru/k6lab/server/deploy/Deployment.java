@@ -26,7 +26,7 @@ import java.util.Map;
 @Table(name = "deployment")
 public class Deployment {
 
-    public enum Operation { PREFLIGHT, INSTALL, UPDATE, RESTART, UNINSTALL }
+    public enum Operation { PREFLIGHT, INSTALL, UPDATE, RESTART, UNINSTALL, REDEPLOY }
 
     public enum Status {
         PENDING, RUNNING, WAITING_HOST_KEY, SUCCEEDED, FAILED, ROLLED_BACK;

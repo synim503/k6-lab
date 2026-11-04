@@ -46,6 +46,10 @@
                     </form>
                     <form th:action="@{/generators/{id}/restart(id=${v.g().id})}" method="post" onsubmit="return confirm('Перезапустить агента?')">
                         <button class="btn btn-outline-secondary" th:disabled="${v.g().busy}">Перезапустить</button></form>
+                    <form th:action="@{/generators/{id}/redeploy(id=${v.g().id})}" method="post"
+                          onsubmit="return confirm('Жёсткий редеплой: остановить агент любым способом (systemd, user systemd, cron), убить его процессы, удалить каталоги агента и поставить заново системным сервисом systemd? Запись генератора и история сохранятся.')">
+                        <button class="btn btn-outline-warning" th:disabled="${v.g().busy}" title="Снести всё про старого агента и развернуть заново">
+                            <i class="bi bi-arrow-repeat me-1"></i>Жёсткий редеплой</button></form>
                     <form th:action="@{/generators/{id}/uninstall(id=${v.g().id})}" method="post"
                           onsubmit="return confirm('Остановить агент, удалить файлы и отозвать токен? Генератор будет удалён из списка.')">
                         <button class="btn btn-outline-danger" th:disabled="${v.g().busy}">Удалить агент</button></form>

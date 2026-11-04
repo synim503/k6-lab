@@ -175,6 +175,18 @@ public class DeployService {
         return d;
     }
 
+    /**
+     * Жёсткий редеплой: со старого агента снимается всё (любой способ запуска, процессы, каталоги), затем агент ставится
+     * заново системным сервисом systemd с актуальными дистрибутивами. Запись генератора, его имя и история сохраняются.
+     */
+    public Deployment startRedeploy(Long generatorId) {
+        Generator g = idle(generatorId, "переустановить");
+        audit.record("generator.redeploy", "generator", generatorId, Map.of("name", g.getName()));
+        Deployment d = store.create(newDeployment(g.getId(), g.getHost(), Deployment.Operation.REDEPLOY));
+        submit(d.getId());
+        return d;
+    }
+
     /** Подтверждение fingerprint пользователем -> запись в known_host и повторный запуск операции. */
     public void confirmHostKey(Long deploymentId, String user) {
         Deployment d = store.load(deploymentId);
@@ -240,6 +252,22 @@ public class DeployService {
                         x.setInstallDir(res.dir());
                     });
                 }
+                case REDEPLOY -> {
+                    Generator g = store.loadGenerator(d.getGeneratorId());
+                    Target old = targetOf(g);
+                    // новая установка - всегда системный сервис systemd в стандартном каталоге
+                    Target fresh = new Target(g.getId(), g.getName(), g.getHost(), g.getSshPort(), g.getSshCredentialId(),
+                            Generator.InstallMode.SYSTEM, "/opt/k6-agent", g.getServerUrl(), g.isTuneOs(), null);
+                    store.updateGenerator(g.getId(), x -> x.setStatus(Generator.Status.INSTALLING));
+                    DeployEngine.InstallResult res = engine.hardRedeploy(run, old, fresh, null, null);
+                    store.updateGenerator(g.getId(), x -> {
+                        x.setInstallMode(Generator.InstallMode.SYSTEM);
+                        x.setSupervisor(res.supervisor());
+                        x.setArch(res.arch() == null ? null : res.arch().name());
+                        x.setOsName(res.osName());
+                        x.setInstallDir(res.dir());
+                    });
+                }
                 case UPDATE -> engine.update(run, targetOf(store.loadGenerator(d.getGeneratorId())),
                         asLong(d.getParams().get("agentArtifactId")), asLong(d.getParams().get("k6ArtifactId")));
                 case RESTART -> engine.restart(run, targetOf(store.loadGenerator(d.getGeneratorId())));
@@ -280,7 +308,7 @@ public class DeployService {
         if (d.getGeneratorId() == null) {
             return;
         }
-        if (d.getOperation() == Deployment.Operation.INSTALL) {
+        if (d.getOperation() == Deployment.Operation.INSTALL || d.getOperation() == Deployment.Operation.REDEPLOY) {
             store.updateGenerator(d.getGeneratorId(), g -> g.setStatus(Generator.Status.ERROR));
         } else if (d.getOperation() == Deployment.Operation.UNINSTALL) {
             store.updateGenerator(d.getGeneratorId(), g -> g.setStatus(Generator.Status.ERROR));

@@ -47,6 +47,22 @@ class K6ConfigGeneratorTest {
         assertThat(sc.path("pay").path("exec").asText()).isEqualTo("pay");
     }
 
+    @Test
+    void vusAreNeverFewerThanGeneratorsSoEverySegmentGetsAVu() {
+        // 5 оп/с * 0,2 с = ~1 VU, но генераторов 18: k6 раздаёт VU по сегментам целыми числами - без запаса остальные 12 простаивают
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(openPerSec("work", 5, 0.2)), steps(100), 30, 30, 18, 1.5, 3, true));
+        JsonNode sc = cfg.config().path("scenarios").path("work");
+        assertThat(sc.path("preAllocatedVUs").asLong()).isGreaterThanOrEqualTo(18);
+        assertThat(sc.path("maxVUs").asLong()).isGreaterThanOrEqualTo(sc.path("preAllocatedVUs").asLong());
+        assertThat(cfg.operations().get(0).preAllocatedVus()).isGreaterThanOrEqualTo(18);
+        // один генератор - прежний расчёт без запаса
+        var single = K6ConfigGenerator.generate(new ConfigInput(List.of(openPerSec("work", 5, 0.2)), steps(100), 30, 30, 1, 1.5, 3, true));
+        assertThat(single.config().path("scenarios").path("work").path("preAllocatedVUs").asLong()).isLessThan(5);
+        // много VU и без запаса: расчёт не меняется
+        var heavy = K6ConfigGenerator.generate(new ConfigInput(List.of(openPerSec("work", 200, 1.0)), steps(100), 30, 30, 4, 1.5, 3, true));
+        assertThat(heavy.config().path("scenarios").path("work").path("preAllocatedVUs").asLong()).isEqualTo(300);
+    }
+
     // ---------------------------------------------------------------- timeUnit
 
     @Test

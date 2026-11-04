@@ -238,7 +238,9 @@ public class DeployEngine {
             if (!sudo.ok() || !sudo.stdoutTrim().equals("0")) {
                 rep.sudoOk = false;
                 rep.error("sudo не работает для этой учётки (" + (sudo.stderr().isBlank() ? "код " + sudo.exitCode()
-                        : sudo.stderr().strip()) + "). Проверьте пароль sudo в SSH-учётке или права в sudoers.");
+                        : sudo.stderr().strip()) + "). Агент ставится системным сервисом systemd и требует root или sudo: "
+                        + "проверьте пароль sudo в SSH-учётке или права в sudoers (допустим sudo без пароля, NOPASSWD). "
+                        + "Без sudo установите агент в пользовательском режиме («Расширенно»).");
             }
             for (String tool : new String[]{"useradd", "install", "systemctl"}) {
                 if (rep.sudoOk && !r.trySudo("command -v " + tool, SHORT).ok()) {
@@ -419,6 +421,62 @@ public class DeployEngine {
 
     /** Результат установки: режим запуска, определённый pre-flight. */
     public record InstallResult(Generator.Supervisor supervisor, Arch arch, String osName, String dir) {
+    }
+
+    /**
+     * Жёсткий редеплой: сначала проверяется, что новая установка возможна (SSH, sudo, systemd), потом со старого агента
+     * снимается всё (сервис systemd системный и пользовательский, cron, процессы агента и k6, каталоги установки, sysctl),
+     * затем агент ставится с нуля системным сервисом systemd. Если проверка не пройдена, старый агент не трогается.
+     *
+     * @param old состояние как есть на хосте (режим, каталог, способ запуска), чтобы найти и убрать прежнюю установку
+     * @param t   желаемая установка (системный режим)
+     */
+    public InstallResult hardRedeploy(DeployRun run, Target old, Target t, Long agentArtifactId, Long k6ArtifactId) throws Exception {
+        validate(t);
+        SshConnection[] holder = new SshConnection[1];
+        try {
+            PreflightReport rep = preflight(run, t, true, c -> holder[0] = c, 600 * 1024);
+            Remote r = new Remote(holder[0], run.log(), t);
+            run.stage("Снос старого агента: сервисы, процессы, файлы", () -> wipeAgent(r, old, rep.home));
+        } finally {
+            if (holder[0] != null) {
+                holder[0].close();
+            }
+        }
+        return install(run, t, agentArtifactId, k6ArtifactId);
+    }
+
+    /** Убирает все следы агента независимо от того, как он был установлен (systemd, systemd --user, cron). */
+    private void wipeAgent(Remote r, Target old, String home) {
+        java.util.Set<String> dirs = new java.util.LinkedHashSet<>();
+        for (String d : new String[]{old.dir(), "/opt/k6-agent", "~/k6-agent"}) {
+            if (d != null && !d.isBlank()) {
+                dirs.add(d.startsWith("~") ? home + d.substring(1) : d);
+            }
+        }
+        // 1. все способы запуска: системная служба, пользовательская служба, cron-супервизор
+        r.trySudo("systemctl disable --now k6-agent; rm -f /etc/systemd/system/k6-agent.service; "
+                + "systemctl daemon-reload; systemctl reset-failed k6-agent", MEDIUM);
+        r.tryExec("export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user disable --now k6-agent; "
+                + "rm -f \"$HOME/.config/systemd/user/k6-agent.service\"; systemctl --user daemon-reload; "
+                + "systemctl --user reset-failed k6-agent", MEDIUM);
+        for (String d : dirs) {
+            r.tryExec(q(d + "/bin/agent-ctl.sh") + " stop", MEDIUM);
+        }
+        r.tryExec("crontab -l 2>/dev/null | grep -v " + q(Units.CRON_MARK) + " | crontab -", SHORT);
+        // 2. оставшиеся процессы агента и k6 из каталогов установки (шаблон [/]x не совпадает с самой командой pkill)
+        for (String d : dirs) {
+            String pattern = "[" + d.charAt(0) + "]" + d.substring(1) + "/";
+            r.trySudo("pkill -TERM -f " + q(pattern) + "; sleep 2; pkill -KILL -f " + q(pattern) + "; true", SHORT);
+        }
+        // 3. файлы: только каталоги, где реально лежит агент (защита от удаления постороннего)
+        for (String d : dirs) {
+            String abs = q(d);
+            r.priv("if [ -f " + abs + "/agent.jar ] || [ -f " + abs + "/k6-agent ] || [ -f " + abs + "/agent.properties ]; "
+                    + "then rm -rf " + abs + "; else echo 'в " + d.replace("'", "") + " файлов агента нет - пропускаем'; fi", SHORT);
+        }
+        r.trySudo("rm -f " + Units.SYSCTL_FILE, SHORT);
+        r.tryExec("rm -rf /tmp/k6lab-stage-*", SHORT);
     }
 
     public InstallResult install(DeployRun run, Target t, Long agentArtifactId, Long k6ArtifactId) throws Exception {

@@ -314,6 +314,50 @@ class SshDeployIT extends AbstractIT {
 
     @Test
     @Order(10)
+    void hardRedeployWipesOldAgentAndInstallsAgainAsSystemService() throws Exception {
+        // следы старой установки: лишний файл и «мусорный» процесс в каталоге агента
+        exec("sh", "-c", "echo old > /opt/k6-agent/old-file.txt; echo old > /opt/k6-agent/data/old-marker");
+        exec("sh", "-c", "cp /bin/sleep /opt/k6-agent/stray-sleep && (nohup /opt/k6-agent/stray-sleep 3000 >/dev/null 2>&1 &)");
+        assertThat(exec("sh", "-c", "pgrep -f '[/]opt/k6-agent/stray-sleep' | wc -l")).isEqualTo("1");
+
+        // если новая установка невозможна (у учётки нет sudo), старый агент не трогается
+        Generator g = generators.findById(systemGen).orElseThrow();
+        Long rootCred = g.getSshCredentialId();
+        g.setSshCredentialId(userCred);
+        generators.save(g);
+        try {
+            Deployment failed = awaitSettled(deploy.startRedeploy(systemGen).getId(), Duration.ofMinutes(5));
+            assertThat(failed.getStatus()).isNotEqualTo(Deployment.Status.SUCCEEDED);
+            assertThat(failed.getLog()).contains("sudo");
+            assertThat(exec("sh", "-c", "test -e /opt/k6-agent/old-file.txt && echo exists || echo gone")).isEqualTo("exists");
+            assertThat(exec("sh", "-c", "pgrep -f '[/]opt/k6-agent/stray-sleep' | wc -l")).isEqualTo("1");
+        } finally {
+            g = generators.findById(systemGen).orElseThrow();
+            g.setSshCredentialId(rootCred);
+            g.setStatus(Generator.Status.ONLINE);
+            generators.save(g);
+        }
+
+        // жёсткий редеплой: всё старое снесено, агент поставлен заново системным сервисом
+        Deployment d = awaitSucceeded(deploy.startRedeploy(systemGen).getId());
+        assertThat(d.getLog()).contains("Снос старого агента");
+        assertThat(exec("sh", "-c", "test -e /opt/k6-agent/old-file.txt && echo exists || echo gone")).isEqualTo("gone");
+        assertThat(exec("sh", "-c", "test -e /opt/k6-agent/data/old-marker && echo exists || echo gone")).isEqualTo("gone");
+        assertThat(exec("sh", "-c", "pgrep -f '[/]opt/k6-agent/stray-sleep' | wc -l")).isEqualTo("0");
+        assertThat(exec("systemctl", "is-active", "k6-agent")).isEqualTo("active");
+        assertThat(exec("systemctl", "is-enabled", "k6-agent")).isEqualTo("enabled");
+        g = generators.findById(systemGen).orElseThrow();
+        assertThat(g.getStatus()).isEqualTo(Generator.Status.ONLINE);
+        assertThat(g.getSupervisor()).isEqualTo(Generator.Supervisor.SYSTEMD);
+        assertThat(g.getInstallMode()).isEqualTo(Generator.InstallMode.SYSTEM);
+        assertThat(g.getInstallDir()).isEqualTo("/opt/k6-agent");
+        assertThat(g.getAgentVersion()).isNotBlank();
+        assertThat(g.getOneTimeTokenHash()).isNull();
+        assertThat(d.getSteps()).extracting(Deployment.StepInfo::status).doesNotContain("FAILED");
+    }
+
+    @Test
+    @Order(11)
     void systemUninstallCleansUp() throws Exception {
         Deployment un = awaitSucceeded(deploy.startUninstall(systemGen).getId());
         assertThat(generators.findById(systemGen)).isEmpty();

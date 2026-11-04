@@ -628,6 +628,9 @@ class ScriptFlowIT extends AbstractIT {
         mvc.perform(post("/generators/add").with(csrf()).param("host", "127.0.0.9").param("port", "1").param("username", "deploy")
                         .param("authType", "KEY").param("privateKey", TEST_KEY).param("serverUrl", "ws://127.0.0.1:47331/agent/ws"))
                 .andExpect(redirectedUrlPattern("/deployments/*"));
+        // вход по ключу без пароля sudo: агент всё равно ставится системным сервисом systemd, а не в пользовательском режиме с cron
+        var created = generatorRepo.findAll().stream().filter(x -> "127.0.0.9".equals(x.getHost())).findFirst().orElseThrow();
+        assertThat(created.getInstallMode()).isEqualTo(ru.k6lab.server.generator.Generator.InstallMode.SYSTEM);
         // ключ не указан - понятная ошибка на той же странице
         mvc.perform(post("/generators/add").with(csrf()).param("host", "127.0.0.1").param("username", "root")
                         .param("authType", "KEY").param("serverUrl", "ws://127.0.0.1:47331/agent/ws"))

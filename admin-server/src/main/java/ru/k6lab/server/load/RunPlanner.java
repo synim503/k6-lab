@@ -100,6 +100,17 @@ public class RunPlanner {
                     warnings.add("Применены ручные правки конфига k6: " + String.join(", ", overridePaths));
                     warnings.addAll(applied.notes());
                 }
+                int gens = Math.max(1, generatorCount);
+                finalConfig.path("scenarios").fields().forEachRemaining(e -> {
+                    long maxVus = e.getValue().path("maxVUs").asLong(Long.MAX_VALUE);
+                    long preVus = e.getValue().path("preAllocatedVUs").asLong(Long.MAX_VALUE);
+                    if (maxVus < gens || preVus < gens) {
+                        warnings.add("Сценарий «" + e.getKey() + "»: VU (preAllocated " + (preVus == Long.MAX_VALUE ? "—" : preVus)
+                                + ", max " + (maxVus == Long.MAX_VALUE ? "—" : maxVus) + ") меньше числа генераторов (" + gens
+                                + "). k6 делит VU между генераторами целыми числами: часть генераторов не получит VU и ничего не выполнит. "
+                                + "Увеличьте preAllocatedVUs и maxVUs хотя бы до числа генераторов.");
+                    }
+                });
                 for (GeneratedConfig.Warning w : gen.warnings()) {
                     warnings.add((w.operation() == null ? "" : w.operation() + ": ") + w.message());
                 }

@@ -52,15 +52,16 @@ public class GeneratorAddController {
                 throw new IllegalArgumentException(key ? "Вставьте приватный ключ SSH" : "Введите пароль");
             }
             // пароль SSH используется и для sudo, если вход не под root; при входе по ключу sudo-пароль задаётся отдельно
+            // (пусто - sudo без пароля, NOPASSWD)
             String sudo = "root".equals(user) ? null : key ? (sudoPassword == null || sudoPassword.isBlank() ? null : sudoPassword) : password;
             var cred = credentials.save(new SshCredentialService.Form(null, user + "@" + h + "-" + UUID.randomUUID().toString().substring(0, 4),
                     user, key ? SshCredential.AuthType.KEY : SshCredential.AuthType.PASSWORD, secret,
                     key && passphrase != null && !passphrase.isBlank() ? passphrase : null, sudo, null, null, null, false, false));
             String name = h.replaceAll("[^A-Za-z0-9_.-]", "_");
-            // без sudo (вход под обычным пользователем без пароля sudo) ставим в пользовательском режиме
-            Generator.InstallMode mode = "root".equals(user) || sudo != null ? Generator.InstallMode.SYSTEM : Generator.InstallMode.USER;
-            var d = deploy.startInstall(new DeployService.InstallRequest(name, h, port, cred.getId(), mode,
-                    mode == Generator.InstallMode.USER ? "~/k6-agent" : null, serverUrl.trim(), false, 1, null, null));
+            // агент всегда ставится системным сервисом systemd (systemctl): пользователь k6agent, /opt/k6-agent, автозапуск и
+            // перезапуск при сбое. Нужен root или sudo (в том числе без пароля); без sudo - «Расширенно» (пользовательский режим)
+            var d = deploy.startInstall(new DeployService.InstallRequest(name, h, port, cred.getId(), Generator.InstallMode.SYSTEM,
+                    null, serverUrl.trim(), false, 1, null, null));
             // при первом подключении потребуется подтвердить отпечаток ключа - это на странице операции
             return "redirect:/deployments/" + d.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {

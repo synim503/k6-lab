@@ -141,6 +141,11 @@ public final class K6ConfigGenerator {
 
         long pre = op.preAllocatedOverride() != null ? op.preAllocatedOverride()
                 : Math.max(1, ceil(peak * op.expectedDurationSec() * in.preAllocFactor()));
+        // k6 делит VU между execution segments целыми числами: если VU меньше числа генераторов, часть сегментов остаётся без VU,
+        // их генераторы ничего не выполняют и сразу завершаются (работают только первые). Поэтому минимум - по VU на генератор.
+        if (op.preAllocatedOverride() == null) {
+            pre = Math.max(pre, Math.max(1, in.generatorCount()));
+        }
         long max = op.maxVusOverride() != null ? op.maxVusOverride() : Math.max(pre, pre * Math.round(in.maxVusFactor()));
         if (max < pre) {
             max = pre;
