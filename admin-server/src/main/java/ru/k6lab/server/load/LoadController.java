@@ -1,5 +1,6 @@
 package ru.k6lab.server.load;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -91,6 +92,96 @@ public class LoadController {
         }
     }
 
+    /**
+     * Сохранение правок конфига k6: в базу уходит только отличие от расчётного конфига, поэтому правки (maxVUs и т.п.)
+     * не теряются при изменении нагрузки. Конфиг проверяется самим k6 (inspect --execution-requirements).
+     */
+    @PostMapping("/k6-config")
+    public String saveK6Config(@PathVariable Long id, @RequestParam String config, Model model, RedirectAttributes ra) {
+        try {
+            RunPlan base = planner.plan(id, 1);
+            if (base.baseConfig() == null) {
+                throw new IllegalArgumentException("Сначала опишите нагрузку: " + String.join("; ", base.errors()));
+            }
+            JsonNode edited;
+            try {
+                edited = MAPPER.readTree(config);
+            } catch (IOException e) {
+                throw new IllegalArgumentException("Некорректный JSON: " + e.getMessage().lines().findFirst().orElse(""));
+            }
+            if (edited == null || !edited.isObject() || !edited.path("scenarios").isObject()) {
+                throw new IllegalArgumentException("Конфиг должен быть JSON-объектом с полем scenarios");
+            }
+            if (!names(edited.path("scenarios")).equals(names(base.baseConfig().path("scenarios")))) {
+                throw new IllegalArgumentException("Сценарии нельзя добавлять и удалять: набор операций задаётся на странице нагрузки выше");
+            }
+            for (var e : (Iterable<java.util.Map.Entry<String, JsonNode>>) () -> edited.path("scenarios").fields()) {
+                if (!e.getValue().isObject() || !e.getValue().hasNonNull("executor")) {
+                    throw new IllegalArgumentException("У сценария «" + e.getKey() + "» должен быть executor");
+                }
+            }
+            ObjectNode patch = K6ConfigOverrides.diff(base.baseConfig(), edited);
+            var overrides = K6ConfigOverrides.toMap(patch);
+            // k6 сам проверяет, что конфиг допустим (maxVUs >= preAllocatedVUs, типы, названия executor-ов)
+            if (!overrides.isEmpty() && k6.locate().isPresent() && base.version() != null) {
+                String err = validateWithK6(base, K6ConfigOverrides.apply(base.baseConfig(), overrides).config().toString());
+                if (err != null) {
+                    throw new IllegalArgumentException("k6 не принял конфиг: " + err);
+                }
+            }
+            load.saveK6Overrides(id, overrides);
+            ra.addFlashAttribute("info", overrides.isEmpty() ? "Правок нет: конфиг совпадает с расчётным"
+                    : "Конфиг k6 сохранён, ручных правок: " + K6ConfigOverrides.paths(overrides).size());
+            return "redirect:/scripts/" + id + "/load#t-config";
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            fill(model, id, load.toForm(id), 1);
+            model.addAttribute("error", e.getMessage());
+            model.addAttribute("editedConfig", config);
+            model.addAttribute("configTabOpen", true);
+            return "scripts/load";
+        }
+    }
+
+    @PostMapping("/k6-config/reset")
+    public String resetK6Config(@PathVariable Long id, RedirectAttributes ra) {
+        load.saveK6Overrides(id, new java.util.LinkedHashMap<>());
+        ra.addFlashAttribute("info", "Ручные правки конфига k6 сброшены");
+        return "redirect:/scripts/" + id + "/load#t-config";
+    }
+
+    private static java.util.Set<String> names(JsonNode scenarios) {
+        java.util.Set<String> out = new java.util.TreeSet<>();
+        scenarios.fieldNames().forEachRemaining(out::add);
+        return out;
+    }
+
+    /** null - k6 принял конфиг (или проверить не удалось из-за таймаута/окружения), иначе текст ошибки. */
+    private String validateWithK6(RunPlan plan, String configJson) {
+        Path dir = null;
+        try {
+            dir = Files.createTempDirectory("k6lab-cfg");
+            ZipUtil.extract(new ByteArrayInputStream(scripts.zipBytes(plan.version())), dir);
+            Files.createDirectories(dir.resolve("__admin"));
+            Files.write(dir.resolve("__admin/admin.js"), helper.content());
+            K6Tool.Result r = k6.requirements(dir, plan.version().getEntrypoint(), configJson);
+            if (!r.ok() && !r.timedOut()) {
+                String s = r.stderr().isBlank() ? r.stdout() : r.stderr();
+                return s.strip().lines().reduce((a, b) -> b).orElse("ошибка");
+            }
+            return null;
+        } catch (IOException e) {
+            return null;
+        } finally {
+            if (dir != null) {
+                try (var walk = Files.walk(dir)) {
+                    walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+                } catch (IOException ignored) {
+                    // best-effort
+                }
+            }
+        }
+    }
+
     @GetMapping(value = "/load.json", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> loadJson(@PathVariable Long id) {
         return ResponseEntity.ok()
@@ -109,6 +200,8 @@ public class LoadController {
         model.addAttribute("modes", ScriptDataFile.Mode.values());
         model.addAttribute("operationNames", scripts.latest(id).map(v -> v.operationNames()).orElse(List.of()));
         model.addAttribute("chart", plan.generated() == null ? "null" : chartJson(plan.generated()));
+        model.addAttribute("overridePaths", plan.overridePaths());
+        model.addAttribute("baseConfigJson", plan.baseConfig() == null ? null : plan.baseConfig().toPrettyString());
         if (plan.generated() != null) {
             model.addAttribute("opNames", plan.generated().operations().stream().map(GeneratedConfig.OpPlan::name).toList());
             model.addAttribute("perGen", perGenerator(plan));

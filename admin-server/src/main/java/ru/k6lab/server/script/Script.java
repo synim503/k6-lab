@@ -46,6 +46,11 @@ public class Script extends Auditable {
     @Column(nullable = false)
     private Map<String, String> env = new LinkedHashMap<>();
 
+    /** Ручные правки конфига k6 как JSON merge patch поверх расчётного конфига (пусто - без правок). */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "k6_overrides", nullable = false)
+    private Map<String, Object> k6Overrides = new LinkedHashMap<>();
+
     /** Критерии остановки (пусто - по умолчанию), см. {@code LoadCriteria}. */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "stop_criteria", nullable = false)

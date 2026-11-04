@@ -38,6 +38,15 @@ class K6ConfigGeneratorTest {
         return s;
     }
 
+    @Test
+    void defaultFunctionGetsNoExecField() {
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(openPerSec("default", 5, 0.2), openPerSec("pay", 2, 0.2)),
+                steps(100), 30, 30, 1, 1.5, 3, true));
+        JsonNode sc = cfg.config().path("scenarios");
+        assertThat(sc.path("default").has("exec")).isFalse();
+        assertThat(sc.path("pay").path("exec").asText()).isEqualTo("pay");
+    }
+
     // ---------------------------------------------------------------- timeUnit
 
     @Test

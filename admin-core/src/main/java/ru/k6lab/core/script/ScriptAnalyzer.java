@@ -16,7 +16,12 @@ import java.util.regex.Pattern;
 public final class ScriptAnalyzer {
 
     /** Экспорты, которые не являются операциями. */
-    public static final Set<String> NOT_OPERATIONS = Set.of("default", "setup", "teardown", "handleSummary", "options");
+    public static final Set<String> NOT_OPERATIONS = Set.of("setup", "teardown", "handleSummary", "options");
+
+    /** Имя операции для {@code export default function}: в сценарии k6 для неё поле exec не задаётся. */
+    public static final String DEFAULT_FUNCTION = "default";
+
+    private static final Pattern EXPORT_DEFAULT = Pattern.compile("\\bexport\\s+default\\b");
 
     /** Опции, которые перекрыли бы модель из UI: опции скрипта приоритетнее --config. */
     public static final List<String> BLOCKING_OPTIONS = List.of("scenarios", "stages", "vus", "duration", "iterations");
@@ -60,6 +65,10 @@ public final class ScriptAnalyzer {
                     ops.putIfAbsent(exported, new Operation(exported, Operation.HEURISTIC));
                 }
             }
+        }
+        // export default function () {...}: основная функция k6 тоже может быть операцией (идёт последней в списке)
+        if (EXPORT_DEFAULT.matcher(code).find()) {
+            ops.putIfAbsent(DEFAULT_FUNCTION, new Operation(DEFAULT_FUNCTION, Operation.HEURISTIC));
         }
         boolean helper = HELPER_IMPORT.matcher(code).find();
         List<String> warnings = new ArrayList<>();

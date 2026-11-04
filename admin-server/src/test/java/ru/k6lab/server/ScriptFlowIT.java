@@ -133,6 +133,89 @@ class ScriptFlowIT extends AbstractIT {
     }
 
     @Test
+    void k6ConfigCanBeEditedAndOverridesSurviveLoadChanges() throws Exception {
+        var om = new com.fasterxml.jackson.databind.ObjectMapper();
+        long id = script("flow-k6cfg").getScriptId();
+        java.util.function.IntConsumer saveLoad = rate -> {
+            try {
+                mvc.perform(post("/scripts/" + id + "/load").with(csrf())
+                                .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", String.valueOf(rate))
+                                .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                                .param("ops[0].expectedDurationSec", "0.3").param("holdMinutes", "1").param("rampSec", "0").param("levelPct", "100"))
+                        .andExpect(redirectedUrl("/scripts/" + id));
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        saveLoad.accept(5);
+        String base = mvc.perform(get("/scripts/" + id + "/config.json")).andReturn().getResponse().getContentAsString();
+        var node = (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree(base);
+        assertThat(node.path("scenarios").path("login").path("maxVUs").asInt()).isNotEqualTo(77);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) node.path("scenarios").path("login")).put("maxVUs", 77);
+        node.put("noConnectionReuse", true);
+
+        mvc.perform(post("/scripts/" + id + "/k6-config").with(csrf()).param("config", node.toString()))
+                .andExpect(redirectedUrl("/scripts/" + id + "/load#t-config"));
+        assertThat(scripts.get(id).getK6Overrides()).containsKeys("scenarios", "noConnectionReuse");
+        var merged = om.readTree(mvc.perform(get("/scripts/" + id + "/config.json")).andReturn().getResponse().getContentAsString());
+        assertThat(merged.path("scenarios").path("login").path("maxVUs").asInt()).isEqualTo(77);
+        assertThat(merged.path("noConnectionReuse").asBoolean()).isTrue();
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("Есть ручные правки конфига")));
+
+        // правки переживают изменение нагрузки: интенсивность пересчитана, maxVUs остался ручным
+        saveLoad.accept(9);
+        var after = om.readTree(mvc.perform(get("/scripts/" + id + "/config.json")).andReturn().getResponse().getContentAsString());
+        assertThat(after.path("scenarios").path("login").path("maxVUs").asInt()).isEqualTo(77);
+        assertThat(after.path("scenarios").path("login").path("stages").get(1).path("target").asInt()).isEqualTo(9);
+
+        // сценарии добавлять нельзя, без executor - тоже
+        var added = (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree(base);
+        ((com.fasterxml.jackson.databind.node.ObjectNode) added.path("scenarios")).putObject("extra").put("executor", "constant-vus");
+        mvc.perform(post("/scripts/" + id + "/k6-config").with(csrf()).param("config", added.toString()))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("Сценарии нельзя добавлять")));
+        mvc.perform(post("/scripts/" + id + "/k6-config").with(csrf()).param("config", "{\"scenarios\":1}"))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("полем scenarios")));
+        mvc.perform(post("/scripts/" + id + "/k6-config").with(csrf()).param("config", "{"))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("Некорректный JSON")));
+        // k6 сам отклоняет недопустимый конфиг (maxVUs меньше preAllocatedVUs)
+        if (k6tool.locate().isPresent()) {
+            var bad = (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree(base);
+            var sc = (com.fasterxml.jackson.databind.node.ObjectNode) bad.path("scenarios").path("login");
+            sc.put("preAllocatedVUs", 50).put("maxVUs", 1);
+            mvc.perform(post("/scripts/" + id + "/k6-config").with(csrf()).param("config", bad.toString()))
+                    .andExpect(status().isOk()).andExpect(content().string(containsString("k6 не принял конфиг")));
+        }
+
+        // сброс возвращает расчётный конфиг
+        mvc.perform(post("/scripts/" + id + "/k6-config/reset").with(csrf())).andExpect(redirectedUrl("/scripts/" + id + "/load#t-config"));
+        assertThat(scripts.get(id).getK6Overrides()).isEmpty();
+        var reset = om.readTree(mvc.perform(get("/scripts/" + id + "/config.json")).andReturn().getResponse().getContentAsString());
+        assertThat(reset.path("scenarios").path("login").path("maxVUs").asInt()).isNotEqualTo(77);
+        assertThat(reset.has("noConnectionReuse")).isFalse();
+    }
+
+    @Test
+    void scriptWithOnlyDefaultFunctionIsDetectedAndLoadCanBeSet() throws Exception {
+        var v = scripts.createFromUpload("flow-default", "", "d.js", new ByteArrayInputStream(
+                "import http from 'k6/http';\nexport default function () { http.get('http://localhost/x'); }\n".getBytes(StandardCharsets.UTF_8)), "", null);
+        long id = v.getScriptId();
+        assertThat(v.operationNames()).containsExactly("default");
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("default")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("не найдено экспортируемых функций"))));
+        mvc.perform(post("/scripts/" + id + "/load").with(csrf())
+                        .param("ops[0].execFn", "default").param("ops[0].name", "main").param("ops[0].ratePerSec", "4")
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("ops[0].expectedDurationSec", "0.3").param("holdMinutes", "1").param("rampSec", "0").param("levelPct", "100"))
+                .andExpect(redirectedUrl("/scripts/" + id));
+        // для default поле exec в конфиге k6 не пишется: k6 сам запускает основную функцию
+        String cfg = mvc.perform(get("/scripts/" + id + "/config.json")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        var scenario = new com.fasterxml.jackson.databind.ObjectMapper().readTree(cfg).path("scenarios").path("main");
+        assertThat(scenario.isMissingNode()).isFalse();
+        assertThat(scenario.has("exec")).isFalse();
+    }
+
+    @Test
     void sandboxPageValidatesFilesAndSavesScript() throws Exception {
         mvc.perform(get("/scripts/sandbox")).andExpect(status().isOk()).andExpect(content().string(containsString("Отладка скрипта")));
         mvc.perform(get("/scripts/new")).andExpect(content().string(containsString("/scripts/sandbox")));

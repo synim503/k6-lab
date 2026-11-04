@@ -326,6 +326,18 @@ class RunE2EIT extends AbstractIT {
     }
 
     @Test
+    @Order(10)
+    void defaultFunctionRunsAsOperationWithoutExecField() throws Exception {
+        Agent a = startAgent("e2edefault", 1);
+        Script s = scriptWithLoad("default-op", 8, false, "default");
+        Run run = startRun(s, Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1));
+        assertThat(run.getK6Config().path("scenarios").path("work").has("exec")).isFalse();
+        Run finished = awaitStatus(run.getId(), Duration.ofSeconds(120), RunStatus.FINISHED, RunStatus.FAILED);
+        assertThat(finished.getStatus()).as(dump(run.getId())).isEqualTo(RunStatus.FINISHED);
+        assertThat(runService.generatorsOf(run.getId()).get(0).getExitCode()).isZero();
+    }
+
+    @Test
     @Order(2)
     void twoGeneratorsShareLoadByWeightsAndSplitData() throws Exception {
         Agent a = startAgent("e2e2a", 1);

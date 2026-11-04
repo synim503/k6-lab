@@ -117,10 +117,22 @@
                     <div class="small text-muted mt-1">Суммарная интенсивность по операциям (оп/с), ось X — минуты от старта.</div></div>
             </div>
             <div class="tab-pane fade" id="t-config">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span class="small text-muted">Только чтение. Конфиг детерминированный: одинаковая нагрузка всегда даёт один и тот же JSON.</span>
-                    <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/config.json(id=${script.id})}">Скачать</a></div>
-                <div id="config-editor" style="height: 60vh; border: 1px solid #ccc" th:attr="data-config=${plan.configJson}"></div>
+                <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!overridePaths.isEmpty()}">
+                    <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
+                    <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" onsubmit="return confirm('Сбросить ручные правки и вернуть расчётный конфиг?')">
+                        <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button></form></div>
+                <div class="small text-muted mb-2">Итоговый конфиг k6, который уйдёт на генераторы. Его можно править: например <code>maxVUs</code>, <code>preAllocatedVUs</code>,
+                    <code>gracefulStop</code> у сценария или опции верхнего уровня. Сохраняется только отличие от расчётного конфига, поэтому правки
+                    остаются при изменении нагрузки. Конфиг проверяет сам k6. Не меняйте <code>rate</code>, <code>stages</code> и <code>executor</code>:
+                    график, расчёт и отчёт строятся по плану нагрузки.</div>
+                <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post" th:attr="data-open=${configTabOpen != null}">
+                    <input type="hidden" name="config" id="cfg-value">
+                    <div id="config-editor" style="height: 55vh; border: 1px solid #ccc" th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson}"></div>
+                    <div class="d-flex gap-2 mt-2 align-items-center">
+                        <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Сохранить конфиг</button>
+                        <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/config.json(id=${script.id})}">Скачать</a>
+                    </div>
+                </form>
             </div>
             <div class="tab-pane fade" id="t-req">
                 <button class="btn btn-outline-primary btn-sm mb-2" type="button" hx-post="" th:attr="hx-post=@{/scripts/{id}/requirements(id=${script.id})}"
@@ -146,6 +158,11 @@
                 new Chart(canvas, {type: 'line', data: data, options: {parsing: false, animation: false, interaction: {mode: 'index', intersect: false},
                     scales: {x: {type: 'linear', title: {display: true, text: 'минуты'}}, y: {stacked: true, title: {display: true, text: 'оп/с'}}}}});
             }
+            // после ошибки сохранения или перехода по якорю сразу открываем вкладку конфига
+            if (location.hash === '#t-config' || (document.getElementById('cfg-form') || {dataset: {}}).dataset.open === 'true') {
+                var tabBtn = document.querySelector('[data-bs-target="#t-config"]');
+                if (tabBtn && window.bootstrap) { bootstrap.Tab.getOrCreateInstance(tabBtn).show(); }
+            }
             var box = document.getElementById('config-editor');
             if (box && window.require) {
                 var base = location.origin + '/webjars/monaco-editor/min/vs';
@@ -154,7 +171,8 @@
                     return 'data:text/javascript;charset=utf-8,' + encodeURIComponent("self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
                 }};
                 require(['vs/editor/editor.main'], function () {
-                    var ed = monaco.editor.create(box, {value: box.dataset.config || '', language: 'json', readOnly: true, automaticLayout: true, minimap: {enabled: false}, theme: 'vs-dark'});
+                    var ed = monaco.editor.create(box, {value: box.dataset.config || '', language: 'json', automaticLayout: true, minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
+                    document.getElementById('cfg-form').addEventListener('submit', function () { document.getElementById('cfg-value').value = ed.getValue(); });
                     document.querySelector('[data-bs-target="#t-config"]').addEventListener('shown.bs.tab', function () { ed.layout(); });
                 });
             }

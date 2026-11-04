@@ -159,7 +159,7 @@ public final class K6ConfigGenerator {
             stages.addObject().put("duration", s.holdSec() + "s").put("target", sel.targets()[i]);
         }
         sc.put("gracefulStop", in.gracefulStopSec() + "s");
-        sc.put("exec", op.execFn());
+        putExec(sc, op);
         putEnvAndTags(sc, op, null);
 
         // предупреждение: меньше одной итерации за timeUnit на генератор
@@ -218,10 +218,17 @@ public final class K6ConfigGenerator {
         }
         sc.put("gracefulRampDown", in.gracefulRampDownSec() + "s");
         sc.put("gracefulStop", in.gracefulStopSec() + "s");
-        sc.put("exec", op.execFn());
+        putExec(sc, op);
         putEnvAndTags(sc, op, String.valueOf(op.pacingMs()));
         double peakRate = peakVus / pacingSec;
         return new OpPlan(op.name(), Mode.CLOSED, 1, new long[0], rates, vus, peakVus, peakVus, peakRate);
+    }
+
+    /** Для export default function поле exec не задаётся: k6 сам запускает основную функцию. */
+    private static void putExec(ObjectNode sc, OperationSpec op) {
+        if (!"default".equals(op.execFn())) {
+            sc.put("exec", op.execFn());
+        }
     }
 
     private static void putEnvAndTags(ObjectNode sc, OperationSpec op, String pacingMs) {

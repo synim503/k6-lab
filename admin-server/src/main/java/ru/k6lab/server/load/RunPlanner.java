@@ -1,5 +1,9 @@
 package ru.k6lab.server.load;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectWriter;
 import org.springframework.stereotype.Service;
 import ru.k6lab.core.k6config.ConfigInput;
 import ru.k6lab.core.k6config.GeneratedConfig;
@@ -28,6 +32,8 @@ import java.util.Set;
 @Service
 public class RunPlanner {
 
+    private static final ObjectWriter OVERRIDE_WRITER = new ObjectMapper().writerWithDefaultPrettyPrinter();
+
     static final int GRACEFUL_STOP_SEC = 30;
     static final int GRACEFUL_RAMP_DOWN_SEC = 30;
 
@@ -48,6 +54,8 @@ public class RunPlanner {
         List<StepPlan> steps = null;
         GeneratedConfig gen = null;
         String json = null;
+        JsonNode finalConfig = null;
+        List<String> overridePaths = List.of();
         if (version == null) {
             errors.add("У скрипта нет версий");
         } else if (!version.isValidForModel()) {
@@ -78,16 +86,25 @@ public class RunPlanner {
                 gen = K6ConfigGenerator.generate(new ConfigInput(specs, steps, GRACEFUL_STOP_SEC, GRACEFUL_RAMP_DOWN_SEC,
                         generatorCount, 1.5, 3, version.isUsesHelper()));
                 json = K6ConfigGenerator.toJson(gen);
+                // ручные правки конфига k6 (maxVUs и т.п.) накладываются поверх расчётного конфига
+                var applied = K6ConfigOverrides.apply(gen.config(), script.getK6Overrides());
+                finalConfig = applied.config();
+                overridePaths = K6ConfigOverrides.paths(script.getK6Overrides());
+                if (!overridePaths.isEmpty()) {
+                    json = OVERRIDE_WRITER.writeValueAsString(finalConfig);
+                    warnings.add("Применены ручные правки конфига k6: " + String.join(", ", overridePaths));
+                    warnings.addAll(applied.notes());
+                }
                 for (GeneratedConfig.Warning w : gen.warnings()) {
                     warnings.add((w.operation() == null ? "" : w.operation() + ": ") + w.message());
                 }
                 dataWarnings(script, version, gen, steps, generatorCount, warnings);
-            } catch (IllegalArgumentException e) {
+            } catch (IllegalArgumentException | JsonProcessingException e) {
                 errors.add(e.getMessage());
             }
         }
-        return new RunPlan(script, version, ops, steps, GRACEFUL_STOP_SEC, GRACEFUL_RAMP_DOWN_SEC, gen, gen == null ? null : gen.config(),
-                json, errors, warnings, generatorCount);
+        return new RunPlan(script, version, ops, steps, GRACEFUL_STOP_SEC, GRACEFUL_RAMP_DOWN_SEC, gen, finalConfig,
+                json, errors, warnings, generatorCount, gen == null ? null : gen.config(), overridePaths);
     }
 
     /** Предупреждение: после нарезки на генератор приходится меньше строк, чем ожидаемых итераций. */

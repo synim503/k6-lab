@@ -71,7 +71,7 @@ class ScriptIT extends AbstractIT {
         ScriptVersion v = upload(name(), "payments.js", GOOD);
         assertThat(v.getNumber()).isEqualTo(1);
         assertThat(v.getEntrypoint()).isEqualTo("payments.js");
-        assertThat(v.operationNames()).containsExactly("createPayment", "getPayment");
+        assertThat(v.operationNames()).containsExactly("createPayment", "getPayment", "default");
         assertThat(v.isUsesHelper()).isTrue();
         assertThat(v.getInspectStatus()).isEqualTo(ScriptVersion.InspectStatus.OK);
         assertThat(v.getInspectResult()).containsKey("scenarios");
@@ -124,7 +124,7 @@ class ScriptIT extends AbstractIT {
         assertThat(v.getFiles()).filteredOn(f -> f.path().equals("data/users.csv")).extracting(ScriptVersion.FileEntry::kind).containsExactly("DATA");
         assertThat(v.getWarnings()).anyMatch(w -> w.contains("__admin"));
         assertThat(v.isUsesHelper()).isTrue();
-        assertThat(v.operationNames()).containsExactly("pay");
+        assertThat(v.operationNames()).containsExactly("pay", "default");
 
         // без entrypoint при нескольких .js - понятная ошибка
         Map<String, byte[]> two = new LinkedHashMap<>();
@@ -165,8 +165,8 @@ class ScriptIT extends AbstractIT {
         assertThat(v2.getNumber()).isEqualTo(2);
         assertThat(v2.getParentVersionId()).isEqualTo(v1.getId());
         assertThat(v2.getSource()).isEqualTo(ScriptVersion.Source.EDITOR);
-        assertThat(v2.operationNames()).containsExactly("a", "b");
-        assertThat(scripts.version(sid, v1.getId()).operationNames()).containsExactly("a");
+        assertThat(v2.operationNames()).containsExactly("a", "b", "default");
+        assertThat(scripts.version(sid, v1.getId()).operationNames()).containsExactly("a", "default");
 
         // откат = новая версия с содержимым старой
         ScriptVersion v3 = scripts.rollback(sid, v1.getId());
@@ -236,7 +236,7 @@ class ScriptIT extends AbstractIT {
             ScriptVersion latest = scripts.importLatestOfBranch(sid);
             assertThat(latest.getNumber()).isEqualTo(2);
             assertThat(latest.getCommitHash()).isEqualTo(c2.getName());
-            assertThat(latest.operationNames()).containsExactly("pay", "refund");
+            assertThat(latest.operationNames()).containsExactly("pay", "refund", "default");
             assertThat(scripts.checkGitUpdates(sid)).isEmpty();
 
             // разрешение по тегу и по сокращённому hash

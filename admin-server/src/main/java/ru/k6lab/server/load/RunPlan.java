@@ -14,7 +14,8 @@ import java.util.List;
  */
 public record RunPlan(Script script, ScriptVersion version, List<LoadOperation> operations, List<StepPlan> steps,
                       int gracefulStopSec, int gracefulRampDownSec, GeneratedConfig generated, JsonNode config,
-                      String configJson, List<String> errors, List<String> warnings, int generatorCount) {
+                      String configJson, List<String> errors, List<String> warnings, int generatorCount,
+                      JsonNode baseConfig, List<String> overridePaths) {
 
     public boolean ok() {
         return errors.isEmpty() && config != null;

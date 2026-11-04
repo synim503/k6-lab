@@ -119,6 +119,16 @@ public class LoadService {
         return out;
     }
 
+    /** Сохраняет ручные правки конфига k6 (пустая карта - сброс к расчётному конфигу). */
+    @Transactional
+    public void saveK6Overrides(Long scriptId, java.util.Map<String, Object> overrides) {
+        Script script = scripts.get(scriptId);
+        script.setK6Overrides(overrides == null ? new java.util.LinkedHashMap<>() : overrides);
+        scriptRepo.save(script);
+        audit.record(overrides == null || overrides.isEmpty() ? "script.k6config_reset" : "script.k6config_edit", "script", scriptId,
+                java.util.Map.of("paths", K6ConfigOverrides.paths(overrides).size()));
+    }
+
     @Transactional
     public void save(Long scriptId, LoadForm f) {
         Script script = scripts.get(scriptId);

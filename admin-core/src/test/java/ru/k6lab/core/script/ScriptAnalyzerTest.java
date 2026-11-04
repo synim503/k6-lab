@@ -35,8 +35,18 @@ class ScriptAnalyzerTest {
                 function internal() {}
                 """);
         assertThat(a.operations()).extracting(ScriptAnalyzer.Operation::name)
-                .containsExactly("createPayment", "getPayment", "refund", "cancel", "legacy", "single");
+                .containsExactly("createPayment", "getPayment", "refund", "cancel", "legacy", "single", "default");
         assertThat(a.operations()).allMatch(o -> o.origin().equals("HEURISTIC"));
+    }
+
+    @Test
+    void defaultFunctionIsAnOperationInAnyDeclarationForm() {
+        for (String src : new String[]{"export default function () {}", "export default function main() {}",
+                "export default async function () {}", "export default () => {};", "function f(){} export { f as default };"}) {
+            assertThat(ScriptAnalyzer.analyze(src).operations()).as(src).extracting(ScriptAnalyzer.Operation::name).containsExactly("default");
+        }
+        assertThat(ScriptAnalyzer.analyze("// export default function () {}\nexport function a() {}").operations())
+                .extracting(ScriptAnalyzer.Operation::name).containsExactly("a");
     }
 
     @Test
