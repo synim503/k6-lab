@@ -93,6 +93,14 @@ public final class PromQueries {
         return "sum(" + selector(n.vus(), runId, null) + ")";
     }
 
+    /**
+     * Время (unix, секунды) последнего принятого Prometheus сэмпла run. По нему считается задержка метрик:
+     * remote write + интервал отправки k6, из-за чего данные отстают от реального хода теста.
+     */
+    public static String lastSampleTime(Names n, long runId) {
+        return "max(timestamp(" + selector(n.iterations(), runId, null) + "))";
+    }
+
     /** Любой ряд run - проверка, что данные пришли. */
     public static String anySeries(String metric, long runId, long rangeSec) {
         return "sum(increase(" + selector(metric, runId, null) + "[" + range(rangeSec) + "]))";

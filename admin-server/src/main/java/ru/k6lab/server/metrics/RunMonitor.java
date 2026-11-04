@@ -43,6 +43,9 @@ public class RunMonitor {
     /** Задержка после разгона: первые секунды удержания не оцениваются (система выходит на режим). */
     public static final int SETTLE_SEC = 20;
     public static final int MIN_WINDOW_SEC = 15;
+    /** Задержка метрик, если измерить её не удалось (данных ещё нет): интервал отправки k6 + приём Prometheus. */
+    static final long DEFAULT_LAG_SEC = 15;
+    static final long MAX_LAG_SEC = 120;
 
     private static final class State {
         StopCriteriaEvaluator evaluator;
@@ -100,7 +103,11 @@ public class RunMonitor {
 
     private void monitor(Run run, SettingsService.Prometheus p) throws IOException {
         RunSnapshot snap = runService.snapshot(run);
-        Instant now = Instant.now();
+        Instant wall = Instant.now();
+        // метрики приходят в Prometheus с задержкой: всё считаем на момент последних полученных данных, а не на «сейчас»,
+        // иначе окно «удержания» захватывает ещё разгон и интенсивность выглядит заниженной
+        long lag = measureLag(run, p, wall);
+        Instant now = wall.minusSeconds(lag);
         List<RunStep> steps = runService.stepsOf(run.getId());
         RunStep current = null;
         for (RunStep s : steps) {
@@ -111,7 +118,9 @@ public class RunMonitor {
         long elapsed = Math.max(0, now.getEpochSecond() - run.getPlannedStartAt().getEpochSecond());
         boolean hold = current != null && !now.isBefore(current.getHoldStartAt());
         long intoHold = hold ? now.getEpochSecond() - current.getHoldStartAt().getEpochSecond() : 0;
-        long window = Math.max(MIN_WINDOW_SEC, Math.min(60, hold ? Math.max(MIN_WINDOW_SEC, intoHold) : Math.max(MIN_WINDOW_SEC, elapsed)));
+        // в окне rate/increase должно быть минимум два-три сэмпла: при редкой отправке метрик окно не может быть короче
+        long minWindow = minWindowSec();
+        long window = Math.max(minWindow, Math.min(Math.max(60, minWindow), hold ? Math.max(minWindow, intoHold) : Math.max(minWindow, elapsed)));
 
         State st = states.computeIfAbsent(run.getId(), k -> new State());
         if (st.evaluator == null) {
@@ -125,7 +134,9 @@ public class RunMonitor {
 
         List<LiveRow> rows = liveRows(snap, current, hold && intoHold >= window ? current.getLevelPct() : null, run.getId(), window, now, p);
         ObjectNode json = MAPPER.createObjectNode();
-        json.put("ts", now.toEpochMilli());
+        json.put("ts", wall.toEpochMilli());
+        json.put("dataTs", now.toEpochMilli());
+        json.put("lagSec", lag);
         json.put("step", stepNo);
         json.put("phase", current == null ? "" : hold ? "hold" : "ramp");
         json.put("elapsedSec", elapsed);
@@ -151,8 +162,8 @@ public class RunMonitor {
         // серверные критерии остановки: раз в 15 с, только на удержании после settle
         st.tick++;
         StopCriteriaEvaluator.Config cfg = st.evaluator.config();
-        if (cfg.anyEnabled() && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= MIN_WINDOW_SEC && !run.getStatus().isTerminal()) {
-            long w = Math.min(cfg.windowSec(), intoHold - SETTLE_SEC);
+        if (cfg.anyEnabled() && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && !run.getStatus().isTerminal()) {
+            long w = Math.max(minWindow, Math.min(cfg.windowSec(), intoHold - SETTLE_SEC));
             List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p);
             List<StopCriteriaEvaluator.Sample> samples = new ArrayList<>();
             for (LiveRow r : evalRows) {
@@ -173,7 +184,36 @@ public class RunMonitor {
         }
     }
 
-    /** Значения по операциям за окно, заканчивающееся now. Перцентили - histogram_quantile по native histograms. */
+    /** Минимальное окно live-расчётов: не меньше 15 с и не меньше трёх интервалов отправки метрик. */
+    public long minWindowSec() {
+        return Math.max(MIN_WINDOW_SEC, 3L * settings.pushIntervalSec());
+    }
+
+    /** Сколько секунд назад Prometheus получил последний сэмпл run; нет данных - значение по умолчанию. */
+    private long measureLag(Run run, SettingsService.Prometheus p, Instant wall) {
+        try {
+            List<PrometheusClient.Sample> s = prom.query(p, PromQueries.lastSampleTime(names.names(), run.getId()), wall);
+            if (!s.isEmpty() && Double.isFinite(s.get(0).value())) {
+                long lag = Math.round(wall.getEpochSecond() - s.get(0).value());
+                return Math.max(0, Math.min(MAX_LAG_SEC, lag));
+            }
+        } catch (IOException | RuntimeException e) {
+            log.debug("Задержка метрик run {}: {}", run.getId(), e.toString());
+        }
+        return Math.max(DEFAULT_LAG_SEC, settings.pushIntervalSec() + 10L);
+    }
+
+    /** Доля планового уровня в момент at: на разгоне нагрузка растёт линейно с нуля, а не стоит на целевом значении. */
+    static double rampFraction(RunStep step, Instant at) {
+        if (step == null || step.getStepNo() != 1 || !step.getHoldStartAt().isAfter(step.getRampStartAt())) {
+            return 1;
+        }
+        double total = java.time.Duration.between(step.getRampStartAt(), step.getHoldStartAt()).toMillis();
+        double done = java.time.Duration.between(step.getRampStartAt(), at).toMillis();
+        return Math.max(0, Math.min(1, done / total));
+    }
+
+    /** Значения по операциям за окно, заканчивающееся at. Перцентили - histogram_quantile по native histograms. */
     List<LiveRow> liveRows(RunSnapshot snap, RunStep step, Double levelOrNull, long runId, long windowSec, Instant at,
                            SettingsService.Prometheus p) throws IOException {
         PromQueries.Names n = names.names();
@@ -202,7 +242,7 @@ public class RunMonitor {
                 continue;
             }
             double level = levelOrNull != null ? levelOrNull : step == null ? 0 : step.getLevelPct();
-            double target = o.ratePerSec() * level / 100.0;
+            double target = o.ratePerSec() * level / 100.0 * (levelOrNull != null ? 1 : rampFraction(step, at));
             Double actual = rate.get(o.name());
             Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
             Double err = helper ? errHelper.get(o.name()) : o.failureSource().equals("CHECKS") ? errChecks.get(o.name()) : errHttp.get(o.name());

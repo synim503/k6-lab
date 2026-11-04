@@ -216,6 +216,59 @@ class ScriptFlowIT extends AbstractIT {
     }
 
     @Test
+    void dashboardShowsOnlyFirstGeneratorsAndLinksToTheFullList() throws Exception {
+        for (int i = 0; i < 9; i++) {
+            var g = new ru.k6lab.server.generator.Generator();
+            g.setName("dash-" + java.util.UUID.randomUUID().toString().substring(0, 6));
+            g.setHost("127.0.0.1");
+            g.setInstallDir("/opt/k6-agent");
+            g.setServerUrl("ws://127.0.0.1:1/agent/ws");
+            g.setStatus(ru.k6lab.server.generator.Generator.Status.INSTALLING);
+            generatorRepo.save(g);
+        }
+        String html = mvc.perform(get("/")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("Показано 6 из")))
+                .andReturn().getResponse().getContentAsString();
+        // на главной ровно шесть строк генераторов
+        int rows = html.split("list-group-item d-flex justify-content-between", -1).length - 1;
+        assertThat(rows).isEqualTo(6);
+        // раздел «Операции» доступен не только через редирект: ссылка есть и на странице генераторов, и в меню
+        mvc.perform(get("/generators")).andExpect(content().string(containsString("href=\"/deployments\"")));
+        mvc.perform(get("/deployments")).andExpect(status().isOk());
+    }
+
+    @Autowired
+    ru.k6lab.server.settings.SettingsService settingsService;
+    @Autowired
+    ru.k6lab.server.run.RunOrchestrator orchestrator;
+    @Autowired
+    ru.k6lab.server.metrics.RunMonitor runMonitor;
+
+    @Test
+    void metricsPushIntervalIsConfigurableAndOnlyNeededHistogramsAreKept() throws Exception {
+        try {
+            // по умолчанию 10 с; допустимо 5..60
+            settingsService.set(ru.k6lab.server.settings.SettingsService.PUSH_INTERVAL_SEC, "");
+            assertThat(settingsService.pushIntervalSec()).isEqualTo(10);
+            settingsService.set(ru.k6lab.server.settings.SettingsService.PUSH_INTERVAL_SEC, "2");
+            assertThat(settingsService.pushIntervalSec()).isEqualTo(5);
+            settingsService.set(ru.k6lab.server.settings.SettingsService.PUSH_INTERVAL_SEC, "999");
+            assertThat(settingsService.pushIntervalSec()).isEqualTo(60);
+            // окно живых метрик не короче трёх интервалов отправки: в нём должно быть несколько сэмплов
+            assertThat(runMonitor.minWindowSec()).isEqualTo(180);
+            settingsService.set(ru.k6lab.server.settings.SettingsService.PUSH_INTERVAL_SEC, "10");
+            assertThat(runMonitor.minWindowSec()).isEqualTo(30);
+        } finally {
+            settingsService.set(ru.k6lab.server.settings.SettingsService.PUSH_INTERVAL_SEC, "");
+        }
+        // агенту отправляются только нужные гистограммы, а не все семь HTTP-гистограмм k6
+        assertThat(orchestrator.keptHistograms()).containsExactlyInAnyOrder(
+                "k6_op_duration_seconds", "k6_iteration_duration_seconds", "k6_http_req_duration_seconds");
+        // страница настроек показывает поле интервала
+        mvc.perform(get("/settings")).andExpect(status().isOk()).andExpect(content().string(containsString("Интервал отправки метрик")));
+    }
+
+    @Test
     void sandboxPageValidatesFilesAndSavesScript() throws Exception {
         mvc.perform(get("/scripts/sandbox")).andExpect(status().isOk()).andExpect(content().string(containsString("Отладка скрипта")));
         mvc.perform(get("/scripts/new")).andExpect(content().string(containsString("/scripts/sandbox")));
@@ -234,6 +287,35 @@ class ScriptFlowIT extends AbstractIT {
         var v = scripts.latest(saved.getId()).orElseThrow();
         assertThat(v.getEntrypoint()).isEqualTo("main.js");
         assertThat(v.getFiles()).extracting(f -> f.path()).contains("main.js", "certs/client.pem");
+    }
+
+    @Test
+    void sandboxCanDebugExistingScriptAndSaveNewVersion() throws Exception {
+        var v1 = script("flow-sb-existing");
+        long id = v1.getScriptId();
+        // меню и выбор скрипта на странице отладки
+        mvc.perform(get("/")).andExpect(content().string(containsString("/scripts/sandbox")));
+        mvc.perform(get("/scripts/sandbox")).andExpect(content().string(containsString("flow-sb-existing")));
+        mvc.perform(get("/scripts/sandbox?script=" + id)).andExpect(status().isOk());
+        mvc.perform(get("/scripts/" + id)).andExpect(content().string(containsString("/scripts/sandbox?script=" + id)));
+        // файлы последней версии для редактора
+        String json = mvc.perform(get("/scripts/sandbox/script/" + id)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        assertThat(node.path("name").asText()).isEqualTo("flow-sb-existing");
+        assertThat(node.path("version").asInt()).isEqualTo(1);
+        assertThat(node.path("entrypoint").asText()).isEqualTo("s.js");
+        assertThat(node.path("files").get(0).path("text").asText()).contains("export function login");
+        mvc.perform(get("/scripts/sandbox/script/999999")).andExpect(status().isBadRequest());
+        // сохранение = новая версия того же скрипта
+        String body = "{\"scriptId\":" + id + ",\"name\":\"flow-sb-existing\",\"entrypoint\":\"s.js\",\"comment\":\"из отладчика\",\"files\":["
+                + "{\"path\":\"s.js\",\"text\":\"export function login() {}\\nexport default function () {}\\n\"}]}";
+        String resp = mvc.perform(post("/scripts/sandbox/save").with(csrf()).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(resp).contains("/scripts/" + id + "/versions/");
+        var latest = scripts.latest(id).orElseThrow();
+        assertThat(latest.getNumber()).isEqualTo(2);
+        assertThat(scripts.list().stream().filter(x -> x.getName().equals("flow-sb-existing")).count()).isEqualTo(1);
     }
 
     @Test

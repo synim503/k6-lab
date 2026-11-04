@@ -43,7 +43,8 @@
     function fmt(v, d) { return v === undefined || v === null ? '—' : Number(v).toFixed(d === undefined ? 1 : d); }
 
     function onMetrics(m) {
-        var t = new Date(m.ts).toTimeString().substring(0, 8);
+        // подпись по времени самих данных: метрики приходят с задержкой, и «сейчас» на графике было бы неверным
+        var t = new Date(m.dataTs || m.ts).toTimeString().substring(0, 8);
         var any = Object.keys(charts)[0];
         var idx = any ? charts[any].data.labels.length : 0;
         var firstOp = true;
@@ -83,7 +84,10 @@
             tb.innerHTML = html || '<tr><td colspan="6" class="text-muted">Нет данных</td></tr>';
         }
         var ph = document.getElementById('metric-phase');
-        if (ph) { ph.textContent = 'ступень ' + m.step + (m.phase ? ', ' + (m.phase === 'hold' ? 'удержание' : 'разгон') : '') + ', окно ' + m.windowSec + ' с'; }
+        if (ph) {
+            var lag = m.lagSec === undefined ? '' : '. Данные на ' + t + ', задержка метрик ' + m.lagSec + ' с: фаза ниже относится к этому моменту, а не к текущему';
+            ph.textContent = (m.phase ? 'ступень ' + m.step + ', ' + (m.phase === 'hold' ? 'удержание' : 'разгон') + ', окно ' + m.windowSec + ' с' : 'ожидание данных первой ступени') + lag;
+        }
     }
 
     var es = new EventSource(root.dataset.metricsStream);

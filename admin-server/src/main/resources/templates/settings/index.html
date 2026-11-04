@@ -28,6 +28,11 @@
                             <option value="NATIVE" th:selected="${!classicHist}">Native histograms — нужен Prometheus с --enable-feature=native-histograms</option>
                         </select>
                         <div class="form-text">В классическом режиме агент на генераторе сам преобразует метрики k6; перцентили считаются тем же histogram_quantile по суммарным корзинам всех генераторов.</div></div>
+                    <div class="mb-2"><label class="form-label">Интервал отправки метрик, с</label>
+                        <input class="form-control" style="max-width:160px" type="number" min="5" max="60" name="pushSec" th:value="${pushSec}">
+                        <div class="form-text">Как часто каждый генератор отправляет метрики в Prometheus (5–60). Больше интервал — меньше нагрузка на Prometheus,
+                            но дольше задержка метрик на графиках. По умолчанию 10. В классическом режиме отправляются только нужные гистограммы
+                            (время итерации и операции, http_req_duration): остальные HTTP-гистограммы k6 отбрасываются агентом.</div></div>
                     <div class="mb-2"><label class="form-label">Шаблон ссылки на Grafana</label>
                         <input class="form-control" name="grafana" th:value="${grafana}" placeholder="http://grafana/d/k6?var-run={{run_id}}&amp;from={{start}}&amp;to={{end}}"></div>
                     <button class="btn btn-primary">Сохранить</button>

@@ -49,7 +49,9 @@ public class StepResultService {
     /** Минимальная длина окна, при которой ступень вообще оценивается. */
     public static final int MIN_WINDOW_SEC = 10;
     /** Метрики приходят в Prometheus через remote write с задержкой: перед расчётом ждём. */
-    static final long WAIT_BEFORE_COMPUTE_SEC = 12;
+    static final long WAIT_BEFORE_COMPUTE_SEC = 5;
+    /** Дольше этого не ждём, пока Prometheus получит последние сэмплы run. */
+    static final long MAX_WAIT_FOR_METRICS_SEC = 90;
 
     private final RunService runService;
     private final PrometheusClient prom;
@@ -84,6 +86,7 @@ public class StepResultService {
         worker.submit(() -> {
             try {
                 TimeUnit.SECONDS.sleep(WAIT_BEFORE_COMPUTE_SEC);
+                awaitMetrics(runId);
                 MDC.put("run_id", String.valueOf(runId));
                 compute(runId);
             } catch (InterruptedException e) {
@@ -94,6 +97,40 @@ public class StepResultService {
                 MDC.remove("run_id");
             }
         });
+    }
+
+    /**
+     * Ждёт, пока Prometheus получит сэмплы до конца теста: задержка remote write бывает больше фиксированной паузы,
+     * и тогда хвост окна ступени пуст, а интенсивность выходит заниженной. Не дольше {@link #MAX_WAIT_FOR_METRICS_SEC}.
+     */
+    private void awaitMetrics(long runId) throws InterruptedException {
+        SettingsService.Prometheus p = settings.prometheus();
+        if (!p.configured()) {
+            return;
+        }
+        Run run = runService.get(runId);
+        Instant finished = run.getFinishedAt();
+        if (finished == null) {
+            return;
+        }
+        long deadline = System.currentTimeMillis() + MAX_WAIT_FOR_METRICS_SEC * 1000;
+        int empty = 0;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                List<PrometheusClient.Sample> s = prom.query(p, PromQueries.lastSampleTime(names.names(), runId), Instant.now());
+                // последний сэмпл не раньше конца теста (минус интервал отправки k6) - данные дошли
+                if (!s.isEmpty() && Double.isFinite(s.get(0).value()) && s.get(0).value() >= finished.getEpochSecond() - settings.pushIntervalSec()) {
+                    return;
+                }
+                // данных по run нет совсем (метрики не доходят): итоги покажут это сами, ждать 90 с незачем
+                if (s.isEmpty() && ++empty >= 10) {
+                    return;
+                }
+            } catch (IOException | RuntimeException e) {
+                return;
+            }
+            TimeUnit.SECONDS.sleep(3);
+        }
     }
 
     public Optional<ResultData> load(long runId) {

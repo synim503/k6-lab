@@ -126,6 +126,14 @@ public class SettingsService {
         return !"NATIVE".equals(get(HISTOGRAM_MODE, "CLASSIC"));
     }
 
+    public static final String PUSH_INTERVAL_SEC = "metrics.push.interval_sec";
+    public static final int DEFAULT_PUSH_INTERVAL_SEC = 10;
+
+    /** Как часто k6 на генераторе отправляет метрики в Prometheus (секунды, 5..60). */
+    public int pushIntervalSec() {
+        return Math.max(5, Math.min(60, getInt(PUSH_INTERVAL_SEC, DEFAULT_PUSH_INTERVAL_SEC)));
+    }
+
     public int logLinesPerSecond() {
         return Math.max(1, getInt(LOG_LINES_PER_SEC, 200));
     }

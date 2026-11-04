@@ -430,7 +430,7 @@ func (m *RunManager) launch(r *Run) {
 		r.mu.Unlock()
 		if pr := p.Prometheus; pr != nil && pr.ClassicHistograms && strings.TrimSpace(pr.URL) != "" {
 			// k6 шлёт метрики локальному приёмнику, тот переводит native histograms в классические и пересылает в Prometheus
-			proxy, perr := StartRWProxy(pr.URL, pr.Headers)
+			proxy, perr := StartRWProxy(pr.URL, pr.Headers, pr.KeepHistograms...)
 			if perr != nil {
 				err = fmt.Errorf("не удалось запустить приёмник метрик: %w", perr)
 				goto failed
@@ -440,6 +440,9 @@ func (m *RunManager) launch(r *Run) {
 			r.mu.Unlock()
 			env = withProxyEnv(env, proxy.URL)
 			notes = append(notes, "Метрики k6 идут через локальный приёмник агента: native histograms -> классические (_bucket{le}) для Prometheus")
+			if len(pr.KeepHistograms) > 0 {
+				notes = append(notes, "В Prometheus отправляются только гистограммы: "+strings.Join(pr.KeepHistograms, ", "))
+			}
 		}
 		args := buildArgs(p, filepath.Join(r.dir, "config.json"), summary, port)
 		cmd := exec.Command(m.cfg.K6Path, args...)

@@ -123,7 +123,7 @@ func TestNativeHistogramIsConvertedToClassicBucketsWithCorrectPercentiles(t *tes
 		if got.Count != 1000 || got.Schema != schema || len(got.PosCounts) != len(h.PosCounts) {
 			t.Fatalf("гистограмма разобрана неверно: %+v", got)
 		}
-		out, n := convertSeries(series)
+		out, n := convertSeries(series, nil)
 		if n != 1 {
 			t.Fatalf("n=%d", n)
 		}

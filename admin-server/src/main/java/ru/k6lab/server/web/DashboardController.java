@@ -19,6 +19,9 @@ import java.util.List;
 @Controller
 public class DashboardController {
 
+    /** Сколько генераторов показывать на главной. */
+    static final int GENERATORS_ON_DASHBOARD = 6;
+
     private final GeneratorViewService views;
     private final DeploymentRepository deployments;
     private final RunService runs;
@@ -38,6 +41,11 @@ public class DashboardController {
     public String dashboard(Model model) {
         List<GeneratorView> all = views.all();
         model.addAttribute("generators", all);
+        // на главной - только самые важные: сначала проблемные, затем занятые, остальные по имени; полный список по ссылке «все»
+        model.addAttribute("generatorsShown", all.stream()
+                .sorted(java.util.Comparator.comparingInt(DashboardController::priority)
+                        .thenComparing(v -> v.g().getName(), String.CASE_INSENSITIVE_ORDER))
+                .limit(GENERATORS_ON_DASHBOARD).toList());
         model.addAttribute("total", all.size());
         model.addAttribute("online", all.stream().filter(v -> v.g().getStatus() == Generator.Status.ONLINE && !v.g().isMaintenance()).count());
         model.addAttribute("busy", all.stream().filter(v -> v.g().isBusy()).count());
@@ -51,6 +59,14 @@ public class DashboardController {
         model.addAttribute("lastRuns", runs.search(null, null, 8));
         addRunning(model);
         return "dashboard";
+    }
+
+    private static int priority(GeneratorView v) {
+        Generator.Status st = v.g().getStatus();
+        if (st == Generator.Status.ERROR || st == Generator.Status.OFFLINE) {
+            return 0;
+        }
+        return v.g().isBusy() ? 1 : 2;
     }
 
     /** htmx-фрагмент «Запущенные скрипты»: обновляется каждые 5 секунд. */

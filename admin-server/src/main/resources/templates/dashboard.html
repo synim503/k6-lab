@@ -102,13 +102,13 @@
             <!-- генераторы -->
             <div class="d-flex justify-content-between align-items-center mb-2">
                 <h5 class="mb-0"><i class="bi bi-hdd-network text-primary me-2"></i>Генераторы</h5>
-                <a class="small" th:href="@{/generators}">все →</a>
+                <a class="small" th:href="@{/generators}" th:text="${total > generatorsShown.size()} ? 'все ' + ${total} + ' →' : 'все →'">все →</a>
             </div>
             <div class="card mb-4">
                 <div class="empty-state" th:if="${generators.isEmpty()}"><i class="bi bi-hdd-network"></i>Серверов пока нет
                     <div class="mt-3" sec:authorize="hasRole('ADMIN')"><a class="btn btn-primary btn-sm" th:href="@{/generators/add}"><i class="bi bi-plus-lg me-1"></i>Добавить сервер</a></div></div>
                 <ul class="list-group list-group-flush" th:if="${!generators.isEmpty()}">
-                    <li class="list-group-item d-flex justify-content-between align-items-center gap-2" th:each="v : ${generators}">
+                    <li class="list-group-item d-flex justify-content-between align-items-center gap-2" th:each="v : ${generatorsShown}">
                         <div class="d-flex align-items-center gap-2">
                             <span class="dot" th:classappend="${v.g().status.name() == 'ONLINE'} ? (${v.g().busy} ? 'dot-busy' : 'dot-ok') : 'dot-bad'"></span>
                             <div><a class="fw-semibold" th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a>
@@ -118,6 +118,8 @@
                         <span class="badge" th:text="${v.g().busy} ? 'занят' : ${v.statusLabel}"
                               th:classappend="${v.g().busy} ? 'text-bg-primary' : ${v.badgeClass}"></span>
                     </li>
+                    <li class="list-group-item text-center small" th:if="${total > generatorsShown.size()}">
+                        <a th:href="@{/generators}" th:text="'Показано ' + ${generatorsShown.size()} + ' из ' + ${total} + ' — все генераторы'"></a></li>
                 </ul>
             </div>
 

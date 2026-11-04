@@ -106,6 +106,7 @@ public class RunOrchestrator implements AgentEventListener {
     private final RunLogService logs;
     private final RunEventBroadcaster broadcaster;
     private final SettingsService settings;
+    private final ru.k6lab.server.metrics.MetricNamesService metricNames;
     private final SecretService secrets;
     private final ApplicationEventPublisher publisher;
 
@@ -119,7 +120,9 @@ public class RunOrchestrator implements AgentEventListener {
 
     public RunOrchestrator(RunService runService, RunReservation reservation, RunArtifactService artifacts,
                            AgentSessionRegistry registry, RunLogService logs, RunEventBroadcaster broadcaster,
-                           SettingsService settings, SecretService secrets, ApplicationEventPublisher publisher) {
+                           SettingsService settings, SecretService secrets, ApplicationEventPublisher publisher,
+                           ru.k6lab.server.metrics.MetricNamesService metricNames) {
+        this.metricNames = metricNames;
         this.runService = runService;
         this.reservation = reservation;
         this.artifacts = artifacts;
@@ -218,7 +221,8 @@ public class RunOrchestrator implements AgentEventListener {
                 .map(d -> new Messages.DataRule(d.path(), d.mode(), d.hasHeader())).toList();
         SettingsService.Prometheus prom = settings.prometheus();
         Messages.PrometheusParams promParams = prom.configured()
-                ? new Messages.PrometheusParams(prom.rwUrl(), prom.authHeaders(), "5s", true, settings.classicHistograms()) : null;
+                ? new Messages.PrometheusParams(prom.rwUrl(), prom.authHeaders(), settings.pushIntervalSec() + "s", true,
+                        settings.classicHistograms(), keptHistograms()) : null;
         String cmdId = UUID.randomUUID().toString();
         pendingCmds.put(cmdId, new CmdRef(run.getId(), rg.getGeneratorId(), "PREPARE"));
         session.send(new Messages.Prepare(cmdId, String.valueOf(run.getId()), artifactUrl(gen.getServerUrl(), run.getId(), token),
@@ -226,6 +230,19 @@ public class RunOrchestrator implements AgentEventListener {
                 tags, rules, promParams, rg.getK6ApiPort(), ConfigInput.SYSTEM_TAGS, snap.script().entrypoint(),
                 settings.logLinesPerSecond(), K6Flag.args(run.getRequest() == null ? null
                         : run.getRequest().get("k6Flags") instanceof List<?> l ? l : null)));
+    }
+
+    /**
+     * Гистограммы, которые нужны админке (перцентили SLA) плюс общая http_req_duration для Grafana. Остальные HTTP-гистограммы k6
+     * (blocked, connecting, tls, sending, waiting, receiving) агент не отправляет: каждая даёт ~170 серий на набор меток.
+     */
+    public List<String> keptHistograms() {
+        ru.k6lab.core.prom.PromQueries.Names n = metricNames.names();
+        List<String> keep = new java.util.ArrayList<>(List.of(n.opDuration(), n.iterationDuration()));
+        if (n.iterationDuration().contains("iteration_duration")) {
+            keep.add(n.iterationDuration().replace("iteration_duration", "http_req_duration"));
+        }
+        return keep.stream().distinct().toList();
     }
 
     /** ws://host:port/agent/ws -> http://host:port/agent/artifact/{run}/{token}: агент качает архив с тем же сервером. */

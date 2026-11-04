@@ -13,6 +13,15 @@
         (<span th:text="${k6Version ?: 'k6 не найден'}"></span>), поэтому доступность адресов может отличаться от генераторов. Окружение процесса пустое: переменные и секреты админки скрипту не видны.
         Готовый набор файлов сохраняется как обычный скрипт.</div>
 
+    <div class="row g-2 align-items-end mb-3">
+        <div class="col-md-5">
+            <label class="form-label mb-1" for="sb-script">Скрипт</label>
+            <select class="form-select form-select-sm" id="sb-script" th:attr="data-pre=${preselect}">
+                <option value="">— новый скрипт —</option>
+                <option th:each="s : ${scriptList}" th:value="${s.id}" th:text="${s.name}"></option></select></div>
+        <div class="col-md-7 small text-muted" id="sb-script-info">Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.</div>
+    </div>
+
     <div class="row g-3">
         <div class="col-lg-3">
             <div class="card" id="sb-drop">
@@ -78,6 +87,7 @@
                     <span class="badge text-bg-secondary" id="sb-status">не запущено</span>
                     <span class="ms-auto d-flex gap-2">
                         <input class="form-control form-control-sm" id="sb-name" placeholder="имя скрипта" style="width:190px">
+                        <input class="form-control form-control-sm d-none" id="sb-comment" placeholder="комментарий к версии" style="width:190px">
                         <button type="button" class="btn btn-primary btn-sm" id="sb-save"><i class="bi bi-check-lg me-1"></i>Сохранить как скрипт</button></span>
                 </div>
                 <div class="alert alert-danger py-2 mt-2 mb-0 d-none" id="sb-err"></div>
@@ -114,6 +124,8 @@
             var editor = null;
             var sid = null;
             var polling = false;
+            var existing = null;     // {id, name, version}: отлаживается существующий скрипт, сохранение создаёт новую версию
+            var dirty = false;
 
             var $ = function (id) { return document.getElementById(id); };
             function headers(json) {
@@ -168,6 +180,7 @@
             }
             function addFile(path, text, b64, size) {
                 path = path.replace(/^\/+/, '');
+                dirty = true;
                 if (models[path]) { models[path].dispose(); delete models[path]; }
                 files[path] = {text: text, b64: b64, size: size};
                 if (!entry || !files[entry]) { entry = isJs(path) ? path : entry; }
@@ -239,6 +252,46 @@
                     if (!seen[m[1]]) { seen[m[1]] = 1; var o = document.createElement('option'); o.value = m[1]; dl.appendChild(o); }
                 }
             }
+
+            // ---------- выбор существующего скрипта
+            function resetFiles() {
+                Object.keys(models).forEach(function (p) { models[p].dispose(); });
+                models = {}; files = {}; current = null; entry = '';
+            }
+            function applyMode() {
+                $('sb-name').classList.toggle('d-none', !!existing);
+                $('sb-comment').classList.toggle('d-none', !existing);
+                $('sb-save').innerHTML = '<i class="bi bi-check-lg me-1"></i>' + (existing ? 'Сохранить как версию ' + (existing.version + 1) : 'Сохранить как скрипт');
+                $('sb-script-info').textContent = existing
+                    ? 'Загружена версия ' + existing.version + ' скрипта «' + existing.name + '». Сохранение создаст новую версию, прежние остаются. Секреты в переменных здесь не подставляются.'
+                    : 'Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.';
+            }
+            function loadScript(id) {
+                showErr('');
+                return fetch('/scripts/sandbox/script/' + id).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+                    .then(function (res) {
+                        if (!res.ok) { showErr(res.j.error || 'Не удалось загрузить скрипт'); $('sb-script').value = existing ? String(existing.id) : ''; return; }
+                        var j = res.j;
+                        resetFiles();
+                        j.files.forEach(function (f) { addFile(f.path, f.text, f.base64, f.text ? f.text.length : 0); });
+                        entry = files[j.entrypoint] ? j.entrypoint : (Object.keys(files).filter(isJs)[0] || '');
+                        existing = {id: j.id, name: j.name, version: j.version};
+                        $('sb-env').value = Object.keys(j.env || {}).map(function (k) { return k + '=' + j.env[k]; }).join('\n');
+                        if (entry) { open(entry); } else { showEmpty(); }
+                        renderFiles(); refreshFns(); applyMode(); dirty = false;
+                    })
+                    .catch(function (e) { showErr('Ошибка запроса: ' + e); });
+            }
+            $('sb-script').onchange = function () {
+                var v = this.value;
+                if (dirty && !confirm('Заменить текущие файлы в редакторе? Несохранённые правки пропадут.')) {
+                    this.value = existing ? String(existing.id) : '';
+                    return;
+                }
+                if (v) { loadScript(v); return; }
+                existing = null; resetFiles(); addFile('main.js', TEMPLATE, null, TEMPLATE.length);
+                $('sb-env').value = ''; applyMode(); dirty = false;
+            };
 
             // ---------- запуск и лог
             function payloadFiles() {
@@ -325,11 +378,12 @@
             $('sb-stop').onclick = function () { if (sid) { fetch('/scripts/sandbox/' + sid + '/stop', {method: 'POST', headers: headers(false)}); } };
             $('sb-save').onclick = function () {
                 showErr('');
-                var name = $('sb-name').value.trim();
+                var name = existing ? existing.name : $('sb-name').value.trim();
                 if (!name) { showErr('Введите имя скрипта'); $('sb-name').focus(); return; }
                 if (!entry) { showErr('Выберите основной файл (звёздочка) среди .js-файлов'); return; }
                 fetch('/scripts/sandbox/save', {method: 'POST', headers: headers(true),
-                    body: JSON.stringify({name: name, description: '', entrypoint: entry, files: payloadFiles()})})
+                    body: JSON.stringify({name: name, description: '', entrypoint: entry, files: payloadFiles(),
+                        scriptId: existing ? existing.id : null, comment: existing ? $('sb-comment').value : ''})})
                     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
                     .then(function (res) { if (res.ok) { location.href = res.j.redirect; } else { showErr(res.j.error || 'Не удалось сохранить'); } })
                     .catch(function (e) { showErr('Ошибка запроса: ' + e); });
@@ -357,7 +411,8 @@
                 });
                 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, run);
                 editor.onDidChangeModelContent(function () { if (current === entry) { refreshFns(); } });
-                addFile('main.js', TEMPLATE, null, TEMPLATE.length);
+                var pre = $('sb-script').dataset.pre;
+                if (pre) { $('sb-script').value = pre; loadScript(pre); } else { addFile('main.js', TEMPLATE, null, TEMPLATE.length); dirty = false; }
             });
         })();
     </script>

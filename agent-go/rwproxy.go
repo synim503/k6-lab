@@ -79,7 +79,9 @@ func bucketsToClassic(h NativeHistogram) []float64 {
 }
 
 // convertSeries заменяет native histograms классическими сериями; остальные ряды возвращает как есть (без exemplars).
-func convertSeries(in []TimeSeries) (out []TimeSeries, converted int) {
+// Гистограммы, которых нет в keep, отбрасываются: каждая даёт ~170 серий (сетка le), а админке нужны только перцентили
+// времени итерации/операции. keep == nil - оставить все.
+func convertSeries(in []TimeSeries, keep map[string]bool) (out []TimeSeries, converted int) {
 	for _, ts := range in {
 		if len(ts.Histograms) == 0 {
 			if len(ts.Samples) > 0 {
@@ -95,6 +97,9 @@ func convertSeries(in []TimeSeries) (out []TimeSeries, converted int) {
 			} else {
 				base = append(base, l)
 			}
+		}
+		if keep != nil && !keep[name] {
+			continue
 		}
 		for _, h := range ts.Histograms {
 			t := h.Ts
@@ -119,6 +124,7 @@ func convertSeries(in []TimeSeries) (out []TimeSeries, converted int) {
 // RWProxy - локальный приёмник remote write на время одного run.
 type RWProxy struct {
 	URL       string // куда k6 должен отправлять метрики
+	keep      map[string]bool
 	upstream  string
 	headers   map[string]string
 	srv       *http.Server
@@ -128,12 +134,19 @@ type RWProxy struct {
 	Failed    atomic.Int64
 }
 
-func StartRWProxy(upstream string, headers map[string]string) (*RWProxy, error) {
+// keepHistograms - имена гистограмм, которые пересылать (пусто - все).
+func StartRWProxy(upstream string, headers map[string]string, keepHistograms ...string) (*RWProxy, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
 	p := &RWProxy{upstream: upstream, headers: headers, client: &http.Client{Timeout: 20 * time.Second}}
+	if len(keepHistograms) > 0 {
+		p.keep = make(map[string]bool, len(keepHistograms))
+		for _, n := range keepHistograms {
+			p.keep[n] = true
+		}
+	}
 	p.URL = fmt.Sprintf("http://%s/api/v1/write", ln.Addr().String())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", p.handle)
@@ -168,7 +181,7 @@ func (p *RWProxy) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	out, conv := convertSeries(series)
+	out, conv := convertSeries(series, p.keep)
 	p.Converted.Add(int64(conv))
 	if len(out) == 0 {
 		w.WriteHeader(http.StatusNoContent)

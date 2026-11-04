@@ -14,6 +14,7 @@
                   onsubmit="return confirm('Остановить выполняющийся скрипт?')">
                 <button class="btn btn-outline-danger"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form>
             <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}/load(id=${script.id})}"><i class="bi bi-speedometer2 me-1"></i>Нагрузка</a>
+            <a class="btn btn-outline-secondary" sec:authorize="hasRole('ADMIN')" th:href="@{/scripts/sandbox(script=${script.id})}"><i class="bi bi-bug me-1"></i>Отладка</a>
             <a class="btn btn-outline-secondary" th:href="@{/scripts}"><i class="bi bi-arrow-left me-1"></i>К списку</a>
         </div>
     </div>

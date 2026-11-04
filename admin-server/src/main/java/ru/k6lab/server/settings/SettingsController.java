@@ -45,6 +45,7 @@ public class SettingsController {
         model.addAttribute("hasSecret", settings.hasPrometheusSecret());
         model.addAttribute("grafana", settings.get(SettingsService.GRAFANA_URL_TPL, ""));
         model.addAttribute("classicHist", settings.classicHistograms());
+        model.addAttribute("pushSec", settings.pushIntervalSec());
         model.addAttribute("metricNames", names.json());
         model.addAttribute("logLines", settings.logLinesPerSecond());
         model.addAttribute("logDays", settings.logRetentionDays());
@@ -69,9 +70,13 @@ public class SettingsController {
                                  @RequestParam(defaultValue = "NONE") SettingsService.AuthType authType,
                                  @RequestParam(required = false) String user, @RequestParam(required = false) String secret,
                                  @RequestParam(required = false) String grafana,
-                                 @RequestParam(defaultValue = "CLASSIC") String histMode, RedirectAttributes ra) {
+                                 @RequestParam(defaultValue = "CLASSIC") String histMode,
+                                 @RequestParam(required = false) Integer pushSec, RedirectAttributes ra) {
         settings.savePrometheus(rwUrl, queryUrl, authType, user, secret, grafana);
         settings.set(SettingsService.HISTOGRAM_MODE, "NATIVE".equals(histMode) ? "NATIVE" : "CLASSIC");
+        if (pushSec != null) {
+            settings.set(SettingsService.PUSH_INTERVAL_SEC, String.valueOf(Math.max(5, Math.min(60, pushSec))));
+        }
         ra.addFlashAttribute("info", "Параметры Prometheus сохранены. Выполните диагностику.");
         return "redirect:/settings";
     }

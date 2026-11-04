@@ -37,6 +37,9 @@ type PrometheusParams struct {
 	TrendAsNativeHistogram bool             `json:"trendAsNativeHistogram"`
 	// ClassicHistograms: агент превращает native histograms в классические серии <имя>_bucket{le} перед отправкой в Prometheus
 	ClassicHistograms bool `json:"classicHistograms"`
+	// KeepHistograms: имена гистограмм, которые отправлять в Prometheus (остальные отбрасываются: каждая даёт ~170 серий);
+	// пусто - отправлять все
+	KeepHistograms []string `json:"keepHistograms"`
 }
 
 type DataRule struct {
