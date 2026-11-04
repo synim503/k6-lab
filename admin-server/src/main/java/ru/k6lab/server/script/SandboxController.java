@@ -65,6 +65,18 @@ public class SandboxController {
         }
     }
 
+    /** Функции нагрузки в исходнике основного файла: тот же анализатор, что определяет операции при загрузке скрипта. */
+    @PostMapping("/functions")
+    @ResponseBody
+    public Map<String, Object> functions(@RequestBody Map<String, String> body) {
+        String source = body.getOrDefault("source", "");
+        if (source.length() > 2_000_000) {
+            return Map.of("functions", List.of());
+        }
+        return Map.of("functions", ru.k6lab.core.script.ScriptAnalyzer.analyze(source).operations().stream()
+                .map(ru.k6lab.core.script.ScriptAnalyzer.Operation::name).toList());
+    }
+
     @PostMapping("/{sid}/stop")
     @ResponseBody
     public Map<String, Object> stop(@PathVariable String sid) {

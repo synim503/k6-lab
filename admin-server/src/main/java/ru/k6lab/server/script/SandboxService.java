@@ -208,7 +208,8 @@ public class SandboxService {
         sc.put("vus", clamp(req.vus(), 1, 50, 1));
         sc.put("iterations", clamp(req.iterations(), 1, 1000, 1));
         sc.put("maxDuration", clamp(req.maxDurationSec(), 10, 3600, 300) + "s");
-        if (req.exec() != null && !req.exec().isBlank()) {
+        // «default» - основная функция: поле exec для неё не задаётся
+        if (req.exec() != null && !req.exec().isBlank() && !"default".equals(req.exec().trim())) {
             if (!req.exec().trim().matches("[A-Za-z_$][A-Za-z0-9_$]*")) {
                 throw new IllegalArgumentException("Некорректное имя функции: " + req.exec());
             }

@@ -49,7 +49,9 @@ public class RunPlanner {
         Script script = scripts.get(scriptId);
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
-        List<LoadOperation> ops = load.operations(scriptId).stream().filter(LoadOperation::isEnabled).toList();
+        List<LoadOperation> ops = load.activeOperations(scriptId).stream().filter(LoadOperation::isEnabled).toList();
+        // функции, которых нет в последней версии (скрипт обновили), в запуск не попадают
+        List<String> stale = load.staleOperations(scriptId).stream().map(LoadOperation::getName).toList();
         ScriptVersion version = scripts.latest(scriptId).orElse(null);
         List<StepPlan> steps = null;
         GeneratedConfig gen = null;
@@ -73,6 +75,9 @@ public class RunPlanner {
                 }
             }
             version.getWarnings().forEach(w -> warnings.add("Скрипт: " + w));
+        }
+        if (version != null && !stale.isEmpty()) {
+            warnings.add("Не участвуют в запуске: в версии v" + version.getNumber() + " нет функций операций " + String.join(", ", stale));
         }
         try {
             steps = List.of(new StepPlan(1, script.getLevelPct(), script.getRampSec(), script.getHoldSec(),

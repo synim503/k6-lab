@@ -80,6 +80,33 @@ public class PrometheusClient {
         return out;
     }
 
+    /** Точка временного ряда: unix-секунды и значение. */
+    public record Point(double ts, double value) {
+    }
+
+    /** Range query с разбивкой по метке scenario: все точки каждого ряда (NaN отбрасываются). */
+    public Map<String, List<Point>> rangeByScenario(SettingsService.Prometheus p, String promql, Instant start, Instant end,
+                                                    int stepSec) throws IOException {
+        JsonNode data = call(p, "/api/v1/query_range", "query=" + enc(promql) + "&start=" + start.getEpochSecond() + "&end="
+                + end.getEpochSecond() + "&step=" + Math.max(1, stepSec));
+        Map<String, List<Point>> out = new LinkedHashMap<>();
+        for (JsonNode r : data.path("result")) {
+            String sc = r.path("metric").path("scenario").asText(null);
+            if (sc == null) {
+                continue;
+            }
+            List<Point> pts = new ArrayList<>();
+            for (JsonNode v : r.path("values")) {
+                double d = parse(v.path(1).asText());
+                if (Double.isFinite(d)) {
+                    pts.add(new Point(v.path(0).asDouble(), d));
+                }
+            }
+            out.put(sc, pts);
+        }
+        return out;
+    }
+
     /** Доступность и права: тривиальный запрос. */
     public void ping(SettingsService.Prometheus p) throws IOException {
         call(p, "/api/v1/query", "query=1");

@@ -59,7 +59,8 @@ public final class ChartRenderer {
     public static List<Img> charts(ResultData data) {
         List<Img> out = new ArrayList<>();
         List<ResultData.StepRow> steps = data.steps().stream().filter(s -> !"NOT_RUN".equals(s.status()) && !s.ops().isEmpty()).toList();
-        if (steps.size() < 1) {
+        // график «по уровню нагрузки» из одной ступени - одна точка: при одной ступени строятся графики по времени
+        if (steps.size() < 2) {
             return out;
         }
         List<String> ops = steps.get(0).ops().stream().map(ResultData.OpRow::operation).toList();
@@ -127,8 +128,76 @@ public final class ChartRenderer {
         return out;
     }
 
+    /** Графики по времени: от начала теста, минуты по оси X; интенсивность (факт и план), время ответа с порогом SLA, ошибки. */
+    public static List<Img> timeCharts(List<RunSeriesService.OpSeries> series) {
+        List<Img> out = new ArrayList<>();
+        List<RunSeriesService.OpSeries> ops = series.stream().filter(RunSeriesService.OpSeries::hasData).toList();
+        if (ops.isEmpty()) {
+            return out;
+        }
+        XYChart rate = chart("Интенсивность: факт и план", "оп/с", "Минуты от начала теста");
+        int i = 0;
+        for (RunSeriesService.OpSeries s : ops) {
+            Color col = COLORS[i++ % COLORS.length];
+            if (!s.actual().isEmpty()) {
+                timeLine(rate, s.op() + " факт", s.actual(), col, false);
+            }
+            if (!s.plan().isEmpty()) {
+                timeLine(rate, s.op() + " план", s.plan(), col, true);
+            }
+        }
+        if (!rate.getSeriesMap().isEmpty()) {
+            out.add(img(rate.getTitle(), rate));
+        }
+        for (RunSeriesService.OpSeries s : ops) {
+            if (s.pct().isEmpty()) {
+                continue;
+            }
+            XYChart c = chart("Время ответа: " + s.op(), "мс", "Минуты от начала теста");
+            timeLine(c, "p" + s.pctN(), s.pct(), COLORS[0], false);
+            double last = s.pct().get(s.pct().size() - 1).min();
+            timeLine(c, "SLA", List.of(new RunSeriesService.Pt(s.pct().get(0).min(), s.slaMs()), new RunSeriesService.Pt(last, s.slaMs())),
+                    COLORS[2], true);
+            out.add(img(c.getTitle(), c));
+        }
+        XYChart err = chart("Ошибки", "%", "Минуты от начала теста");
+        i = 0;
+        for (RunSeriesService.OpSeries s : ops) {
+            Color col = COLORS[i++ % COLORS.length];
+            if (s.err().isEmpty()) {
+                continue;
+            }
+            timeLine(err, s.op(), s.err(), col, false);
+            double first = s.err().get(0).min();
+            double last = s.err().get(s.err().size() - 1).min();
+            timeLine(err, s.op() + " порог", List.of(new RunSeriesService.Pt(first, s.maxErrPct()), new RunSeriesService.Pt(last, s.maxErrPct())),
+                    col, true);
+        }
+        if (!err.getSeriesMap().isEmpty()) {
+            out.add(img(err.getTitle(), err));
+        }
+        return out;
+    }
+
+    private static void timeLine(XYChart c, String name, List<RunSeriesService.Pt> pts, Color color, boolean dashed) {
+        // у ряда с единственной точкой линии нет: рисуем маркер, остальные ряды - линией без маркеров
+        List<Double> x = pts.stream().map(RunSeriesService.Pt::min).toList();
+        List<Double> y = pts.stream().map(RunSeriesService.Pt::v).toList();
+        XYSeries s = c.addSeries(name, x, y);
+        s.setLineColor(color);
+        s.setMarkerColor(color);
+        s.setMarker(pts.size() == 1 ? SeriesMarkers.CIRCLE : SeriesMarkers.NONE);
+        if (dashed) {
+            s.setLineStyle(org.knowm.xchart.style.lines.SeriesLines.DASH_DASH);
+        }
+    }
+
     private static XYChart chart(String title, String yTitle) {
-        XYChart c = new XYChartBuilder().width(760).height(300).title(title).xAxisTitle("Уровень нагрузки, %").yAxisTitle(yTitle).build();
+        return chart(title, yTitle, "Уровень нагрузки, %");
+    }
+
+    private static XYChart chart(String title, String yTitle, String xTitle) {
+        XYChart c = new XYChartBuilder().width(760).height(300).title(title).xAxisTitle(xTitle).yAxisTitle(yTitle).build();
         var st = c.getStyler();
         st.setLegendPosition(Styler.LegendPosition.OutsideE);
         st.setChartTitleFont(font(Font.BOLD, 14));

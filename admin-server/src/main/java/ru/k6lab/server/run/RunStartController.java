@@ -47,8 +47,10 @@ public class RunStartController {
 
     private void fill(Long id, Model model) {
         List<Generator> all = generators.findAll().stream().sorted(Comparator.comparing(Generator::getName)).toList();
-        RunPlan plan = planner.plan(id, 1);
-        model.addAttribute("script", scripts.get(id));
+        var script = scripts.get(id);
+        RunPlan plan = planner.plan(id, script.getGeneratorCount());
+        model.addAttribute("script", script);
+        model.addAttribute("defaultCount", script.getGeneratorCount());
         model.addAttribute("k6Flags", java.util.Arrays.stream(K6Flag.values()).filter(f -> !f.isHttpDebug()).toList());
         model.addAttribute("generators", all);
         model.addAttribute("freeCount", all.stream().filter(Generator::isAvailableForRuns).count());
@@ -77,7 +79,7 @@ public class RunStartController {
             if (generatorIds != null && !generatorIds.isEmpty()) {
                 chosen = generatorIds.stream().sorted().toList();
             } else {
-                int n = count == null ? 1 : count;
+                int n = count == null ? scripts.get(id).getGeneratorCount() : count;
                 if (n < 1) {
                     throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
                 }

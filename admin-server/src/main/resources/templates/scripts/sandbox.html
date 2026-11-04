@@ -50,9 +50,8 @@
         <div class="col-lg-5">
             <div class="card card-body">
                 <div class="row g-2">
-                    <div class="col-12"><label class="form-label mb-1">Функция <span class="text-muted small">(пусто — default)</span></label>
-                        <input class="form-control form-control-sm" id="sb-exec" list="sb-fns" placeholder="default" autocomplete="off">
-                        <datalist id="sb-fns"></datalist></div>
+                    <div class="col-12"><label class="form-label mb-1">Функция нагрузки <span class="text-muted small">(определяются автоматически по основному файлу)</span></label>
+                        <select class="form-select form-select-sm" id="sb-exec"><option value="default">default (основная функция)</option></select></div>
                     <div class="col-4"><label class="form-label mb-1">VU</label><input class="form-control form-control-sm" id="sb-vus" type="number" min="1" max="50" value="1"></div>
                     <div class="col-4"><label class="form-label mb-1">Итераций на VU</label><input class="form-control form-control-sm" id="sb-iter" type="number" min="1" max="1000" value="1"></div>
                     <div class="col-4"><label class="form-label mb-1">Лимит, с</label><input class="form-control form-control-sm" id="sb-max" type="number" min="10" max="3600" value="300"></div>
@@ -244,19 +243,38 @@
             };
 
             // ---------- функции скрипта для списка «Функция»
+            var fnTimer = null;
+            var execTouched = false;   // пользователь выбрал функцию сам: автовыбор её больше не меняет
+            $('sb-exec').onchange = function () { execTouched = true; };
+            function fillFns(names) {
+                var sel = $('sb-exec'), prev = sel.value;
+                var named = names.filter(function (n) { return n !== 'default'; });
+                var values = named.slice();
+                values.push('default');   // основная функция есть всегда: k6 запускает её, если exec не задан
+                sel.textContent = '';
+                values.forEach(function (n) {
+                    var o = document.createElement('option'); o.value = n;
+                    o.textContent = n === 'default' ? 'default (основная функция)' : n;
+                    sel.appendChild(o);
+                });
+                // выбор: прежний, если функция осталась; иначе первая именованная (операция нагрузки); иначе default
+                sel.value = execTouched && values.indexOf(prev) >= 0 ? prev : (named[0] || 'default');
+            }
             function refreshFns() {
-                var dl = $('sb-fns'); dl.textContent = '';
-                if (!entry || !files[entry]) { return; }
-                var re = /export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g, m, src = textOf(entry) || '', seen = {};
-                while ((m = re.exec(src))) {
-                    if (!seen[m[1]]) { seen[m[1]] = 1; var o = document.createElement('option'); o.value = m[1]; dl.appendChild(o); }
-                }
+                clearTimeout(fnTimer);
+                fnTimer = setTimeout(function () {
+                    if (!entry || !files[entry]) { fillFns([]); return; }
+                    fetch('/scripts/sandbox/functions', {method: 'POST', headers: headers(true), body: JSON.stringify({source: textOf(entry) || ''})})
+                        .then(function (r) { return r.json(); })
+                        .then(function (j) { fillFns(j.functions || []); })
+                        .catch(function () { /* список функций - подсказка, запуск работает и без него */ });
+                }, 400);
             }
 
             // ---------- выбор существующего скрипта
             function resetFiles() {
                 Object.keys(models).forEach(function (p) { models[p].dispose(); });
-                models = {}; files = {}; current = null; entry = '';
+                models = {}; files = {}; current = null; entry = ''; execTouched = false;
             }
             function applyMode() {
                 $('sb-name').classList.toggle('d-none', !!existing);
@@ -365,7 +383,7 @@
                 $('sb-log').textContent = '';
                 setRunning(true); setStatus('выполняется…', 'text-bg-primary');
                 fetch('/scripts/sandbox/run', {method: 'POST', headers: headers(true), body: JSON.stringify({
-                    files: payloadFiles(), entrypoint: entry, exec: $('sb-exec').value, vus: +$('sb-vus').value || 1,
+                    files: payloadFiles(), entrypoint: entry, exec: $('sb-exec').value === 'default' ? '' : $('sb-exec').value, vus: +$('sb-vus').value || 1,
                     iterations: +$('sb-iter').value || 1, maxDurationSec: +$('sb-max').value || 300, env: envMap(), flags: flagList()})})
                     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
                     .then(function (res) {

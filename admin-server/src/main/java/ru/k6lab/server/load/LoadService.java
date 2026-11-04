@@ -48,6 +48,25 @@ public class LoadService {
         return operations.findByScriptIdOrderByPositionAsc(scriptId);
     }
 
+    /**
+     * Операции нагрузки, функции которых есть в последней версии скрипта. После загрузки версии без старой функции
+     * её операция не показывается и не запускается (строка в базе остаётся до сохранения формы: при откате она вернётся).
+     */
+    @Transactional(readOnly = true)
+    public List<LoadOperation> activeOperations(Long scriptId) {
+        Set<String> available = scripts.latest(scriptId).map(v -> (Set<String>) new HashSet<>(v.operationNames())).orElse(null);
+        List<LoadOperation> all = operations(scriptId);
+        return available == null ? all : all.stream().filter(o -> available.contains(o.getExecFn())).toList();
+    }
+
+    /** Операции нагрузки, функции которых пропали из последней версии скрипта. */
+    @Transactional(readOnly = true)
+    public List<LoadOperation> staleOperations(Long scriptId) {
+        Set<String> active = new HashSet<>();
+        activeOperations(scriptId).forEach(o -> active.add(o.getExecFn()));
+        return operations(scriptId).stream().filter(o -> !active.contains(o.getExecFn())).toList();
+    }
+
     @Transactional(readOnly = true)
     public List<ScriptDataFile> dataFiles(Long scriptId) {
         return dataFiles.findByScriptIdOrderByPathAsc(scriptId);
@@ -56,7 +75,7 @@ public class LoadService {
     /** Нагрузка описана, если есть хотя бы одна включённая операция. */
     @Transactional(readOnly = true)
     public boolean isDefined(Long scriptId) {
-        return operations.findByScriptIdOrderByPositionAsc(scriptId).stream().anyMatch(LoadOperation::isEnabled);
+        return activeOperations(scriptId).stream().anyMatch(LoadOperation::isEnabled);
     }
 
     /** Данные формы для редактирования; операции последней версии, которых в нагрузке ещё нет, добавляются пустыми строками. */
@@ -67,8 +86,9 @@ public class LoadService {
         f.setLevelPct(script.getLevelPct());
         f.setRampSec(script.getRampSec());
         f.setHoldMinutes(script.getHoldSec() / 60.0);
+        f.setGeneratorCount(script.getGeneratorCount());
         f.setEnvText(LoadForm.formatKv(script.getEnv()));
-        List<LoadOperation> saved = operations(scriptId);
+        List<LoadOperation> saved = activeOperations(scriptId);
         for (LoadOperation o : saved) {
             LoadForm.OpForm of = new LoadForm.OpForm();
             of.setName(o.getName());
@@ -129,6 +149,8 @@ public class LoadService {
                 java.util.Map.of("paths", K6ConfigOverrides.paths(overrides).size()));
     }
 
+    public static final int MAX_GENERATORS = 200;
+
     @Transactional
     public void save(Long scriptId, LoadForm f) {
         Script script = scripts.get(scriptId);
@@ -180,6 +202,10 @@ public class LoadService {
         script.setLevelPct(f.getLevelPct());
         script.setRampSec(f.getRampSec());
         script.setHoldSec(holdSec);
+        if (f.getGeneratorCount() < 1 || f.getGeneratorCount() > MAX_GENERATORS) {
+            throw new IllegalArgumentException("Число генераторов: от 1 до " + MAX_GENERATORS);
+        }
+        script.setGeneratorCount(f.getGeneratorCount());
         script.setEnv(env);
         scriptRepo.save(script);
 

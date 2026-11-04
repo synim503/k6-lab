@@ -76,7 +76,21 @@ public class DashboardController {
         return "dashboard :: running";
     }
 
-    private void addRunning(Model model) {
+    /** Блок «Запущенные скрипты» собирается не чаще раза в 3 с на всех зрителей: при 10-15 запусках это сотни запросов. */
+    private static final long RUNNING_CACHE_MS = 3000;
+    private List<RunViewService.RunView> runningCached = List.of();
+    private long runningCachedAt;
+
+    /** Сбрасывает кэш блока «Запущенные скрипты» (после запуска/остановки и в тестах). */
+    public synchronized void invalidateRunning() {
+        runningCachedAt = 0;
+    }
+
+    private synchronized List<RunViewService.RunView> runningViews() {
+        long now = System.currentTimeMillis();
+        if (now - runningCachedAt < RUNNING_CACHE_MS) {
+            return runningCached;
+        }
         List<RunViewService.RunView> running = new ArrayList<>();
         List<Run> active = new ArrayList<>(runs.activeRuns());
         active.addAll(runs.search(null, ru.k6lab.core.runstate.RunStatus.QUEUED, 20));
@@ -88,7 +102,13 @@ public class DashboardController {
             }
         }
         running.sort((a, b) -> Long.compare(b.run().getId(), a.run().getId()));
-        model.addAttribute("running", running);
+        runningCached = running;
+        runningCachedAt = now;
+        return running;
+    }
+
+    private void addRunning(Model model) {
+        model.addAttribute("running", runningViews());
     }
 
     @GetMapping("/login")

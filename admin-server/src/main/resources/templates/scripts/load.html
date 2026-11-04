@@ -9,6 +9,11 @@
         <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}(id=${script.id})}"><i class="bi bi-arrow-left me-1"></i>К скрипту</a>
     </div>
 
+    <div class="alert alert-warning py-2 small" th:if="${!staleOps.isEmpty()}">
+        <i class="bi bi-info-circle me-1"></i>В последней версии скрипта нет функций операций:
+        <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
+        Они убраны из списка и не участвуют в запуске. Если вернуть версию с этими функциями (откат), их нагрузка вернётся, пока вы не сохранили форму.</div>
+
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post">
         <div class="card mb-3">
             <div class="card-header">Операции скрипта</div>
@@ -43,6 +48,8 @@
                 <div class="col-md-3"><label class="form-label">Удержание, мин</label><input class="form-control" type="number" step="any" min="0.02" th:field="*{holdMinutes}"></div>
                 <div class="col-md-3"><label class="form-label">Разгон, с</label><input class="form-control" type="number" min="0" th:field="*{rampSec}"></div>
                 <div class="col-md-3"><label class="form-label">Уровень нагрузки, %</label><input class="form-control" type="number" step="any" min="1" th:field="*{levelPct}"></div>
+                <div class="col-md-3"><label class="form-label">Генераторов</label><input class="form-control" type="number" min="1" max="200" th:field="*{generatorCount}">
+                    <div class="form-text">Подставляется при запуске скрипта</div></div>
                 <div class="col-12 text-muted small">Уровень — доля от заданной интенсивности: при 50% каждая операция идёт с половинной нагрузкой.</div>
             </div></div>
 
@@ -80,7 +87,7 @@
             <form class="card-body" th:action="@{/scripts/{id}/load/json(id=${script.id})}" method="post">
                 <textarea class="form-control font-monospace" name="json" rows="18" spellcheck="false" th:text="${formJson}"></textarea>
                 <div class="form-text mb-2">Те же настройки, что в форме выше: <code>operations</code> (execFn, name, ratePerSec, slaPercentile, slaThresholdMs, maxErrorPct,
-                    expectedDurationSec, failureSource), <code>levelPct</code>, <code>rampSec</code>, <code>holdMinutes</code>, <code>env</code>, <code>dataFiles</code>.
+                    expectedDurationSec, failureSource), <code>levelPct</code>, <code>rampSec</code>, <code>holdMinutes</code>, <code>generatorCount</code>, <code>env</code>, <code>dataFiles</code>.
                     Конфиг заменяет текущую нагрузку целиком; проверки те же, что у формы.</div>
                 <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить из конфига</button>
             </form></div></div>

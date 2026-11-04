@@ -24,11 +24,13 @@ public class ReportService {
     private final SpringTemplateEngine engine;
     private final RunService runService;
     private final StepResultService results;
+    private final RunSeriesService seriesService;
 
-    public ReportService(SpringTemplateEngine engine, RunService runService, StepResultService results) {
+    public ReportService(SpringTemplateEngine engine, RunService runService, StepResultService results, RunSeriesService seriesService) {
         this.engine = engine;
         this.runService = runService;
         this.results = results;
+        this.seriesService = seriesService;
     }
 
     public String renderHtml(long runId) {
@@ -37,7 +39,11 @@ public class ReportService {
         ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
         List<ChartRenderer.Img> charts = List.of();
         try {
-            charts = ChartRenderer.charts(data);
+            // графики по времени от начала теста; если рядов нет - по ступеням (имеют смысл при двух и более ступенях)
+            charts = ChartRenderer.timeCharts(seriesService.series(run, snap));
+            if (charts.isEmpty()) {
+                charts = ChartRenderer.charts(data);
+            }
         } catch (RuntimeException | LinkageError e) {
             // графики - украшение: без них отчёт всё равно полезен (например, нет AWT на сервере)
         }

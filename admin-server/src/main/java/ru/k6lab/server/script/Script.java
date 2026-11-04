@@ -70,4 +70,8 @@ public class Script extends Auditable {
 
     @Column(name = "hold_sec", nullable = false)
     private int holdSec = 300;
+
+    /** Сколько генераторов брать при запуске (подставляется на странице запуска). */
+    @Column(name = "generator_count", nullable = false)
+    private int generatorCount = 1;
 }

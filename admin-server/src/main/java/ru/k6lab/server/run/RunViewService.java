@@ -19,6 +19,21 @@ public class RunViewService {
     public record RunView(Run run, RunSnapshot snapshot, List<GenView> generators, List<RunStep> steps, Integer currentStep,
                           String currentPhase, long elapsedSec, long totalSec, int progressPct, boolean canStop,
                           boolean canControl, boolean live) {
+
+        /** Максимальная загрузка CPU среди генераторов run (null - данных нет). */
+        public Double maxCpu() {
+            return generators.stream().map(GenView::cpu).filter(java.util.Objects::nonNull).max(Double::compare).orElse(null);
+        }
+
+        /** Сколько генераторов run сейчас без связи. */
+        public long offlineCount() {
+            return generators.stream().filter(GenView::offline).count();
+        }
+
+        /** Сколько генераторов run перегружено по CPU (больше 80%). */
+        public long hotCount() {
+            return generators.stream().filter(GenView::cpuHot).count();
+        }
     }
 
     private final RunService runService;

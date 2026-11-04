@@ -99,6 +99,13 @@ public class RunController {
         return broadcaster.subscribeMetrics(id);
     }
 
+    /** Все точки метрик с начала теста (массив JSON): график на странице строится целиком, затем дополняется live-потоком. */
+    @GetMapping(value = "/{id}/metrics/history", produces = MediaType.APPLICATION_JSON_VALUE)
+    @org.springframework.web.bind.annotation.ResponseBody
+    public String metricsHistory(@PathVariable Long id) {
+        return "[" + String.join(",", broadcaster.metricsHistory(id)) + "]";
+    }
+
     @GetMapping("/{id}/log.txt")
     public ResponseEntity<StreamingResponseBody> downloadLog(@PathVariable Long id) {
         StreamingResponseBody body = out -> logs.writeFull(id, out);

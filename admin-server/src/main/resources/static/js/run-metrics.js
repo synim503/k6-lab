@@ -42,7 +42,10 @@
     }
     function fmt(v, d) { return v === undefined || v === null ? '—' : Number(v).toFixed(d === undefined ? 1 : d); }
 
-    function onMetrics(m) {
+    var lastTs = 0;   // точки не дублируются: live-поток при подключении повторяет последнюю
+    function onMetrics(m, quiet) {
+        if (m.ts && m.ts <= lastTs) { return; }
+        lastTs = m.ts || lastTs;
         // подпись по времени самих данных: метрики приходят с задержкой, и «сейчас» на графике было бы неверным
         var t = new Date(m.dataTs || m.ts).toTimeString().substring(0, 8);
         var any = Object.keys(charts)[0];
@@ -69,9 +72,13 @@
                 c.data.labels.shift();
                 c.data.datasets.forEach(function (d) { d.data.shift(); });
             }
-            c.update('none');
+            if (!quiet) { c.update('none'); }
         });
+        if (quiet) { return; }
+        renderCurrent(m, t);
+    }
 
+    function renderCurrent(m, t) {
         // таблица текущих значений с подсветкой нарушений
         var tb = document.getElementById('metric-table');
         if (tb) {
@@ -90,7 +97,22 @@
         }
     }
 
-    var es = new EventSource(root.dataset.metricsStream);
-    es.addEventListener('metrics', function (ev) { onMetrics(JSON.parse(ev.data)); });
-    if (root.dataset.final === 'true') { es.close(); }
+    // сначала вся история с начала теста (одним куском), затем live-поток
+    function startLive() {
+        var es = new EventSource(root.dataset.metricsStream);
+        es.addEventListener('metrics', function (ev) { onMetrics(JSON.parse(ev.data)); });
+        if (root.dataset.final === 'true') { es.close(); }
+    }
+    var historyUrl = root.dataset.metricsHistory;
+    if (!historyUrl) { startLive(); return; }
+    fetch(historyUrl, {credentials: 'same-origin'}).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; })
+        .then(function (points) {
+            points.forEach(function (m) { onMetrics(m, true); });
+            if (points.length) {
+                Object.keys(charts).forEach(function (k) { charts[k].update('none'); });
+                var last = points[points.length - 1];
+                renderCurrent(last, new Date(last.dataTs || last.ts).toTimeString().substring(0, 8));
+            }
+            startLive();
+        });
 })();

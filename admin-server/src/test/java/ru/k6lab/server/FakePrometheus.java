@@ -76,13 +76,30 @@ public final class FakePrometheus implements AutoCloseable {
         Map<String, String> p = params(ex);
         String q = p.getOrDefault("query", "");
         queries.add(q);
-        Map<String, Double> res = responder.apply(q, Double.parseDouble(p.getOrDefault("end", "0")));
         double start = Double.parseDouble(p.getOrDefault("start", "0"));
+        double end = Double.parseDouble(p.getOrDefault("end", "0"));
+        double step = Math.max(1, Double.parseDouble(p.getOrDefault("step", "15")));
+        // ряд на каждый scenario из ответа responder, значения - по времени каждой точки (как настоящий query_range)
+        Map<String, StringBuilder> series = new LinkedHashMap<>();
+        for (double t = start; t <= end; t += step) {
+            Map<String, Double> res = responder.apply(q, t);
+            if (res == null) {
+                continue;
+            }
+            for (var e : res.entrySet()) {
+                StringBuilder v = series.computeIfAbsent(e.getKey(), k -> new StringBuilder());
+                v.append(v.length() == 0 ? "" : ",").append('[').append(t).append(",\"").append(e.getValue()).append("\"]");
+            }
+        }
         StringBuilder sb = new StringBuilder("{\"status\":\"success\",\"data\":{\"resultType\":\"matrix\",\"result\":[");
-        if (res != null && !res.isEmpty()) {
-            double v = res.values().iterator().next();
-            sb.append("{\"metric\":{},\"values\":[[").append(start).append(",\"").append(v).append("\"],[").append(start + 5)
-                    .append(",\"").append(v * 2).append("\"]]}");
+        boolean first = true;
+        for (var e : series.entrySet()) {
+            if (!first) {
+                sb.append(',');
+            }
+            first = false;
+            sb.append("{\"metric\":{").append(e.getKey().isEmpty() ? "" : "\"scenario\":\"" + e.getKey() + "\"").append("},\"values\":[")
+                    .append(e.getValue()).append("]}");
         }
         send(ex, sb.append("]}}").toString());
     }

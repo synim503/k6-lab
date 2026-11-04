@@ -39,6 +39,11 @@ public class RunEventBroadcaster {
 
     private final Map<Long, Channel> channels = new ConcurrentHashMap<>();
 
+    /** Все точки live-метрик run с начала теста: новая вкладка видит графики целиком, а не только то, что пришло после открытия. */
+    private static final int METRIC_HISTORY = 2000;
+    private static final int HISTORY_RUNS = 30;
+    private final Map<Long, java.util.concurrent.ConcurrentLinkedDeque<String>> metricHistory = new ConcurrentHashMap<>();
+
     private Channel ch(long runId) {
         return channels.computeIfAbsent(runId, k -> new Channel());
     }
@@ -69,6 +74,15 @@ public class RunEventBroadcaster {
     }
 
     public void publishMetrics(long runId, String json) {
+        var history = metricHistory.computeIfAbsent(runId, k -> new java.util.concurrent.ConcurrentLinkedDeque<>());
+        history.addLast(json);
+        while (history.size() > METRIC_HISTORY) {
+            history.pollFirst();
+        }
+        // помним последние запуски, а не все: старые вытесняются
+        while (metricHistory.size() > HISTORY_RUNS) {
+            metricHistory.keySet().stream().filter(id -> id != runId).min(Long::compare).ifPresent(metricHistory::remove);
+        }
         Channel c = ch(runId);
         c.lastMetrics = json;
         send(c.metricSubs, "metrics", json);
@@ -101,6 +115,12 @@ public class RunEventBroadcaster {
         SseEmitter e = new SseEmitter(0L);
         register(ch(runId).statusSubs, e);
         return e;
+    }
+
+    /** Точки метрик run с самого начала (JSON-строки по порядку времени). */
+    public List<String> metricsHistory(long runId) {
+        var h = metricHistory.get(runId);
+        return h == null ? List.of() : List.copyOf(h);
     }
 
     public SseEmitter subscribeMetrics(long runId) {

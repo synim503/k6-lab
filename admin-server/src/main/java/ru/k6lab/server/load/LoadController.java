@@ -58,8 +58,9 @@ public class LoadController {
     }
 
     @GetMapping("/load")
-    public String form(@PathVariable Long id, @RequestParam(defaultValue = "1") int generators, Model model) {
-        fill(model, id, load.toForm(id), generators);
+    public String form(@PathVariable Long id, @RequestParam(required = false) Integer generators, Model model) {
+        // без параметра - число генераторов, заданное в скрипте
+        fill(model, id, load.toForm(id), generators != null ? generators : scripts.get(id).getGeneratorCount());
         return "scripts/load";
     }
 
@@ -71,7 +72,7 @@ public class LoadController {
             return "redirect:/scripts/" + id;
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
-            fill(model, id, f, 1);
+            fill(model, id, f, Math.max(1, f.getGeneratorCount()));
             return "scripts/load";
         }
     }
@@ -84,7 +85,7 @@ public class LoadController {
             ra.addFlashAttribute("info", "Нагрузка сохранена из конфига");
             return "redirect:/scripts/" + id;
         } catch (IllegalArgumentException | IllegalStateException e) {
-            fill(model, id, load.toForm(id), 1);
+            fill(model, id, load.toForm(id), scripts.get(id).getGeneratorCount());
             model.addAttribute("error", e.getMessage());
             model.addAttribute("formJson", json);
             model.addAttribute("jsonOpen", true);
@@ -99,7 +100,7 @@ public class LoadController {
     @PostMapping("/k6-config")
     public String saveK6Config(@PathVariable Long id, @RequestParam String config, Model model, RedirectAttributes ra) {
         try {
-            RunPlan base = planner.plan(id, 1);
+            RunPlan base = planner.plan(id, scripts.get(id).getGeneratorCount());
             if (base.baseConfig() == null) {
                 throw new IllegalArgumentException("Сначала опишите нагрузку: " + String.join("; ", base.errors()));
             }
@@ -134,7 +135,7 @@ public class LoadController {
                     : "Конфиг k6 сохранён, ручных правок: " + K6ConfigOverrides.paths(overrides).size());
             return "redirect:/scripts/" + id + "/load#t-config";
         } catch (IllegalArgumentException | IllegalStateException e) {
-            fill(model, id, load.toForm(id), 1);
+            fill(model, id, load.toForm(id), scripts.get(id).getGeneratorCount());
             model.addAttribute("error", e.getMessage());
             model.addAttribute("editedConfig", config);
             model.addAttribute("configTabOpen", true);
@@ -201,6 +202,8 @@ public class LoadController {
         model.addAttribute("operationNames", scripts.latest(id).map(v -> v.operationNames()).orElse(List.of()));
         model.addAttribute("chart", plan.generated() == null ? "null" : chartJson(plan.generated()));
         model.addAttribute("overridePaths", plan.overridePaths());
+        // операции, функций которых нет в последней версии скрипта: убраны из списка и из запуска
+        model.addAttribute("staleOps", load.staleOperations(id).stream().map(LoadOperation::getName).toList());
         model.addAttribute("baseConfigJson", plan.baseConfig() == null ? null : plan.baseConfig().toPrettyString());
         if (plan.generated() != null) {
             model.addAttribute("opNames", plan.generated().operations().stream().map(GeneratedConfig.OpPlan::name).toList());
@@ -210,7 +213,7 @@ public class LoadController {
 
     @GetMapping(value = "/config.json", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> configJson(@PathVariable Long id) {
-        RunPlan plan = planner.plan(id, 1);
+        RunPlan plan = planner.plan(id, scripts.get(id).getGeneratorCount());
         if (plan.configJson() == null) {
             return ResponseEntity.unprocessableEntity().body("{\"error\":\"" + String.join("; ", plan.errors()).replace("\"", "'") + "\"}");
         }
@@ -222,7 +225,7 @@ public class LoadController {
     /** «Требования к ресурсам»: k6 inspect --execution-requirements с итоговым конфигом (htmx). */
     @PostMapping("/requirements")
     public String requirements(@PathVariable Long id, Model model) {
-        RunPlan plan = planner.plan(id, 1);
+        RunPlan plan = planner.plan(id, scripts.get(id).getGeneratorCount());
         if (plan.configJson() == null || plan.version() == null) {
             model.addAttribute("error", String.join("; ", plan.errors()));
             return "scripts/_requirements :: requirements";

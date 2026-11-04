@@ -168,6 +168,9 @@ class ResultsIT extends AbstractIT {
         mvc.perform(get("/runs/" + run.getId())).andExpect(status().isOk()).andExpect(content().string(containsString("Метрики")));
         String html = mvc.perform(get("/runs/" + run.getId() + "/report.html")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(html).contains("Отчёт о нагрузочном тесте").contains("Ступень").contains("data:image/png;base64");
+        // графики по времени от начала теста (много точек), а не «по ступеням» (одна точка на ступень)
+        assertThat(html).contains("Интенсивность: факт и план").contains("Время ответа: work").contains("Ошибки");
+        assertThat(prom.queries).anyMatch(q -> q.startsWith("sum by (scenario) (increase(k6_iterations_total"));
         byte[] pdf = mvc.perform(get("/runs/" + run.getId() + "/report.pdf")).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
         assertThat(new String(pdf, 0, 5, StandardCharsets.ISO_8859_1)).isEqualTo("%PDF-");
         assertThat(pdf.length).isGreaterThan(5_000);

@@ -117,7 +117,7 @@ public class ScriptController {
         model.addAttribute("repos", gitRepos.list());
         model.addAttribute("gitRepo", s.getGitRepoId() == null ? null : gitRepos.get(s.getGitRepoId()));
         model.addAttribute("refs", s.getGitRepoId() == null ? List.of() : gitRepos.cachedRefs(s.getGitRepoId()));
-        List<LoadOperation> ops = load.operations(id);
+        List<LoadOperation> ops = load.activeOperations(id);
         model.addAttribute("ops", ops);
         model.addAttribute("loadDefined", ops.stream().anyMatch(LoadOperation::isEnabled));
         model.addAttribute("running", runningScriptIds().contains(id));

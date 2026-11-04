@@ -19,6 +19,8 @@ public class LoadForm {
     private double levelPct = 100;
     private int rampSec = 30;
     private double holdMinutes = 5;
+    /** Число генераторов, которое подставляется при запуске скрипта. */
+    private int generatorCount = 1;
     private String envText;
     private List<DataForm> dataFiles = new ArrayList<>();
 

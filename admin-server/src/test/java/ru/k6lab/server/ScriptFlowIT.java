@@ -269,6 +269,204 @@ class ScriptFlowIT extends AbstractIT {
     }
 
     @Test
+    void generatorCountIsStoredInScriptAndPrefilledOnRun() throws Exception {
+        long id = script("flow-gencount").getScriptId();
+        var g = new ru.k6lab.server.generator.Generator();
+        g.setName("gc-" + java.util.UUID.randomUUID().toString().substring(0, 6));
+        g.setHost("127.0.0.1");
+        g.setInstallDir("/opt/k6-agent");
+        g.setServerUrl("ws://127.0.0.1:1/agent/ws");
+        g.setStatus(ru.k6lab.server.generator.Generator.Status.INSTALLING);
+        generatorRepo.save(g);
+        java.util.function.Function<String, org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder> loadPost = cnt ->
+                post("/scripts/" + id + "/load").with(csrf())
+                        .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", "5")
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("ops[0].expectedDurationSec", "0.3").param("holdMinutes", "1").param("rampSec", "0").param("levelPct", "100")
+                        .param("generatorCount", cnt);
+
+        // по умолчанию один генератор
+        mvc.perform(get("/scripts/" + id + "/run")).andExpect(content().string(containsString("name=\"count\"")));
+        mvc.perform(loadPost.apply("7")).andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(scripts.get(id).getGeneratorCount()).isEqualTo(7);
+        // страница запуска подставляет число из скрипта, страница нагрузки - тоже
+        String run = mvc.perform(get("/scripts/" + id + "/run")).andReturn().getResponse().getContentAsString();
+        assertThat(run).containsPattern("name=\"count\"[^>]*|value=\"7\"[^>]*name=\"count\"|name=\"count\" id=\"gen-count\"");
+        assertThat(run).contains("value=\"7\"");
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("из 7")));
+        // нереальные значения отклоняются понятным сообщением
+        mvc.perform(loadPost.apply("0")).andExpect(status().isOk()).andExpect(content().string(containsString("от 1 до 200")));
+        mvc.perform(loadPost.apply("500")).andExpect(status().isOk()).andExpect(content().string(containsString("от 1 до 200")));
+        assertThat(scripts.get(id).getGeneratorCount()).isEqualTo(7);
+        // JSON-конфиг нагрузки тоже содержит число генераторов
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("generatorCount")));
+        mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json",
+                        "{\"operations\":[{\"execFn\":\"login\",\"name\":\"login\",\"ratePerSec\":5,\"slaPercentile\":95,\"slaThresholdMs\":800,"
+                                + "\"maxErrorPct\":1,\"expectedDurationSec\":0.3}],\"holdMinutes\":1,\"rampSec\":0,\"levelPct\":100,\"generatorCount\":4}"))
+                .andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(scripts.get(id).getGeneratorCount()).isEqualTo(4);
+    }
+
+    @Test
+    void rollbackToVersionWorksThroughTheWebUi() throws Exception {
+        var v1 = script("flow-rollback");
+        long id = v1.getScriptId();
+        var v2 = scripts.saveEdit(id, v1.getId(), "s.js", "export function login() {}\nexport default function () {}\n", "правка");
+        assertThat(v2.getNumber()).isEqualTo(2);
+        // страница версии показывает кнопку отката
+        mvc.perform(get("/scripts/" + id + "/versions/" + v1.getId())).andExpect(status().isOk())
+                .andExpect(content().string(containsString("/rollback")));
+        // откат: новая версия 3 с содержимым первой, переход на её страницу
+        String redirect = mvc.perform(post("/scripts/" + id + "/versions/" + v1.getId() + "/rollback").with(csrf()))
+                .andExpect(status().is3xxRedirection()).andReturn().getResponse().getRedirectedUrl();
+        assertThat(redirect).startsWith("/scripts/" + id + "/versions/");
+        var latest = scripts.latest(id).orElseThrow();
+        assertThat(latest.getNumber()).isEqualTo(3);
+        assertThat(latest.getSource()).isEqualTo(ru.k6lab.server.script.ScriptVersion.Source.ROLLBACK);
+        assertThat(latest.getSha256()).isEqualTo(v1.getSha256());
+        mvc.perform(get(redirect)).andExpect(status().isOk());
+        mvc.perform(get("/scripts/" + id)).andExpect(status().isOk());
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(status().isOk());
+        mvc.perform(get("/scripts/" + id + "/versions/" + latest.getId() + "/edit")).andExpect(status().isOk());
+        // откат не трогает прежние версии: у каждой своё содержимое
+        java.util.function.Function<ru.k6lab.server.script.ScriptVersion, String> content = v -> {
+            try {
+                return mvc.perform(get("/scripts/" + id + "/versions/" + v.getId() + "/file").param("path", "s.js"))
+                        .andReturn().getResponse().getContentAsString();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        assertThat(content.apply(v1)).contains("http.get('http://localhost/a')");
+        assertThat(content.apply(v2)).doesNotContain("http.get").contains("export function login() {}");
+        assertThat(content.apply(latest)).contains("http.get('http://localhost/a')");
+        assertThat(scripts.version(id, v1.getId()).getSha256()).isNotEqualTo(scripts.version(id, v2.getId()).getSha256());
+        assertThat(scripts.versionsOf(id)).extracting(ru.k6lab.server.script.ScriptVersion::getNumber).containsExactlyInAnyOrder(1, 2, 3);
+    }
+
+    @Test
+    void sandboxDetectsLoadFunctionsLikeTheUploadAnalyzer() throws Exception {
+        String src = "export function login() {}\\nexport const pay = () => {};\\nexport async function refund() {}\\n"
+                + "export function setup() {}\\nexport default function () {}\\n";
+        mvc.perform(post("/scripts/sandbox/functions").with(csrf()).contentType("application/json")
+                        .content("{\"source\":\"" + src + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.functions[0]").value("login"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.functions.length()").value(4))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.functions[3]").value("default"));
+        mvc.perform(post("/scripts/sandbox/functions").with(csrf()).contentType("application/json").content("{\"source\":\"\"}"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.functions.length()").value(0));
+        // страница отладки: выбор функции - список, а не ручной ввод
+        mvc.perform(get("/scripts/sandbox")).andExpect(content().string(containsString("id=\"sb-exec\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("datalist"))));
+    }
+
+    @Test
+    void functionRemovedFromNewVersionDisappearsFromLoadAndRun() throws Exception {
+        var om = new com.fasterxml.jackson.databind.ObjectMapper();
+        var v1 = script("flow-stale");
+        long id = v1.getScriptId();
+        // нагрузка на две функции: login и pay
+        mvc.perform(post("/scripts/" + id + "/load").with(csrf())
+                        .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", "5")
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("ops[0].expectedDurationSec", "0.3")
+                        .param("ops[1].execFn", "pay").param("ops[1].name", "pay").param("ops[1].ratePerSec", "2")
+                        .param("ops[1].slaPercentile", "95").param("ops[1].slaThresholdMs", "800").param("ops[1].maxErrorPct", "1")
+                        .param("ops[1].expectedDurationSec", "0.3")
+                        .param("holdMinutes", "1").param("rampSec", "0").param("levelPct", "100"))
+                .andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(load.activeOperations(id)).extracting(LoadOperation::getName).containsExactly("login", "pay");
+
+        // новая версия без функции login
+        var v2 = scripts.saveEdit(id, v1.getId(), "s.js",
+                "import http from 'k6/http';\nexport function pay() { http.get('http://localhost/b'); }\nexport default function () {}\n", "убрали login");
+        assertThat(v2.operationNames()).doesNotContain("login");
+
+        // страница нагрузки: login больше нет в списке, есть пояснение; страница скрипта и план - только pay
+        String page = mvc.perform(get("/scripts/" + id + "/load")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("нет функций операций")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(page).doesNotContain("name=\"ops[0].execFn\" value=\"login\"").doesNotContain("value=\"login\"");
+        assertThat(load.activeOperations(id)).extracting(LoadOperation::getName).containsExactly("pay");
+        assertThat(load.staleOperations(id)).extracting(LoadOperation::getName).containsExactly("login");
+        var cfg = om.readTree(mvc.perform(get("/scripts/" + id + "/config.json")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        assertThat(cfg.path("scenarios").has("login")).isFalse();
+        assertThat(cfg.path("scenarios").has("pay")).isTrue();
+        mvc.perform(get("/scripts/" + id + "/run")).andExpect(content().string(containsString("Не участвуют в запуске")));
+
+        // откат к первой версии возвращает функцию и её нагрузку
+        scripts.rollback(id, v1.getId());
+        assertThat(load.activeOperations(id)).extracting(LoadOperation::getName).containsExactly("login", "pay");
+        assertThat(load.staleOperations(id)).isEmpty();
+    }
+
+    @Autowired
+    ru.k6lab.server.run.RunEventBroadcaster broadcaster;
+
+    @Test
+    void metricsHistoryKeepsAllPointsFromTestStart() throws Exception {
+        long runId = 910_000L + (System.nanoTime() % 1000);
+        mvc.perform(get("/runs/" + runId + "/metrics/history")).andExpect(status().isOk()).andExpect(content().string("[]"));
+        for (int i = 1; i <= 3; i++) {
+            broadcaster.publishMetrics(runId, "{\"ts\":" + i + ",\"step\":1,\"rows\":[]}");
+        }
+        // график строится с начала теста, а не только с момента открытия страницы
+        var arr = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                mvc.perform(get("/runs/" + runId + "/metrics/history")).andExpect(status().isOk())
+                        .andReturn().getResponse().getContentAsString());
+        assertThat(arr).hasSize(3);
+        assertThat(arr.get(0).path("ts").asLong()).isEqualTo(1);
+        assertThat(arr.get(2).path("ts").asLong()).isEqualTo(3);
+        assertThat(broadcaster.metricsHistory(runId)).hasSize(3);
+        // страница запуска знает адрес истории
+        assertThat(mvc.perform(get("/")).andReturn().getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Autowired
+    ru.k6lab.server.web.DashboardController dashboardController;
+
+    @Test
+    void dashboardListsManyRunningScriptsCompactlyAndHasDebugSection() throws Exception {
+        var g = new ru.k6lab.server.generator.Generator();
+        g.setName("many-" + java.util.UUID.randomUUID().toString().substring(0, 6));
+        g.setHost("127.0.0.1");
+        g.setInstallDir("/opt/k6-agent");
+        g.setServerUrl("ws://127.0.0.1:1/agent/ws");
+        g.setStatus(ru.k6lab.server.generator.Generator.Status.INSTALLING);
+        g = generatorRepo.save(g);
+        var f = new ru.k6lab.server.load.LoadForm();
+        var o = new ru.k6lab.server.load.LoadForm.OpForm();
+        o.setName("login");
+        o.setExecFn("login");
+        o.setRatePerSec(1.0);
+        f.getOps().add(o);
+        f.setHoldMinutes(1);
+        f.setRampSec(0);
+        int before = runService.activeRuns().size();
+        for (int i = 0; i < 12; i++) {
+            long sid = script("flow-many-" + i).getScriptId();
+            load.save(sid, f);
+            runService.create(new ru.k6lab.server.run.RunService.CreateRequest(sid,
+                    java.util.List.of(new ru.k6lab.server.run.RunService.GeneratorSel(g.getId(), 1)),
+                    ru.k6lab.server.run.Run.FailurePolicy.CONTINUE, 90));
+        }
+        dashboardController.invalidateRunning();
+        String html = mvc.perform(get("/")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        // одна компактная таблица, строка на запуск; никаких больших карточек с чипами генераторов
+        assertThat(html).contains("run-table").doesNotContain("run-card");
+        int rows = html.split("stretched-link", -1).length - 1;
+        assertThat(rows).isGreaterThanOrEqualTo(12);
+        assertThat(html).contains("ждёт свободные генераторы");
+        // раздел «Отладка» среди разделов
+        assertThat(html).contains("href=\"/scripts/sandbox\"").contains("запуск скрипта с логом");
+        // повторный запрос укладывается в кэш и тоже отдаёт страницу
+        mvc.perform(get("/dashboard/running")).andExpect(status().isOk()).andExpect(content().string(containsString("run-table")));
+    }
+
+    @Test
     void sandboxPageValidatesFilesAndSavesScript() throws Exception {
         mvc.perform(get("/scripts/sandbox")).andExpect(status().isOk()).andExpect(content().string(containsString("Отладка скрипта")));
         mvc.perform(get("/scripts/new")).andExpect(content().string(containsString("/scripts/sandbox")));
@@ -338,6 +536,18 @@ class ScriptFlowIT extends AbstractIT {
         assertThat(c.done()).isTrue();
         assertThat(c.exitCode()).as(all).isEqualTo(0);
         assertThat(all).contains("other-fn").doesNotContain("hello");
+        // default в выпадающем списке = основная функция: exec в конфиге не задаётся, запуск проходит
+        String id2 = sandbox.start(new ru.k6lab.server.script.SandboxService.RunRequest(req.files(), "main.js", "default", 1, 1, 60,
+                java.util.Map.of("WHO", "def"), java.util.List.of()));
+        ru.k6lab.server.script.SandboxService.Chunk c2;
+        long end2 = System.currentTimeMillis() + 60_000;
+        do {
+            Thread.sleep(300);
+            c2 = sandbox.read(id2, 0);
+        } while (!c2.done() && System.currentTimeMillis() < end2);
+        String all2 = String.join("\n", c2.lines().stream().map(l -> l.text()).toList());
+        assertThat(c2.exitCode()).as(all2).isEqualTo(0);
+        assertThat(all2).contains("hello def");
         assertThatThrownBy(() -> sandbox.start(new ru.k6lab.server.script.SandboxService.RunRequest(java.util.List.of(
                 new ru.k6lab.server.script.SandboxService.FileIn("a.js", "x", null)), "missing.js", null, 1, 1, 10, null, null)))
                 .isInstanceOf(IllegalArgumentException.class);
