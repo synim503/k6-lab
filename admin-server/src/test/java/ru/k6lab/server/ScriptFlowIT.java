@@ -467,6 +467,40 @@ class ScriptFlowIT extends AbstractIT {
     }
 
     @Test
+    void failedGeneratorCanBeReinstalledAndOperationsIsInTheMenu() throws Exception {
+        // «Операции» - пункт верхнего меню, а не спрятан в «Ещё»
+        String home = mvc.perform(get("/")).andReturn().getResponse().getContentAsString();
+        assertThat(home).contains("href=\"/deployments\"").contains(">Операции<");
+        assertThat(home.indexOf("href=\"/deployments\"")).isLessThan(home.indexOf("dropdown-toggle"));
+
+        var g = new ru.k6lab.server.generator.Generator();
+        g.setName("err-" + java.util.UUID.randomUUID().toString().substring(0, 6));
+        g.setHost("127.0.0.1");
+        g.setInstallDir("/opt/k6-agent");
+        g.setServerUrl("ws://127.0.0.1:1/agent/ws");
+        g.setStatus(ru.k6lab.server.generator.Generator.Status.ERROR);
+        g = generatorRepo.save(g);
+        // у генератора в ошибке: блок с повтором установки и жёстким редеплоем; в списке - быстрая кнопка
+        mvc.perform(get("/generators/" + g.getId())).andExpect(status().isOk())
+                .andExpect(content().string(containsString("Агент в ошибке")))
+                .andExpect(content().string(containsString("Повторить установку")))
+                .andExpect(content().string(containsString("/generators/" + g.getId() + "/redeploy?keepMode=true")));
+        mvc.perform(get("/generators")).andExpect(content().string(containsString("/generators/" + g.getId() + "/redeploy?keepMode=true")));
+        // повтор запускает операцию (хост недоступен: операция сама завершится ошибкой, но пользователь попадает на её страницу)
+        mvc.perform(post("/generators/" + g.getId() + "/redeploy").with(csrf()).param("keepMode", "true"))
+                .andExpect(redirectedUrlPattern("/deployments/*"));
+        // у генератора не в ошибке (OFFLINE: свободным для запусков он не становится) блока ошибки нет
+        var ok = new ru.k6lab.server.generator.Generator();
+        ok.setName("okg-" + java.util.UUID.randomUUID().toString().substring(0, 6));
+        ok.setHost("127.0.0.1");
+        ok.setInstallDir("/opt/k6-agent");
+        ok.setServerUrl("ws://127.0.0.1:1/agent/ws");
+        ok.setStatus(ru.k6lab.server.generator.Generator.Status.OFFLINE);
+        ok = generatorRepo.save(ok);
+        mvc.perform(get("/generators/" + ok.getId())).andExpect(content().string(org.hamcrest.Matchers.not(containsString("Агент в ошибке"))));
+    }
+
+    @Test
     void sandboxPageValidatesFilesAndSavesScript() throws Exception {
         mvc.perform(get("/scripts/sandbox")).andExpect(status().isOk()).andExpect(content().string(containsString("Отладка скрипта")));
         mvc.perform(get("/scripts/new")).andExpect(content().string(containsString("/scripts/sandbox")));

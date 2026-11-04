@@ -354,6 +354,15 @@ class SshDeployIT extends AbstractIT {
         assertThat(g.getAgentVersion()).isNotBlank();
         assertThat(g.getOneTimeTokenHash()).isNull();
         assertThat(d.getSteps()).extracting(Deployment.StepInfo::status).doesNotContain("FAILED");
+
+        // «повторить установку» после ошибки: режим и каталог остаются выбранными, агент снова ставится с нуля
+        Deployment again = awaitSucceeded(deploy.startRedeploy(systemGen, true).getId());
+        assertThat(again.getLog()).contains("Снос старого агента");
+        assertThat(exec("systemctl", "is-active", "k6-agent")).isEqualTo("active");
+        g = generators.findById(systemGen).orElseThrow();
+        assertThat(g.getInstallMode()).isEqualTo(Generator.InstallMode.SYSTEM);
+        assertThat(g.getInstallDir()).isEqualTo("/opt/k6-agent");
+        assertThat(g.getStatus()).isEqualTo(Generator.Status.ONLINE);
     }
 
     @Test

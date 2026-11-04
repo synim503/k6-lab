@@ -227,8 +227,8 @@ public class GeneratorController {
     /** Жёсткий редеплой: снести всё, что касается старого агента, и поставить заново системным сервисом systemd. */
     @PostMapping("/{id}/redeploy")
     @PreAuthorize("hasRole('ADMIN')")
-    public String redeploy(@PathVariable Long id, RedirectAttributes ra) {
-        return run(id, ra, () -> deploy.startRedeploy(id));
+    public String redeploy(@PathVariable Long id, @RequestParam(defaultValue = "false") boolean keepMode, RedirectAttributes ra) {
+        return run(id, ra, () -> deploy.startRedeploy(id, keepMode));
     }
 
     @PostMapping("/{id}/uninstall")

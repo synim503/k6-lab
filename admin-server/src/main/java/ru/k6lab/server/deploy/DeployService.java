@@ -180,9 +180,19 @@ public class DeployService {
      * заново системным сервисом systemd с актуальными дистрибутивами. Запись генератора, его имя и история сохраняются.
      */
     public Deployment startRedeploy(Long generatorId) {
+        return startRedeploy(generatorId, false);
+    }
+
+    /**
+     * @param keepMode true - «повторить установку» после ошибки: режим и каталог остаются теми, что выбраны для генератора;
+     *                 false - жёсткий редеплой: всегда системный сервис systemd в /opt/k6-agent
+     */
+    public Deployment startRedeploy(Long generatorId, boolean keepMode) {
         Generator g = idle(generatorId, "переустановить");
-        audit.record("generator.redeploy", "generator", generatorId, Map.of("name", g.getName()));
-        Deployment d = store.create(newDeployment(g.getId(), g.getHost(), Deployment.Operation.REDEPLOY));
+        audit.record("generator.redeploy", "generator", generatorId, Map.of("name", g.getName(), "keepMode", keepMode));
+        Deployment d = newDeployment(g.getId(), g.getHost(), Deployment.Operation.REDEPLOY);
+        d.getParams().put("keepMode", keepMode);
+        d = store.create(d);
         submit(d.getId());
         return d;
     }
@@ -255,13 +265,18 @@ public class DeployService {
                 case REDEPLOY -> {
                     Generator g = store.loadGenerator(d.getGeneratorId());
                     Target old = targetOf(g);
-                    // новая установка - всегда системный сервис systemd в стандартном каталоге
+                    // жёсткий редеплой - всегда системный сервис systemd в стандартном каталоге; повтор установки после ошибки
+                    // сохраняет режим и каталог, выбранные для генератора
+                    boolean keep = Boolean.TRUE.equals(d.getParams().get("keepMode"));
+                    Generator.InstallMode freshMode = keep ? g.getInstallMode() : Generator.InstallMode.SYSTEM;
+                    String freshDir = keep && g.getInstallDir() != null && !g.getInstallDir().isBlank() ? g.getInstallDir()
+                            : (freshMode == Generator.InstallMode.SYSTEM ? "/opt/k6-agent" : "~/k6-agent");
                     Target fresh = new Target(g.getId(), g.getName(), g.getHost(), g.getSshPort(), g.getSshCredentialId(),
-                            Generator.InstallMode.SYSTEM, "/opt/k6-agent", g.getServerUrl(), g.isTuneOs(), null);
+                            freshMode, freshDir, g.getServerUrl(), g.isTuneOs() && freshMode == Generator.InstallMode.SYSTEM, null);
                     store.updateGenerator(g.getId(), x -> x.setStatus(Generator.Status.INSTALLING));
                     DeployEngine.InstallResult res = engine.hardRedeploy(run, old, fresh, null, null);
                     store.updateGenerator(g.getId(), x -> {
-                        x.setInstallMode(Generator.InstallMode.SYSTEM);
+                        x.setInstallMode(freshMode);
                         x.setSupervisor(res.supervisor());
                         x.setArch(res.arch() == null ? null : res.arch().name());
                         x.setOsName(res.osName());

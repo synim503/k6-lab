@@ -10,6 +10,19 @@
         <a class="btn btn-link" th:href="@{/generators}">← к списку</a>
     </div>
 
+    <div class="alert alert-danger d-flex flex-wrap justify-content-between align-items-center gap-2" th:if="${v.g().status.name() == 'ERROR'}">
+        <div><i class="bi bi-exclamation-octagon me-1"></i><strong>Агент в ошибке.</strong> Установка или операция не завершилась.
+            <a th:if="${history != null and !history.isEmpty()}" th:href="@{/deployments/{id}(id=${history[0].id})}">Журнал последней операции</a></div>
+        <div class="d-flex gap-2" sec:authorize="hasRole('ADMIN')">
+            <form th:action="@{/generators/{id}/redeploy(id=${v.g().id},keepMode=true)}" method="post"
+                  onsubmit="return confirm('Повторить установку агента? Остатки прошлой попытки будут удалены.')">
+                <button class="btn btn-danger" th:disabled="${v.g().busy}"><i class="bi bi-arrow-repeat me-1"></i>Повторить установку</button></form>
+            <form th:action="@{/generators/{id}/redeploy(id=${v.g().id})}" method="post"
+                  onsubmit="return confirm('Жёсткий редеплой: снести всё про старого агента и поставить заново системным сервисом systemd?')">
+                <button class="btn btn-outline-danger" th:disabled="${v.g().busy}">Жёсткий редеплой (systemd)</button></form>
+        </div>
+    </div>
+
     <div class="row g-3">
         <div class="col-lg-6">
             <div class="card" id="card" th:fragment="card" hx-get="" th:attr="hx-get=@{/generators/{id}/card(id=${v.g().id})}" hx-trigger="every 5s" hx-swap="outerHTML">

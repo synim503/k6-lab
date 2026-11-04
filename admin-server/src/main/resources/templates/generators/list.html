@@ -33,7 +33,11 @@
                 <tr th:each="v : ${generators}">
                     <td><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a></td>
                     <td th:text="${v.g().host}"></td>
-                    <td><span class="badge" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span></td>
+                    <td><span class="badge" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span>
+                        <form class="d-inline" sec:authorize="hasRole('ADMIN')" th:if="${v.g().status.name() == 'ERROR'}"
+                              th:action="@{/generators/{id}/redeploy(id=${v.g().id},keepMode=true)}" method="post"
+                              onsubmit="return confirm('Повторить установку агента?')">
+                            <button class="btn btn-sm btn-outline-danger py-0 ms-1" title="Повторить установку"><i class="bi bi-arrow-repeat"></i></button></form></td>
                     <td th:classappend="${v.cpuHot} ? 'metric-hot'" th:text="${v.cpu != null} ? ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%' : '—'"></td>
                     <td th:text="${v.memPct != null} ? ${#numbers.formatDecimal(v.memPct, 1, 0)} + '%' : '—'"></td>
                     <td th:text="${v.netRx != null} ? ${#numbers.formatDecimal(v.netRx / 1048576.0, 1, 2)} + ' / ' + ${#numbers.formatDecimal(v.netTx / 1048576.0, 1, 2)} : '—'"></td>
