@@ -265,6 +265,19 @@ public final class K6ConfigGenerator {
         for (Map.Entry<String, Object> e : params.entrySet()) {
             sc.set(e.getKey(), MAPPER.valueToTree(e.getValue()));
         }
+        int gens = Math.max(1, in.generatorCount());
+        if (gens > 1) {
+            for (String k : List.of("vus", "preAllocatedVUs", "maxVUs")) {
+                if (params.get(k) instanceof Number n && n.longValue() < gens) {
+                    params.put(k, (long) gens);
+                    sc.put(k, (long) gens);
+                }
+            }
+            if (params.get("maxVUs") instanceof Number mx && params.get("preAllocatedVUs") instanceof Number pr && mx.longValue() < pr.longValue()) {
+                params.put("maxVUs", pr.longValue());
+                sc.put("maxVUs", pr.longValue());
+            }
+        }
         putExec(sc, op);
         Map<String, String> envMap = new java.util.TreeMap<>(op.env());
         envMap.putAll(stringMap(env));
@@ -287,7 +300,9 @@ public final class K6ConfigGenerator {
             peakRate = unitSec > 0 ? number(params.get("rate")) / unitSec : 0;
         }
         int n = in.steps().size();
-        return new OpPlan(op.name(), op.executor().contains("arrival") ? Mode.OPEN : Mode.CLOSED, 1, new long[0], new double[n],
+        double[] ratesPerStep = new double[n];
+        java.util.Arrays.fill(ratesPerStep, peakRate); // план по оп/с есть только у constant-arrival-rate
+        return new OpPlan(op.name(), op.executor().contains("arrival") ? Mode.OPEN : Mode.CLOSED, 1, new long[0], ratesPerStep,
                 new long[n], pre, vus, peakRate);
     }
 

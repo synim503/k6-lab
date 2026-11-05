@@ -6,6 +6,7 @@
 <th:block layout:fragment="content">
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='load')}"></th:block>
 
+    <div class="alert alert-danger py-2" th:each="e : ${plan.errors}" th:text="${e}"></div>
     <div class="alert alert-warning py-2 small" th:if="${!staleOps.isEmpty()}">
         <i class="bi bi-info-circle me-1"></i>В последней версии скрипта нет функций операций:
         <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
@@ -14,40 +15,35 @@
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post">
 
         <div class="sect-title mt-0"><h5>Операции</h5>
-            <span class="hint">каждая функция скрипта — отдельная операция со своим требованием к скорости ответа</span></div>
+            <span class="hint">каждая функция скрипта — отдельная операция; для одной функции можно добавить несколько сценариев</span></div>
         <div class="op-list" id="ops-body">
             <div class="card empty-state" th:if="${form.ops.isEmpty()}"><i class="bi bi-inbox"></i>В скрипте не найдено экспортируемых функций.
                 Добавьте их на странице версии, если определение неполное.</div>
             <div class="op-card op-row" th:each="o, st : ${form.ops}" th:attr="data-fn=${o.execFn}">
                 <div class="op-head">
+                    <div class="form-check form-switch m-0" title="Включена ли операция в запуск">
+                        <input type="hidden" th:name="|_ops[${st.index}].enabled|" value="on">
+                        <input class="form-check-input op-on" type="checkbox" role="switch" value="true" th:name="|ops[${st.index}].enabled|" th:checked="${o.enabled}" aria-label="Операция участвует в запуске"></div>
                     <code class="fn" th:text="${o.execFn}"></code>
                     <input type="hidden" th:name="|ops[${st.index}].execFn|" th:value="${o.execFn}">
                     <input type="hidden" th:name="|ops[${st.index}].failureSource|" th:value="${o.failureSource}">
                     <input class="form-control form-control-sm op-name" th:name="|ops[${st.index}].name|" th:value="${o.name}"
                            aria-label="Название операции" placeholder="Название" title="Название операции: по нему метрики и отчёты">
                     <select class="form-select form-select-sm op-exec" aria-label="Как запускать операцию">
-                        <option value="profile">По профилю нагрузки (оп/с)</option>
-                        <option value="constant-vus">constant-vus: постоянное число VU</option>
-                        <option value="ramping-vus">ramping-vus: VU по стадиям</option>
                         <option value="constant-arrival-rate">constant-arrival-rate: постоянная интенсивность</option>
                         <option value="ramping-arrival-rate">ramping-arrival-rate: интенсивность по стадиям</option>
+                        <option value="constant-vus">constant-vus: постоянное число VU</option>
+                        <option value="ramping-vus">ramping-vus: VU по стадиям</option>
                         <option value="per-vu-iterations">per-vu-iterations: итерации на VU</option>
                         <option value="shared-iterations">shared-iterations: общее число итераций</option>
                         <option value="externally-controlled">externally-controlled: через REST API</option></select>
                     <input type="hidden" class="op-exec-val" th:name="|ops[${st.index}].executor|" th:value="${o.executor}">
                     <span class="op-state"></span>
                     <span class="op-tools">
-                        <button type="button" class="btn btn-sm btn-outline-secondary op-adv" title="Старт через, VU, окружение и теги сценария"><i class="bi bi-sliders me-1"></i>Дополнительно</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary op-add" title="Ещё один сценарий на эту функцию: свой исполнитель, параметры и требования"><i class="bi bi-plus-lg me-1"></i>Сценарий</button>
                         <button type="button" class="btn btn-sm btn-outline-danger op-del d-none" title="Убрать этот сценарий" aria-label="Убрать сценарий"><i class="bi bi-trash"></i></button></span>
                 </div>
                 <div class="op-grid">
-                    <div class="op-prof-only"><label class="form-label">Нагрузка, оп/с</label>
-                        <input class="form-control form-control-sm op-rate" type="number" step="any" min="0" placeholder="0 — не участвует"
-                               th:name="|ops[${st.index}].ratePerSec|" th:value="${o.ratePerSec}"></div>
-                    <div class="op-prof-only"><label class="form-label" title="Сколько в среднем длится одна операция: по ней оценивается нужное число VU">Время операции, с</label>
-                        <input class="form-control form-control-sm op-dur" type="number" step="any" min="0.001"
-                               th:name="|ops[${st.index}].expectedDurationSec|" th:value="${o.expectedDurationSec}"></div>
                     <div class="op-sla"><label class="form-label">Время ответа не более</label>
                         <div class="input-group input-group-sm">
                             <select class="form-select" style="max-width:84px" th:name="|ops[${st.index}].slaPercentile|" aria-label="Перцентиль">
@@ -67,20 +63,8 @@
                 </div>
             </div>
         </div>
-        <div class="form-text mt-2">Операция без нагрузки «по профилю» в запуске не участвует. Любой другой исполнитель работает по своим параметрам.
+        <div class="form-text mt-2">Выключенная операция в запуске не участвует. Параметры сценария задаются как в k6; для одной функции можно добавить несколько сценариев.
             Список функций берётся из последней версии скрипта.</div>
-
-        <div class="sect-title"><h5>Параметры запуска</h5><span class="hint">нагрузка стартует сразу и держится заданное время</span></div>
-        <div class="card"><div class="card-body row g-3">
-            <div class="col-6 col-md-4"><label class="form-label" for="holdMinutes">Удержание</label>
-                <div class="input-group"><input class="form-control" id="holdMinutes" type="number" step="any" min="0.02" th:field="*{holdMinutes}"><span class="input-group-text">мин</span></div></div>
-            <div class="col-6 col-md-4"><label class="form-label" for="levelPct">Уровень нагрузки</label>
-                <div class="input-group"><input class="form-control" id="levelPct" type="number" step="any" min="1" th:field="*{levelPct}"><span class="input-group-text">%</span></div></div>
-            <div class="col-12 col-md-4"><label class="form-label" for="generatorCount">Генераторов</label>
-                <input class="form-control" id="generatorCount" type="number" min="1" max="200" th:field="*{generatorCount}">
-                <div class="form-text">подставляется при запуске</div></div>
-            <div class="col-12 form-text mt-0">Уровень — доля от заданной интенсивности: при 50% каждая операция идёт с половинной нагрузкой.</div>
-        </div></div>
 
         <div class="sect-title"><h5>Переменные окружения и секреты</h5></div>
         <div class="card"><div class="card-body">
@@ -113,6 +97,7 @@
     </form>
 
     <script th:inline="none">
+
 (function () {
     // ---- описание полей сценария k6 (подписи, типы, подсказки)
     const F = {
@@ -135,11 +120,6 @@
     };
     const TAIL = ['startTime', 'gracefulStop', 'env', 'tags'];
     const EX = {
-        'profile': {
-            real: 'ramping-arrival-rate', title: 'По профилю нагрузки (оп/с)',
-            desc: 'Интенсивность (оп/с), длительность и уровень % берутся из формы. Здесь — только дополнительные параметры.',
-            fields: ['preAllocatedVUs', 'maxVUs'].concat(TAIL), def: {}
-        },
         'constant-vus': {
             real: 'constant-vus', title: 'constant-vus — постоянное число VU',
             desc: 'Фиксированное число VU работает заданное время, каждый VU повторяет итерации без пауз.',
@@ -183,6 +163,21 @@
     const body = document.getElementById('ops-body');
     if (!body) return;
 
+    // буфер скопированных стадий: общий для всех сценариев, сохраняется на время сессии браузера
+    let stageClipboard = [];
+    try { stageClipboard = JSON.parse(sessionStorage.getItem('k6lab-stages') || '[]') || []; } catch (e) { stageClipboard = []; }
+    function readStages(container) {
+        return [...container.querySelectorAll('.op-stage')].map(r => ({duration: r.querySelector('.op-st-d').value.trim(), target: Number(r.querySelector('.op-st-t').value || 0)}))
+            .filter(x => x.duration !== '');
+    }
+    function stageNote(row, text) {
+        const n = row.querySelector('.op-stage-note');
+        if (!n) return;
+        n.textContent = text;
+        clearTimeout(n._t);
+        n._t = setTimeout(() => { n.textContent = ''; }, 3500);
+    }
+
     function esc(v) {
         return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     }
@@ -195,7 +190,11 @@
             const rows = (val || []).map(s => stageRow(s.duration, s.target, unit)).join('');
             return '<div class="col-12"><div class="small fw-semibold mb-1">' + f.label + '</div>'
                 + '<div class="op-stages" data-k="stages" data-unit="' + esc(unit) + '">' + rows + '</div>'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-add mt-1">+ стадия</button></div>';
+                + '<div class="d-flex gap-2 flex-wrap mt-1">'
+                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-add"><i class="bi bi-plus-lg me-1"></i>Стадия</button>'
+                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-copy" title="Скопировать стадии, чтобы вставить их в другой сценарий"><i class="bi bi-copy me-1"></i>Копировать</button>'
+                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-paste"' + (stageClipboard.length ? '' : ' disabled') + ' title="Заменить стадии этого сценария скопированными"><i class="bi bi-clipboard-plus me-1"></i>Вставить</button>'
+                + '<span class="small text-muted align-self-center op-stage-note" role="status"></span></div></div>';
         }
         if (f.type === 'kv') {
             const rows = Object.keys(val || {}).map(k => kvRow(k, val[k], f.ph)).join('');
@@ -242,10 +241,7 @@
             o[i.dataset.k] = i.dataset.t === 'dur' ? v : Number(v);
         });
         const st = panel.querySelector('.op-stages');
-        if (st) {
-            o.stages = [...st.querySelectorAll('.op-stage')].map(r => ({duration: r.querySelector('.op-st-d').value.trim(), target: Number(r.querySelector('.op-st-t').value || 0)}))
-                .filter(s => s.duration !== '');
-        }
+        if (st) { o.stages = readStages(st); }
         panel.querySelectorAll('.op-kv').forEach(c => {
             const m = {};
             c.querySelectorAll('.op-kvrow').forEach(r => {
@@ -254,7 +250,7 @@
             });
             if (Object.keys(m).length) o[c.dataset.k] = m;
         });
-        // свой ramping-arrival-rate всегда содержит эти поля: так он отличается от сценария по профилю
+        // ramping-arrival-rate всегда сохраняет эти поля: так он остаётся сценарием со своими стадиями
         if (exKey === 'ramping-arrival-rate') {
             if (o.timeUnit === undefined) o.timeUnit = '1s';
             if (o.startRate === undefined) o.startRate = 0;
@@ -268,19 +264,11 @@
         row.querySelector('.op-exec-val').value = EX[exKey].real;
         detailOf(row).querySelector('.op-json').value = Object.keys(o).length ? JSON.stringify(o) : '';
     }
-    // вид карточки: по профилю / свой сценарий / не участвует
+    // вид карточки: включена или выключена
     function refreshRow(row) {
-        const profile = row.querySelector('.op-exec').value === 'profile';
-        const rate = row.querySelector('.op-rate'), dur = row.querySelector('.op-dur');
-        rate.disabled = !profile;
-        dur.disabled = !profile;
-        const on = profile && Number(rate.value) > 0;
-        row.classList.toggle('is-profile', profile);
-        row.classList.toggle('is-custom', !profile);
-        row.classList.toggle('is-off', profile && !on);
-        row.querySelector('.op-state').textContent = !profile ? 'Работает по своим параметрам'
-            : on ? 'Участвует в запуске' : 'Не участвует в запуске: задайте нагрузку в оп/с';
-        row.querySelector('.op-adv').classList.toggle('d-none', !profile);
+        const on = row.querySelector('.op-on').checked;
+        row.classList.toggle('is-off', !on);
+        row.querySelector('.op-state').textContent = on ? 'Участвует в запуске' : 'Выключена';
     }
     function refreshAll() {
         const rows = [...body.querySelectorAll('.op-row')];
@@ -292,13 +280,12 @@
     function initRow(row) {
         let o = {};
         try { o = JSON.parse(detailOf(row).querySelector('.op-json').value || '{}') || {}; } catch (e) { o = {}; }
-        const real = row.querySelector('.op-exec-val').value || 'ramping-arrival-rate';
-        let exKey = real;
-        if (real === 'ramping-arrival-rate' && !('stages' in o || 'startRate' in o || 'timeUnit' in o)) exKey = 'profile';
+        let exKey = row.querySelector('.op-exec-val').value || 'constant-arrival-rate';
+        if (!EX[exKey]) exKey = 'constant-arrival-rate';
         row.querySelector('.op-exec').value = exKey;
-        render(row, exKey, o);
+        // у ещё не настроенной операции - значения по умолчанию, чтобы её можно было сразу включить
+        render(row, exKey, Object.keys(o).length ? o : Object.assign({}, EX[exKey].def));
         sync(row);
-        if (exKey === 'profile' && Object.keys(o).length) row.classList.add('adv'); // есть сохранённые доп. параметры - показываем
     }
 
     function nextIndex() {
@@ -315,11 +302,10 @@
         let n = 2;
         while (names.has(fn + n)) n++;
         r2.querySelector('input[name$=".name"]').value = fn + n;
-        r2.querySelector('.op-rate').value = '';
-        r2.querySelector('.op-exec').value = 'constant-vus';
-        r2.classList.remove('adv');
+        r2.querySelector('.op-on').checked = true;
+        r2.querySelector('.op-exec').value = 'constant-arrival-rate';
         row.after(r2);
-        render(r2, 'constant-vus', EX['constant-vus'].def);
+        render(r2, 'constant-arrival-rate', EX['constant-arrival-rate'].def);
         sync(r2);
         refreshAll();
         r2.querySelector('input[name$=".name"]').focus();
@@ -332,10 +318,22 @@
         if (!row) return;
         if (t.closest('.op-add')) { addScenario(row); markDirty(); return; }
         if (t.closest('.op-del')) { row.remove(); refreshAll(); markDirty(); return; }
-        if (t.closest('.op-adv')) { row.classList.toggle('adv'); return; }
         if (t.closest('.op-stage-add')) {
             const c = row.querySelector('.op-stages');
             c.insertAdjacentHTML('beforeend', stageRow('', '', c.dataset.unit));
+        } else if (t.closest('.op-stage-copy')) {
+            const st = readStages(row.querySelector('.op-stages'));
+            if (!st.length) { stageNote(row, 'Нет стадий для копирования'); return; }
+            stageClipboard = st;
+            try { sessionStorage.setItem('k6lab-stages', JSON.stringify(st)); } catch (e) { /* без сохранения между страницами */ }
+            document.querySelectorAll('.op-stage-paste').forEach(b => { b.disabled = false; });
+            stageNote(row, 'Скопировано: ' + st.length);
+            return;
+        } else if (t.closest('.op-stage-paste')) {
+            if (!stageClipboard.length) { return; }
+            const c = row.querySelector('.op-stages');
+            c.innerHTML = stageClipboard.map(x => stageRow(x.duration, x.target, c.dataset.unit)).join('');
+            stageNote(row, 'Вставлено: ' + stageClipboard.length);
         } else if (t.closest('.op-stage-del')) {
             t.closest('.op-stage').remove();
         } else if (t.closest('.op-kv-add')) {
@@ -351,23 +349,20 @@
     });
     body.addEventListener('change', e => {
         const row = e.target.closest('.op-row');
-        if (row && e.target.classList.contains('op-exec')) {
+        if (!row) return;
+        if (e.target.classList.contains('op-on')) { refreshRow(row); return; }
+        if (e.target.classList.contains('op-exec')) {
             const exKey = e.target.value, old = collect(row), ex = EX[exKey];
             // переносим то, что есть и у нового исполнителя; остальное - значения по умолчанию
             const state = Object.assign({}, ex.def);
             ex.fields.forEach(k => { if (k in old && old[k] !== undefined && !(['stages'].includes(k) && !old[k].length)) state[k] = old[k]; });
-            // у сценария по профилю VU считаются автоматически: значения VU от другого исполнителя не переносим
-            if (exKey === 'profile' && row.dataset.prev !== 'profile') { delete state.preAllocatedVUs; delete state.maxVUs; }
             render(row, exKey, state);
             sync(row);
-            if (exKey !== 'profile') row.classList.remove('adv');
         }
     });
     body.addEventListener('input', e => {
         const row = e.target.closest('.op-row');
-        if (!row) return;
-        if (e.target.classList.contains('op-rate')) refreshRow(row);
-        if (e.target.closest('.op-detail')) sync(row);
+        if (row && e.target.closest('.op-detail')) sync(row);
     });
 
     // ---- несохранённые изменения: пометка и предупреждение при уходе со страницы
@@ -389,111 +384,61 @@
 })();
     </script>
 
-    <!-- та же нагрузка текстом: можно править, копировать между скриптами и хранить в git -->
-    <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <a class="text-decoration-none" data-bs-toggle="collapse" href="#json-box" role="button"><i class="bi bi-braces me-1"></i>Конфиг нагрузки (JSON)</a>
-            <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/load.json(id=${script.id})}">Скачать</a></div>
-        <div id="json-box" class="collapse" th:classappend="${jsonOpen} ? 'show'">
-            <form class="card-body" th:action="@{/scripts/{id}/load/json(id=${script.id})}" method="post">
-                <textarea class="form-control font-monospace" name="json" rows="18" spellcheck="false" th:text="${formJson}"></textarea>
-                <div class="form-text mb-2">Те же настройки, что в форме выше: <code>operations</code> (execFn, name, ratePerSec, slaPercentile, slaThresholdMs, maxErrorPct,
-                    expectedDurationSec, failureSource), <code>levelPct</code>, <code>holdMinutes</code>, <code>generatorCount</code>, <code>env</code>, <code>dataFiles</code>.
-                    Конфиг заменяет текущую нагрузку целиком; проверки те же, что у формы.</div>
-                <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить из конфига</button>
-            </form></div></div>
-
-    <!-- расчёт по сохранённой нагрузке -->
-    <div class="sect-title"><h5>Расчёт по сохранённой нагрузке</h5><span class="hint">как k6 получит нагрузку после сохранения формы</span></div>
-    <div class="alert alert-danger py-2" th:each="e : ${plan.errors}" th:text="${e}"></div>
-    <div class="alert alert-warning py-2" th:each="w : ${plan.warnings}" th:text="${w}"></div>
-
-    <div th:if="${plan.generated != null}">
-        <div class="row g-3 mb-3">
-            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small">Общая длительность</div>
-                <div class="fs-5" th:text="${#numbers.formatDecimal(plan.totalSec() / 60.0, 1, 1)} + ' мин'"></div></div></div>
-            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small">Интенсивность (всего)</div>
-                <div class="fs-5" th:text="${#numbers.formatDecimal(plan.generated.totalPeakRatePerSec(), 1, 2)} + ' оп/с'"></div></div></div>
-            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small">Пиковые VU (оценка)</div>
-                <div class="fs-5" th:text="${plan.generated.totalPeakVus()}"></div></div></div>
-            <div class="col-md-3"><div class="card card-body py-2"><div class="text-muted small" th:text="'На один генератор (из ' + ${generators} + ')'"></div>
-                <div class="fs-6" th:text="${#numbers.formatDecimal(perGen.ratePerSec(), 1, 2)} + ' оп/с, ~' + ${perGen.vus()} + ' VU, preAlloc ' + ${perGen.preAllocated()}"></div>
-                <form class="input-group input-group-sm mt-1" method="get" th:action="@{/scripts/{id}/load(id=${script.id})}">
-                    <span class="input-group-text">Генераторов</span>
-                    <input class="form-control" type="number" min="1" max="200" name="generators" th:value="${generators}">
-                    <button class="btn btn-outline-secondary">Пересчитать</button></form></div></div>
-        </div>
-
-        <ul class="nav nav-tabs mb-3">
-            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#t-chart" type="button">График</button></li>
-            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t-config" type="button">Конфиг k6</button></li>
-            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t-req" type="button">Требования к ресурсам</button></li>
-        </ul>
-        <div class="tab-content">
-            <div class="tab-pane fade show active" id="t-chart">
-                <div class="card card-body"><canvas id="rate-chart" height="90" th:attr="data-chart=${chart}"></canvas>
-                    <div class="small text-muted mt-1">Суммарная интенсивность по операциям (оп/с), ось X — минуты от старта.</div></div>
-            </div>
-            <div class="tab-pane fade" id="t-config">
-                <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!overridePaths.isEmpty()}">
-                    <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
-                    <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" onsubmit="return confirm('Сбросить ручные правки и вернуть расчётный конфиг?')">
-                        <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button></form></div>
-                <div class="small text-muted mb-2">Итоговый конфиг k6, который уйдёт на генераторы. Его можно править: например <code>maxVUs</code>, <code>preAllocatedVUs</code>,
-                    <code>gracefulStop</code> у сценария или опции верхнего уровня. Сохраняется только отличие от расчётного конфига, поэтому правки
-                    остаются при изменении нагрузки. Конфиг проверяет сам k6. Не меняйте <code>rate</code>, <code>stages</code> и <code>executor</code>:
-                    график, расчёт и отчёт строятся по плану нагрузки.</div>
-                <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post" th:attr="data-open=${configTabOpen != null}">
-                    <input type="hidden" name="config" id="cfg-value">
-                    <div id="config-editor" style="height: 55vh; border: 1px solid #ccc" th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson}"></div>
-                    <div class="d-flex gap-2 mt-2 align-items-center">
-                        <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Сохранить конфиг</button>
-                        <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/config.json(id=${script.id})}">Скачать</a>
-                    </div>
-                </form>
-            </div>
-            <div class="tab-pane fade" id="t-req">
-                <button class="btn btn-outline-primary btn-sm mb-2" type="button" hx-post="" th:attr="hx-post=@{/scripts/{id}/requirements(id=${script.id})}"
-                        hx-target="#req-out" hx-indicator="#req-out">Рассчитать (k6 inspect --execution-requirements)</button>
-                <div id="req-out"></div>
+    <!-- для опытных: итоговый конфиг k6 и ресурсы -->
+    <details class="adv-box mt-4" id="adv-box" th:attr="data-open=${configTabOpen != null}">
+        <summary><i class="bi bi-sliders2 me-1"></i>Для опытных: конфиг k6 и ресурсы
+            <span class="badge text-bg-warning ms-2" th:if="${!plan.warnings.isEmpty()}" th:text="${plan.warnings.size()} + ' ' + (${plan.warnings.size() == 1} ? 'замечание' : 'замечаний')"></span>
+            <span class="badge text-bg-primary ms-2" th:if="${!overridePaths.isEmpty()}">есть ручные правки</span></summary>
+        <div class="pt-3">
+            <div class="alert alert-warning py-2 small" th:each="w : ${plan.warnings}" th:text="${w}"></div>
+            <ul class="nav nav-tabs mb-3">
+                <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#t-config" type="button">Конфиг k6</button></li>
+                <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t-req" type="button">Требования к ресурсам</button></li>
+            </ul>
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="t-config">
+                    <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!overridePaths.isEmpty()}">
+                        <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
+                        <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" onsubmit="return confirm('Сбросить ручные правки и вернуть расчётный конфиг?')">
+                            <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button></form></div>
+                    <div class="small text-muted mb-2">Итоговый конфиг k6, который уйдёт на генераторы. Правится только то, чего нет в конструкторе: сохраняется лишь отличие от расчётного
+                        конфига, поэтому правки остаются при изменении операций. Конфиг проверяет сам k6.</div>
+                    <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post">
+                        <input type="hidden" name="config" id="cfg-value">
+                        <div id="config-editor" style="height: 55vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden" th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson}"></div>
+                        <div class="d-flex gap-2 mt-2 align-items-center">
+                            <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Сохранить конфиг</button>
+                            <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/config.json(id=${script.id})}">Скачать</a>
+                        </div>
+                    </form>
+                </div>
+                <div class="tab-pane fade" id="t-req">
+                    <button class="btn btn-outline-primary btn-sm mb-2" type="button" hx-post="" th:attr="hx-post=@{/scripts/{id}/requirements(id=${script.id})}"
+                            hx-target="#req-out" hx-indicator="#req-out">Рассчитать (k6 inspect --execution-requirements)</button>
+                    <div id="req-out"></div>
+                </div>
             </div>
         </div>
-    </div>
+    </details>
 </th:block>
 <th:block layout:fragment="scripts">
-    <script th:src="@{/webjars/chart.js/dist/chart.umd.js}"></script>
     <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script th:inline="none">
         (function () {
-            var palette = ['#0d6efd', '#198754', '#fd7e14', '#6f42c1', '#dc3545', '#20c997', '#0dcaf0', '#6c757d', '#d63384', '#ffc107'];
-            var canvas = document.getElementById('rate-chart');
-            if (canvas && window.Chart && canvas.dataset.chart && canvas.dataset.chart !== 'null') {
-                var data = JSON.parse(canvas.dataset.chart);
-                data.datasets.forEach(function (d, i) {
-                    d.borderColor = palette[i % palette.length]; d.backgroundColor = palette[i % palette.length] + '55';
-                    d.fill = true; d.pointRadius = 0; d.borderWidth = 1.5;
-                });
-                new Chart(canvas, {type: 'line', data: data, options: {parsing: false, animation: false, interaction: {mode: 'index', intersect: false},
-                    scales: {x: {type: 'linear', title: {display: true, text: 'минуты'}}, y: {stacked: true, title: {display: true, text: 'оп/с'}}}}});
-            }
-            // после ошибки сохранения или перехода по якорю сразу открываем вкладку конфига
-            if (location.hash === '#t-config' || (document.getElementById('cfg-form') || {dataset: {}}).dataset.open === 'true') {
-                var tabBtn = document.querySelector('[data-bs-target="#t-config"]');
-                if (tabBtn && window.bootstrap) { bootstrap.Tab.getOrCreateInstance(tabBtn).show(); }
-            }
-            var box = document.getElementById('config-editor');
-            if (box && window.require) {
-                var base = location.origin + '/webjars/monaco-editor/min/vs';
-                require.config({paths: {vs: base}});
-                window.MonacoEnvironment = {getWorkerUrl: function () {
-                    return 'data:text/javascript;charset=utf-8,' + encodeURIComponent("self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
-                }};
-                require(['vs/editor/editor.main'], function () {
-                    var ed = monaco.editor.create(box, {value: box.dataset.config || '', language: 'json', automaticLayout: true, minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
-                    document.getElementById('cfg-form').addEventListener('submit', function () { document.getElementById('cfg-value').value = ed.getValue(); });
-                    document.querySelector('[data-bs-target="#t-config"]').addEventListener('shown.bs.tab', function () { ed.layout(); });
-                });
-            }
+            var adv = document.getElementById('adv-box'), box = document.getElementById('config-editor'), ed = null;
+            // после ошибки сохранения конфига или перехода по якорю раздел открыт сразу
+            if (adv && (location.hash === '#t-config' || adv.dataset.open === 'true')) { adv.open = true; }
+            if (!box || !window.require) { return; }
+            var base = location.origin + '/webjars/monaco-editor/min/vs';
+            require.config({paths: {vs: base}});
+            window.MonacoEnvironment = {getWorkerUrl: function () {
+                return 'data:text/javascript;charset=utf-8,' + encodeURIComponent("self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
+            }};
+            require(['vs/editor/editor.main'], function () {
+                ed = monaco.editor.create(box, {value: box.dataset.config || '', language: 'json', automaticLayout: true, minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
+                document.getElementById('cfg-form').addEventListener('submit', function () { document.getElementById('cfg-value').value = ed.getValue(); });
+                if (adv) { adv.addEventListener('toggle', function () { ed.layout(); }); }
+            });
         })();
     </script>
 </th:block>

@@ -66,7 +66,11 @@ class ScriptFlowIT extends AbstractIT {
         // сохраняется только операция с интенсивностью
         assertThat(load.operations(id)).extracting(LoadOperation::getName).containsExactly("login");
         assertThat(load.isDefined(id)).isTrue();
-        assertThat(scripts.get(id).getHoldSec()).isEqualTo(120);
+        // режима «по профилю» больше нет: оп/с с удержанием из формы становятся сценарием constant-arrival-rate
+        var saved = load.operations(id).get(0);
+        assertThat(saved.getExecutor()).isEqualTo("constant-arrival-rate");
+        assertThat(saved.getScenario()).containsEntry("rate", 5).containsEntry("timeUnit", "1s").containsEntry("duration", "120s");
+        assertThat(saved.getRatePerSec()).isEqualTo(5.0);
 
         mvc.perform(get("/scripts/" + id)).andExpect(content().string(containsString("Запустить")))
                 .andExpect(content().string(containsString("login")));
@@ -167,7 +171,7 @@ class ScriptFlowIT extends AbstractIT {
         saveLoad.accept(9);
         var after = om.readTree(mvc.perform(get("/scripts/" + id + "/config.json")).andReturn().getResponse().getContentAsString());
         assertThat(after.path("scenarios").path("login").path("maxVUs").asInt()).isEqualTo(77);
-        assertThat(after.path("scenarios").path("login").path("stages").get(1).path("target").asInt()).isEqualTo(9);
+        assertThat(after.path("scenarios").path("login").path("rate").asInt()).isEqualTo(9);
 
         // сценарии добавлять нельзя, без executor - тоже
         var added = (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree(base);
@@ -332,13 +336,19 @@ class ScriptFlowIT extends AbstractIT {
         String run = mvc.perform(get("/scripts/" + id + "/run")).andReturn().getResponse().getContentAsString();
         assertThat(run).containsPattern("name=\"count\"[^>]*|value=\"7\"[^>]*name=\"count\"|name=\"count\" id=\"gen-count\"");
         assertThat(run).contains("value=\"7\"");
-        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("из 7")));
+        mvc.perform(get("/scripts/" + id + "/load.json")).andExpect(content().string(containsString("\"generatorCount\" : 7")));
+        // число генераторов не передано (форма нагрузки его не шлёт) - сохранённое остаётся прежним
+        mvc.perform(post("/scripts/" + id + "/load").with(csrf())
+                .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", "5")
+                .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1"))
+                .andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(scripts.get(id).getGeneratorCount()).isEqualTo(7);
         // нереальные значения отклоняются понятным сообщением
         mvc.perform(loadPost.apply("0")).andExpect(status().isOk()).andExpect(content().string(containsString("от 1 до 200")));
         mvc.perform(loadPost.apply("500")).andExpect(status().isOk()).andExpect(content().string(containsString("от 1 до 200")));
         assertThat(scripts.get(id).getGeneratorCount()).isEqualTo(7);
         // JSON-конфиг нагрузки тоже содержит число генераторов
-        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("generatorCount")));
+        mvc.perform(get("/scripts/" + id + "/load.json")).andExpect(content().string(containsString("generatorCount")));
         mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json",
                         "{\"operations\":[{\"execFn\":\"login\",\"name\":\"login\",\"ratePerSec\":5,\"slaPercentile\":95,\"slaThresholdMs\":800,"
                                 + "\"maxErrorPct\":1,\"expectedDurationSec\":0.3}],\"holdMinutes\":1,\"rampSec\":0,\"levelPct\":100,\"generatorCount\":4}"))
@@ -687,7 +697,7 @@ class ScriptFlowIT extends AbstractIT {
         mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json", json))
                 .andExpect(redirectedUrl("/scripts/" + id));
         assertThat(load.operations(id)).extracting(LoadOperation::getName).containsExactly("login");
-        assertThat(scripts.get(id).getHoldSec()).isEqualTo(180);
+        assertThat(load.operations(id).get(0).getScenario()).containsEntry("rate", 7).containsEntry("duration", "180s");
         // сохранённое видно в конфиге и скачивается обратно
         mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("BASE_URL")));
         mvc.perform(get("/scripts/" + id + "/load.json")).andExpect(status().isOk())
@@ -724,7 +734,7 @@ class ScriptFlowIT extends AbstractIT {
                 .param("holdMinutes", "1").param("rampSec", "10").param("levelPct", "100");
         mvc.perform(req).andExpect(redirectedUrl("/scripts/" + id));
         assertThat(load.operations(id)).extracting(LoadOperation::getName).containsExactly("login", "paySoak", "payBurst");
-        assertThat(load.operations(id)).extracting(LoadOperation::getExecutor).containsExactly("ramping-arrival-rate", "constant-vus", "ramping-arrival-rate");
+        assertThat(load.operations(id)).extracting(LoadOperation::getExecutor).containsExactly("constant-arrival-rate", "constant-vus", "ramping-arrival-rate");
 
         // итоговый конфиг k6: по профилю - как раньше (+ свои startTime/maxVUs), остальные - по своим параметрам
         var cfg = runPlanner.plan(id, 1);
@@ -771,7 +781,7 @@ class ScriptFlowIT extends AbstractIT {
         mvc.perform(post("/scripts/" + id + "/load").with(csrf())
                         .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", "")
                         .param("ops[0].slaPercentile", "95").param("holdMinutes", "1").param("levelPct", "100"))
-                .andExpect(status().isOk()).andExpect(content().string(containsString("Укажите интенсивность")));
+                .andExpect(status().isOk()).andExpect(content().string(containsString("Включите хотя бы одну операцию")));
         // некорректное имя операции
         mvc.perform(post("/scripts/" + id + "/load").with(csrf())
                         .param("ops[0].execFn", "login").param("ops[0].name", "плохое имя").param("ops[0].ratePerSec", "1")

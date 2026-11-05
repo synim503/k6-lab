@@ -27,8 +27,17 @@
     <div class="alert alert-danger" th:if="${run.error}" th:text="${run.error}"></div>
     <div class="alert alert-warning py-2" th:if="${run.stopReason}"><strong>Причина остановки:</strong> <span th:text="${run.stopReason}"></span></div>
 
-    <div class="card mb-3"><div class="card-header d-flex justify-content-between align-items-center">Генераторы
-            <span class="small text-muted fw-normal" th:text="${v.generators.size()} + ' шт.'"></span></div>
+    <details class="card mb-3 gens-box" id="gens-box">
+        <summary class="card-header gens-summary">
+            <span class="fw-semibold">Генераторы</span>
+            <span class="text-muted" th:text="${v.generators.size()} + ' шт.'"></span>
+            <span class="badge text-bg-primary" th:if="${!v.generators.?[rg.status.name() == 'RUNNING'].isEmpty()}" th:text="'выполняются: ' + ${v.generators.?[rg.status.name() == 'RUNNING'].size()}"></span>
+            <span class="badge text-bg-success" th:if="${!v.generators.?[rg.status.name() == 'EXITED'].isEmpty()}" th:text="'завершены: ' + ${v.generators.?[rg.status.name() == 'EXITED'].size()}"></span>
+            <span class="badge text-bg-warning" th:if="${!v.generators.?[offline].isEmpty()}" th:text="'нет связи: ' + ${v.generators.?[offline].size()}"></span>
+            <span class="badge text-bg-danger" th:if="${!v.generators.?[cpuHot].isEmpty()}" th:text="'CPU выше 80%: ' + ${v.generators.?[cpuHot].size()}"></span>
+            <span class="badge text-bg-danger" th:if="${!v.generators.?[rg.status.name() == 'FAILED' or rg.status.name() == 'LOST'].isEmpty()}" th:text="'сбои: ' + ${v.generators.?[rg.status.name() == 'FAILED' or rg.status.name() == 'LOST'].size()}"></span>
+            <span class="ms-auto small text-muted gens-toggle"><span class="when-closed">Показать</span><span class="when-open">Скрыть</span></span>
+        </summary>
         <div class="table-responsive"><table class="table table-hover align-middle mb-0 gen-table">
             <thead><tr><th>Генератор</th><th>Состояние</th><th>CPU</th><th>RAM</th><th class="text-end">VU</th><th class="text-end">Итерации</th><th class="text-end" title="Итерации, которые k6 не успел запустить">Пропущено</th>
                 <th title="Доля нагрузки этого генератора">Доля</th><th>Код выхода</th></tr></thead>
@@ -50,7 +59,8 @@
                 <td class="small text-muted text-nowrap"><code th:text="${g.rg.segment()}" title="Сегмент выполнения k6"></code> <span th:text="'вес ' + ${g.rg.weight}"></span></td>
                 <td class="small"><span th:text="${g.rg.exitCode} ?: '—'"></span><span class="badge text-bg-warning ms-1" th:if="${g.rg.exitCode == 99}">пороги</span>
                     <span class="text-muted ms-1" th:if="${g.rg.droppedLogLines > 0}" th:text="'· строк лога отброшено: ' + ${g.rg.droppedLogLines}"></span></td>
-            </tr></tbody></table></div></div>
+            </tr></tbody></table></div>
+    </details>
 </div>
 </body>
 </html>

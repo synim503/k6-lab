@@ -99,6 +99,12 @@ public class RunPlanner {
                 // ручные правки конфига k6 (maxVUs и т.п.) накладываются поверх расчётного конфига
                 var applied = K6ConfigOverrides.apply(gen.config(), script.getK6Overrides());
                 finalConfig = applied.config();
+                // единственная «ступень» запуска - весь тест: длительность по самому долгому сценарию конфига, уровень 100%.
+                // Планы по оп/с (constant-arrival-rate) уже учитывают всё нужное, профиль нагрузки больше не задаётся отдельно.
+                long spanSec = ru.k6lab.core.k6config.ConfigDuration.of(finalConfig).totalSec();
+                if (spanSec > 0) {
+                    steps = List.of(new StepPlan(1, 100, 0, (int) Math.min(Integer.MAX_VALUE, spanSec), "100%"));
+                }
                 overridePaths = K6ConfigOverrides.paths(script.getK6Overrides());
                 if (!overridePaths.isEmpty()) {
                     json = OVERRIDE_WRITER.writeValueAsString(finalConfig);

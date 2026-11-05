@@ -102,6 +102,7 @@ public class LoadService {
             of.setFailureSource(o.getFailureSource());
             of.setExecutor(o.getExecutor());
             of.setScenario(o.getScenario());
+            of.setEnabled(true);
             f.getOps().add(of);
         }
         Set<String> have = new HashSet<>();
@@ -110,6 +111,8 @@ public class LoadService {
             LoadForm.OpForm of = new LoadForm.OpForm();
             of.setName(n);
             of.setExecFn(n);
+            of.setExecutor("constant-arrival-rate");
+            of.setEnabled(false);
             f.getOps().add(of);
         }));
         f.setDataFiles(dataRows(scriptId, dataFiles(scriptId)));
@@ -173,19 +176,25 @@ public class LoadService {
         Set<String> names = new HashSet<>();
         List<LoadOperation> built = new ArrayList<>();
         for (LoadForm.OpForm o : f.getOps()) {
-            if (o == null || o.blank()) {
-                continue;
+            if (o == null || o.blank() || !o.isEnabled()) {
+                continue; // выключенная операция в нагрузке не участвует и не хранится
             }
             validateOp(o, names);
             String executor = o.getExecutor() == null || o.getExecutor().isBlank() ? OperationSpec.PROFILE_EXECUTOR : o.getExecutor().trim();
             Map<String, Object> scenario = o.parseScenario();
-            boolean profile = OperationSpec.isProfile(executor, scenario);
             double rate = o.getRatePerSec() == null ? 0 : o.getRatePerSec();
-            if (profile && rate <= 0) {
-                continue; // операция без интенсивности в нагрузке не участвует и не хранится
-            }
-            if (!profile) {
-                rate = 0; // сценарий работает по своим параметрам, интенсивность профиля не используется
+            if (OperationSpec.isProfile(executor, scenario)) {
+                // режим «по профилю» больше не поддерживается: операция с оп/с становится constant-arrival-rate (уровень и удержание из формы/конфига)
+                if (rate <= 0) {
+                    continue;
+                }
+                var converted = ru.k6lab.core.k6config.ProfileConverter.toConstantArrivalRate(rate, f.getLevelPct(), holdSec,
+                        o.getExpectedDurationSec() == null ? 0.3 : o.getExpectedDurationSec(), scenario);
+                executor = "constant-arrival-rate";
+                scenario = converted.scenario();
+                rate = converted.ratePerSec();
+            } else {
+                rate = effectiveRate(executor, scenario);
             }
             LoadOperation op = new LoadOperation();
             op.setScriptId(scriptId);
@@ -206,20 +215,19 @@ public class LoadService {
             ru.k6lab.core.k6config.K6ConfigGenerator.validateExecutor(b.toSpec()); // поля сценария - сразу при сохранении
         }
         if (built.isEmpty()) {
-            throw new IllegalArgumentException("Укажите интенсивность (оп/с) хотя бы для одной операции или выберите для неё другого исполнителя");
+            throw new IllegalArgumentException("Включите хотя бы одну операцию");
         }
 
         operations.deleteByScriptId(scriptId);
         operations.flush();
         operations.saveAll(built);
 
-        script.setLevelPct(f.getLevelPct());
-        script.setRampSec(f.getRampSec());
-        script.setHoldSec(holdSec);
-        if (f.getGeneratorCount() < 1 || f.getGeneratorCount() > MAX_GENERATORS) {
-            throw new IllegalArgumentException("Число генераторов: от 1 до " + MAX_GENERATORS);
+        if (f.getGeneratorCount() != null) {
+            if (f.getGeneratorCount() < 1 || f.getGeneratorCount() > MAX_GENERATORS) {
+                throw new IllegalArgumentException("Число генераторов: от 1 до " + MAX_GENERATORS);
+            }
+            script.setGeneratorCount(f.getGeneratorCount());
         }
-        script.setGeneratorCount(f.getGeneratorCount());
         script.setEnv(env);
         scriptRepo.save(script);
 
@@ -241,6 +249,15 @@ public class LoadService {
             dataFiles.save(df);
         }
         audit.record("script.load", "script", scriptId, Map.of("operations", built.size()));
+    }
+
+    /** Интенсивность в оп/с для constant-arrival-rate (rate за timeUnit); для остальных исполнителей плана по оп/с нет. */
+    static double effectiveRate(String executor, Map<String, Object> scenario) {
+        if (!"constant-arrival-rate".equals(executor) || !(scenario.get("rate") instanceof Number n)) {
+            return 0;
+        }
+        double unit = ru.k6lab.core.k6config.ConfigDuration.parse(String.valueOf(scenario.getOrDefault("timeUnit", "1s")), 1);
+        return unit > 0 ? n.doubleValue() / unit : 0;
     }
 
     private static void validateOp(LoadForm.OpForm o, Set<String> names) {

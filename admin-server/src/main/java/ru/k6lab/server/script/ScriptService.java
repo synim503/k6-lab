@@ -87,6 +87,16 @@ public class ScriptService {
         return versions.findByScriptIdOrderByNumberDesc(scriptId);
     }
 
+    /** Запоминает число генераторов последнего запуска как значение по умолчанию для формы запуска. */
+    @org.springframework.transaction.annotation.Transactional
+    public void rememberGeneratorCount(Long scriptId, int count) {
+        Script script = get(scriptId);
+        if (script.getGeneratorCount() != count && count >= 1 && count <= 200) {
+            script.setGeneratorCount(count);
+            scripts.save(script);
+        }
+    }
+
     public ScriptVersion version(Long scriptId, Long versionId) {
         ScriptVersion v = versions.findById(versionId).orElseThrow(() -> new IllegalArgumentException("Версия не найдена"));
         if (!v.getScriptId().equals(scriptId)) {

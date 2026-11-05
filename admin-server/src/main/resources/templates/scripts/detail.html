@@ -27,8 +27,9 @@
                 <div class="s" th:if="${!versions.isEmpty()}" th:text="${versions[0].sourceLabel()} + ' · ' + ${#temporals.format(versions[0].createdAt, 'dd.MM.yyyy HH:mm')}"></div></div>
             <div class="fact"><div class="k">Нагрузка</div>
                 <div class="v" th:text="${loadDefined} ? ${ops.size()} + ' ' + (${ops.size() == 1} ? 'операция' : 'операций') : 'не описана'"></div>
-                <div class="s" th:if="${loadDefined}"
-                     th:text="'Уровень ' + ${#numbers.formatDecimal(script.levelPct, 1, 0)} + '%, длительность ' + ${#numbers.formatDecimal(script.holdSec / 60.0, 1, 1)} + ' мин'"></div>
+                <div class="s" th:if="${loadDefined and #aggregates.sum(ops.![ratePerSec]) > 0}"
+                     th:text="'по планам ≈ ' + ${#numbers.formatDecimal(#aggregates.sum(ops.![ratePerSec]), 1, 2)} + ' оп/с'"></div>
+                <div class="s" th:if="${loadDefined and #aggregates.sum(ops.![ratePerSec]) <= 0}">сценарии со своими параметрами</div>
                 <div class="s" th:unless="${loadDefined}">Укажите, что и как нагружать</div></div>
             <div class="fact"><div class="k">Генераторов по умолчанию</div>
                 <div class="v" th:text="${script.generatorCount}"></div>
@@ -52,9 +53,8 @@
                 <tbody><tr th:each="o : ${ops}">
                     <td class="fw-semibold" th:text="${o.name}"></td>
                     <td><code th:text="${o.execFn}"></code></td>
-                    <td class="small"><span th:if="${o.profileDriven()}">по профилю</span>
-                        <span th:unless="${o.profileDriven()}" class="text-nowrap"><code th:text="${o.executor}"></code></span></td>
-                    <td class="num" th:text="${o.profileDriven()} ? ${#numbers.formatDecimal(o.ratePerSec, 1, 2)} : '—'"></td>
+                    <td class="small text-nowrap"><code th:text="${o.executor}"></code></td>
+                    <td class="num" th:text="${o.ratePerSec > 0} ? ${#numbers.formatDecimal(o.ratePerSec, 1, 2)} : '—'"></td>
                     <td class="text-nowrap" th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaThresholdMs, 1, 0)} + ' мс'"></td>
                     <td class="num" th:text="${#numbers.formatDecimal(o.maxErrorPct, 1, 2)}"></td></tr></tbody></table></div>
         </div>

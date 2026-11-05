@@ -23,8 +23,8 @@ public class LoadForm {
     private double levelPct = 100;
     private int rampSec = 0;
     private double holdMinutes = 5;
-    /** Число генераторов, которое подставляется при запуске скрипта. */
-    private int generatorCount = 1;
+    /** Число генераторов, которое подставляется при запуске; null - не менять (форма нагрузки его не передаёт, задаётся на форме запуска). */
+    private Integer generatorCount;
     private String envText;
     private List<DataForm> dataFiles = new ArrayList<>();
 
@@ -35,6 +35,8 @@ public class LoadForm {
         private String execFn;
         /** Операций в секунду; пусто или 0 - операция в нагрузке не участвует. */
         private Double ratePerSec;
+        /** Операция участвует в запуске; выключенные строки не сохраняются. */
+        private boolean enabled = true;
         private int slaPercentile = 95;
         private Double slaThresholdMs = 1000.0;
         private Double maxErrorPct = 1.0;

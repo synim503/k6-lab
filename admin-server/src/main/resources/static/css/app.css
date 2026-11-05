@@ -291,3 +291,39 @@ html { scroll-behavior: smooth; scroll-padding-top: 72px; }
 /* ---------- запуск: сводка ---------- */
 .run-summary { display: flex; align-items: center; gap: .75rem 1.5rem; flex-wrap: wrap; margin-bottom: .85rem; }
 .run-clock { font-size: 1.25rem; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+
+/* ---------- графики запуска: легенда справа, как в Grafana ---------- */
+.chart-wrap { display: flex; gap: .75rem; padding: .65rem; align-items: stretch; }
+.chart-canvas { position: relative; flex: 1 1 auto; min-width: 0; height: 270px; }
+.chart-legend { flex: 0 0 320px; max-height: 270px; overflow: auto; font-size: .82rem; }
+.legend-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.legend-table th { color: var(--k6-muted); font-weight: 650; font-size: .72rem; text-align: right; padding: .25rem .45rem; position: sticky; top: 0; background: #fff; }
+.legend-table th:nth-child(2) { text-align: left; }
+.legend-table td { padding: .25rem .45rem; text-align: right; white-space: nowrap; }
+.legend-table td.legend-name { text-align: left; max-width: 150px; overflow: hidden; text-overflow: ellipsis; font-weight: 550; }
+.legend-row { cursor: pointer; transition: background .1s, opacity .1s; }
+.legend-row:hover { background: #f3f4fb; }
+.legend-row.on { background: #eef0ff; }
+.legend-row.off { opacity: .4; }
+.legend-row:focus-visible { outline: 2px solid var(--k6-primary); outline-offset: -2px; }
+.legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; }
+.legend-hint { color: var(--k6-muted); font-size: .74rem; padding: .45rem .45rem 0; }
+@media (max-width: 991px) { .chart-wrap { flex-direction: column; } .chart-legend { flex-basis: auto; max-height: 220px; } .chart-canvas { height: 230px; } }
+
+/* ---------- «Для опытных» ---------- */
+.adv-box { background: var(--k6-surface); border: 1px solid var(--k6-border); border-radius: var(--k6-radius); padding: .85rem 1.15rem; box-shadow: var(--k6-shadow); }
+.adv-box > summary { font-weight: 600; cursor: pointer; list-style: none; }
+.adv-box > summary::-webkit-details-marker { display: none; }
+.adv-box > summary::before { content: "\25B8"; display: inline-block; margin-right: .5rem; transition: transform .12s; color: var(--k6-muted); }
+.adv-box[open] > summary::before { transform: rotate(90deg); }
+.op-head .form-switch .form-check-input { cursor: pointer; width: 2.3em; height: 1.2em; }
+
+/* ---------- запуск: сворачиваемый блок генераторов ---------- */
+.gens-box > summary { list-style: none; cursor: pointer; }
+.gens-box > summary::-webkit-details-marker { display: none; }
+.gens-summary { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
+.gens-box:not([open]) > .gens-summary { border-bottom: 0; border-radius: var(--k6-radius) !important; }
+.gens-box .when-open, .gens-box[open] .when-closed { display: none; }
+.gens-box[open] .when-open { display: inline; }
+.gens-toggle::after { content: " \25BE"; }
+.gens-box[open] .gens-toggle::after { content: " \25B4"; }

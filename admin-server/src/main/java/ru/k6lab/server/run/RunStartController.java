@@ -55,6 +55,7 @@ public class RunStartController {
         model.addAttribute("generators", all);
         model.addAttribute("freeCount", all.stream().filter(Generator::isAvailableForRuns).count());
         model.addAttribute("ops", plan.operations());
+        model.addAttribute("durationSec", plan.steps() == null || plan.steps().isEmpty() ? 0 : plan.steps().get(0).holdSec());
         model.addAttribute("errors", plan.errors());
         model.addAttribute("warnings", plan.warnings());
         model.addAttribute("blockReason", runs.blockReason().orElse(null));
@@ -100,6 +101,10 @@ public class RunStartController {
                 run = runs.create(new RunService.CreateRequest(id, sel, Run.FailurePolicy.CONTINUE, 120, flags));
             } catch (IOException e) {
                 throw new IllegalStateException(e.getMessage(), e);
+            }
+            // число генераторов запоминаем в скрипте: в следующий раз форма запуска подставит его само
+            if ((generatorIds == null || generatorIds.isEmpty()) && count != null && count >= 1) {
+                scripts.rememberGeneratorCount(id, count);
             }
             return "redirect:/runs/" + run.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {

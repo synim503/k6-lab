@@ -363,7 +363,7 @@ class RunE2EIT extends AbstractIT {
         var scenarios = run.getK6Config().path("scenarios");
         assertThat(scenarios.path("soak").path("executor").asText()).isEqualTo("constant-vus");
         assertThat(scenarios.path("once").path("executor").asText()).isEqualTo("shared-iterations");
-        assertThat(scenarios.path("work").path("executor").asText()).isEqualTo("ramping-arrival-rate");
+        assertThat(scenarios.path("work").path("executor").asText()).isEqualTo("constant-arrival-rate"); // бывший «по профилю»
         Run finished = awaitStatus(run.getId(), Duration.ofSeconds(120), RunStatus.FINISHED, RunStatus.FAILED);
         assertThat(finished.getStatus()).as(dump(run.getId())).isEqualTo(RunStatus.FINISHED);
         var g = runService.generatorsOf(run.getId()).get(0);

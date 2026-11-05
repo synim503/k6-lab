@@ -72,7 +72,7 @@ public class LoadController {
             return "redirect:/scripts/" + id;
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
-            fill(model, id, f, Math.max(1, f.getGeneratorCount()));
+            fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()));
             return "scripts/load";
         }
     }

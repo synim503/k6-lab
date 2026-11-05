@@ -108,5 +108,13 @@
         pending = setTimeout(function () { pending = null; refreshStatus(); }, 1000);
     });
     setInterval(refreshStatus, 5000);
+    // блок генераторов свёрнут по умолчанию; раскрытое состояние запоминаем: статус перерисовывается каждые несколько секунд
+    function gensOpen() { try { return sessionStorage.getItem('run-gens-open') === '1'; } catch (e) { return false; } }
+    function applyGens() { var d = document.getElementById('gens-box'); if (d) { d.open = gensOpen(); } }
+    document.addEventListener('toggle', function (e) {
+        if (e.target && e.target.id === 'gens-box') { try { sessionStorage.setItem('run-gens-open', e.target.open ? '1' : '0'); } catch (x) { /* без сохранения */ } }
+    }, true);
+    document.body.addEventListener('htmx:afterSettle', applyGens);
+    applyGens();
     window.addEventListener('beforeunload', function () { logEs.close(); statusEs.close(); });
 })();
