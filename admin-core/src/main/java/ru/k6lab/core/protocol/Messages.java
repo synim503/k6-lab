@@ -30,7 +30,7 @@ public final class Messages {
      */
     public record PrometheusParams(String url, Map<String, String> headers, String pushInterval,
                                    boolean trendAsNativeHistogram, boolean classicHistograms, List<String> keepHistograms,
-                                   List<String> dropMetrics) {
+                                   List<String> allowMetrics) {
 
         public PrometheusParams(String url, Map<String, String> headers, String pushInterval, boolean trendAsNativeHistogram) {
             this(url, headers, pushInterval, trendAsNativeHistogram, false, List.of(), List.of());

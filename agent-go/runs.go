@@ -432,7 +432,7 @@ func (m *RunManager) launch(r *Run) {
 			// k6 шлёт метрики локальному приёмнику, тот переводит native histograms в классические и пересылает в Prometheus
 			proxy, perr := StartRWProxy(pr.URL, pr.Headers, pr.KeepHistograms...)
 			if perr == nil {
-				proxy.SetDrop(pr.DropMetrics)
+				proxy.SetAllow(pr.AllowMetrics)
 			}
 			if perr != nil {
 				err = fmt.Errorf("не удалось запустить приёмник метрик: %w", perr)
@@ -443,8 +443,8 @@ func (m *RunManager) launch(r *Run) {
 			r.mu.Unlock()
 			env = withProxyEnv(env, proxy.URL)
 			notes = append(notes, "Метрики k6 идут через локальный приёмник агента: native histograms -> классические (_bucket{le}) для Prometheus")
-			if len(pr.DropMetrics) > 0 {
-				notes = append(notes, "Агент не отправляет в Prometheus метрики: "+strings.Join(pr.DropMetrics, ", "))
+			if len(pr.AllowMetrics) > 0 {
+				notes = append(notes, "В Prometheus отправляются только метрики: "+strings.Join(pr.AllowMetrics, ", "))
 			}
 			if len(pr.KeepHistograms) > 0 {
 				notes = append(notes, "В Prometheus отправляются только гистограммы: "+strings.Join(pr.KeepHistograms, ", "))

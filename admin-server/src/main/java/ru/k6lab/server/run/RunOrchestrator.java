@@ -222,8 +222,8 @@ public class RunOrchestrator implements AgentEventListener {
         SettingsService.Prometheus prom = settings.prometheus();
         Messages.PrometheusParams promParams = prom.configured()
                 ? new Messages.PrometheusParams(prom.rwUrl(), prom.authHeaders(), settings.pushIntervalSec() + "s", true,
-                        settings.classicHistograms(), settings.onlyNeededHistograms() ? keptHistograms() : List.of(),
-                        settings.dropMetrics()) : null;
+                        settings.classicHistograms(), settings.onlyNeededHistograms() && settings.allowMetrics().isEmpty() ? keptHistograms() : List.of(),
+                        allowedMetrics()) : null;
         String cmdId = UUID.randomUUID().toString();
         pendingCmds.put(cmdId, new CmdRef(run.getId(), rg.getGeneratorId(), "PREPARE"));
         session.send(new Messages.Prepare(cmdId, String.valueOf(run.getId()), artifactUrl(gen.getServerUrl(), run.getId(), token),
@@ -231,6 +231,27 @@ public class RunOrchestrator implements AgentEventListener {
                 tags, rules, promParams, rg.getK6ApiPort(), ConfigInput.SYSTEM_TAGS, snap.script().entrypoint(),
                 settings.logLinesPerSecond(), K6Flag.args(run.getRequest() == null ? null
                         : run.getRequest().get("k6Flags") instanceof List<?> l ? l : null)));
+    }
+
+    /**
+     * Белый список метрик для агента: пусто - отправлять всё; иначе метрики из настройки плюс те, на которых строятся SLA и графики
+     * админки (их нельзя отсечь, иначе запуск перестанет считаться).
+     */
+    public List<String> allowedMetrics() {
+        List<String> user = settings.allowMetrics();
+        if (user.isEmpty()) {
+            return List.of();
+        }
+        List<String> all = new java.util.ArrayList<>(essentialMetrics());
+        all.addAll(user);
+        return all.stream().distinct().toList();
+    }
+
+    /** Имена метрик, нужные самой админке; в белый список они добавляются автоматически. */
+    public List<String> essentialMetrics() {
+        ru.k6lab.core.prom.PromQueries.Names n = metricNames.names();
+        return java.util.stream.Stream.of(n.opDuration(), n.iterationDuration(), n.iterations(), n.dropped(), n.opCount(), n.opErrors(),
+                n.httpReqFailed(), n.checks(), n.vus()).distinct().toList();
     }
 
     /**

@@ -134,12 +134,12 @@ public class SettingsService {
         return Math.max(5, Math.min(60, getInt(PUSH_INTERVAL_SEC, DEFAULT_PUSH_INTERVAL_SEC)));
     }
 
-    public static final String DROP_METRICS = "metrics.drop";
+    public static final String ALLOW_METRICS = "metrics.allow";
     public static final String ONLY_NEEDED_HISTOGRAMS = "metrics.histograms.only_needed";
 
-    /** Маски метрик, которые агент не отправляет в Prometheus (по одной на строку в настройке). */
-    public List<String> dropMetrics() {
-        return parseDropMetrics(get(DROP_METRICS, ""));
+    /** Белый список: маски метрик, которые агент отправляет в Prometheus (по одной на строку); пусто - отправляются все. */
+    public List<String> allowMetrics() {
+        return parseMetricMasks(get(ALLOW_METRICS, ""));
     }
 
     /** true (по умолчанию) - агент отправляет только нужные админке гистограммы, остальные отбрасывает. */
@@ -148,7 +148,7 @@ public class SettingsService {
     }
 
     /** Строки/запятые/пробелы -> список масок без пустых и повторов. */
-    public static List<String> parseDropMetrics(String text) {
+    public static List<String> parseMetricMasks(String text) {
         if (text == null) {
             return List.of();
         }

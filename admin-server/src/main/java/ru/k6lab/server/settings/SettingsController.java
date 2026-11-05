@@ -27,15 +27,18 @@ public class SettingsController {
     private final GeneratorRepository generators;
     private final AgentSessionRegistry registry;
     private final AppProperties props;
+    private final ru.k6lab.server.run.RunOrchestrator orchestrator;
 
     public SettingsController(SettingsService settings, PrometheusDiagnostics diagnostics, MetricNamesService names,
-                              GeneratorRepository generators, AgentSessionRegistry registry, AppProperties props) {
+                              GeneratorRepository generators, AgentSessionRegistry registry, AppProperties props,
+                              ru.k6lab.server.run.RunOrchestrator orchestrator) {
         this.settings = settings;
         this.diagnostics = diagnostics;
         this.names = names;
         this.generators = generators;
         this.registry = registry;
         this.props = props;
+        this.orchestrator = orchestrator;
     }
 
     @GetMapping
@@ -46,7 +49,8 @@ public class SettingsController {
         model.addAttribute("grafana", settings.get(SettingsService.GRAFANA_URL_TPL, ""));
         model.addAttribute("classicHist", settings.classicHistograms());
         model.addAttribute("pushSec", settings.pushIntervalSec());
-        model.addAttribute("dropMetrics", String.join("\n", settings.dropMetrics()));
+        model.addAttribute("allowMetrics", String.join("\n", settings.allowMetrics()));
+        model.addAttribute("essentialMetrics", orchestrator.essentialMetrics());
         model.addAttribute("onlyNeeded", settings.onlyNeededHistograms());
         model.addAttribute("metricNames", names.json());
         model.addAttribute("logLines", settings.logLinesPerSecond());
@@ -83,41 +87,22 @@ public class SettingsController {
         return "redirect:/settings";
     }
 
-    /** Какие метрики агент не отправляет в Prometheus. Метрики, на которых строятся SLA и графики админки, отбросить нельзя. */
-    @PostMapping("/drop-metrics")
-    public String saveDropMetrics(@RequestParam(required = false) String dropMetrics,
-                                  @RequestParam(defaultValue = "false") boolean onlyNeeded, RedirectAttributes ra) {
-        List<String> patterns = SettingsService.parseDropMetrics(dropMetrics);
+    /** Белый список метрик: что агенты отправляют в Prometheus. Метрики, нужные самой админке, добавляются автоматически. */
+    @PostMapping("/allow-metrics")
+    public String saveAllowMetrics(@RequestParam(required = false) String allowMetrics,
+                                   @RequestParam(defaultValue = "false") boolean onlyNeeded, RedirectAttributes ra) {
+        List<String> patterns = SettingsService.parseMetricMasks(allowMetrics);
         for (String pat : patterns) {
             if (!pat.matches("[A-Za-z0-9_:*]+")) {
                 ra.addFlashAttribute("error", "Недопустимая маска «" + pat + "»: имя метрики состоит из букв, цифр, _ и :, допускается *");
-                return "redirect:/settings#drop";
-            }
-            String essential = essentialMetric(pat);
-            if (essential != null) {
-                ra.addFlashAttribute("error", "Маска «" + pat + "» отбросила бы «" + essential + "» — на ней строятся SLA и графики. Уточните маску.");
-                return "redirect:/settings#drop";
+                return "redirect:/settings#allow";
             }
         }
-        settings.set(SettingsService.DROP_METRICS, String.join("\n", patterns));
+        settings.set(SettingsService.ALLOW_METRICS, String.join(System.lineSeparator(), patterns));
         settings.set(SettingsService.ONLY_NEEDED_HISTOGRAMS, String.valueOf(onlyNeeded));
-        ra.addFlashAttribute("info", patterns.isEmpty() ? "Список отбрасываемых метрик пуст" : "Агенты не будут отправлять: " + String.join(", ", patterns)
-                + ". Применится к следующим запускам.");
-        return "redirect:/settings#drop";
-    }
-
-    /** Имя нужной админке метрики (или её серии _bucket/_count/_sum), которую задевает маска; null - не задевает. */
-    private String essentialMetric(String pattern) {
-        ru.k6lab.core.prom.PromQueries.Names n = names.names();
-        for (String base : List.of(n.opDuration(), n.iterationDuration(), n.iterations(), n.dropped(), n.opCount(), n.opErrors(),
-                n.httpReqFailed(), n.checks(), n.vus())) {
-            for (String suffix : List.of("", "_bucket", "_count", "_sum")) {
-                if (SettingsService.globMatches(pattern, base + suffix)) {
-                    return base + suffix;
-                }
-            }
-        }
-        return null;
+        ra.addFlashAttribute("info", patterns.isEmpty() ? "Белый список пуст: агенты отправляют все метрики"
+                : "Агенты будут отправлять только: " + String.join(", ", patterns) + " (и метрики, нужные админке). Применится к следующим запускам.");
+        return "redirect:/settings#allow";
     }
 
     @PostMapping("/diagnostics")

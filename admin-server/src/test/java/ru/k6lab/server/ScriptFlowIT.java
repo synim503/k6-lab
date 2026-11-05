@@ -246,36 +246,39 @@ class ScriptFlowIT extends AbstractIT {
     ru.k6lab.server.metrics.RunMonitor runMonitor;
 
     @Test
-    void droppedMetricsAreConfigurableAndEssentialOnesAreProtected() throws Exception {
-        var keyDrop = ru.k6lab.server.settings.SettingsService.DROP_METRICS;
+    void allowedMetricsAreAWhitelistAndEssentialOnesAreAlwaysIncluded() throws Exception {
+        var keyAllow = ru.k6lab.server.settings.SettingsService.ALLOW_METRICS;
         try {
-            // по умолчанию список пуст, гистограммы фильтруются
-            settingsService.set(keyDrop, "");
+            // по умолчанию список пуст: агенту уходит «всё», гистограммы фильтруются флажком
+            settingsService.set(keyAllow, "");
             settingsService.set(ru.k6lab.server.settings.SettingsService.ONLY_NEEDED_HISTOGRAMS, "true");
-            assertThat(settingsService.dropMetrics()).isEmpty();
-            assertThat(settingsService.onlyNeededHistograms()).isTrue();
+            assertThat(settingsService.allowMetrics()).isEmpty();
+            assertThat(orchestrator.allowedMetrics()).isEmpty();
 
-            mvc.perform(post("/settings/drop-metrics").with(csrf()).param("dropMetrics", "k6_data_sent_total\nk6_http_req_blocked*, k6_data_sent_total"))
-                    .andExpect(redirectedUrl("/settings#drop")).andExpect(flash().attributeExists("info"));
-            assertThat(settingsService.dropMetrics()).containsExactly("k6_data_sent_total", "k6_http_req_blocked*");
-            assertThat(settingsService.onlyNeededHistograms()).isFalse(); // флажок не передан - выключен
+            mvc.perform(post("/settings/allow-metrics").with(csrf()).param("allowMetrics", "k6_data_sent_total\nk6_http_reqs*, k6_data_sent_total").param("onlyNeeded", "true"))
+                    .andExpect(redirectedUrl("/settings#allow")).andExpect(flash().attributeExists("info"));
+            assertThat(settingsService.allowMetrics()).containsExactly("k6_data_sent_total", "k6_http_reqs*");
+            // агенту уходит белый список + метрики, на которых строятся SLA и графики (их добавлять вручную не нужно)
+            assertThat(orchestrator.allowedMetrics()).contains("k6_data_sent_total", "k6_http_reqs*", "k6_iterations_total",
+                    "k6_iteration_duration_seconds", "k6_op_duration_seconds", "k6_dropped_iterations_total", "k6_vus");
 
-            // метрики, на которых строится SLA, отбросить нельзя: маска-«всё» и точное имя отклоняются, список не меняется
-            for (String bad : new String[]{"k6_*", "k6_iterations_total", "*duration_seconds*", "k6_vus"}) {
-                mvc.perform(post("/settings/drop-metrics").with(csrf()).param("dropMetrics", bad).param("onlyNeeded", "true"))
-                        .andExpect(flash().attributeExists("error"));
-                assertThat(settingsService.dropMetrics()).containsExactly("k6_data_sent_total", "k6_http_req_blocked*");
-            }
-            mvc.perform(post("/settings/drop-metrics").with(csrf()).param("dropMetrics", "k6 data!").param("onlyNeeded", "true"))
+            // некорректная маска отклоняется, список не меняется
+            mvc.perform(post("/settings/allow-metrics").with(csrf()).param("allowMetrics", "k6 data!"))
                     .andExpect(flash().attributeExists("error"));
+            assertThat(settingsService.allowMetrics()).containsExactly("k6_data_sent_total", "k6_http_reqs*");
 
-            // страница показывает сохранённое, а агенту уходят маски
-            mvc.perform(get("/settings")).andExpect(content().string(containsString("Какие метрики отбрасывают агенты")))
-                    .andExpect(content().string(containsString("k6_http_req_blocked*")));
-            assertThat(ru.k6lab.server.settings.SettingsService.globMatches("k6_http_req_blocked*", "k6_http_req_blocked_seconds")).isTrue();
+            // страница показывает сохранённое и обязательные метрики
+            mvc.perform(get("/settings")).andExpect(content().string(containsString("белый список")))
+                    .andExpect(content().string(containsString("k6_http_reqs*")))
+                    .andExpect(content().string(containsString("k6_iterations_total")));
+            assertThat(ru.k6lab.server.settings.SettingsService.globMatches("k6_http_reqs*", "k6_http_reqs_total")).isTrue();
             assertThat(ru.k6lab.server.settings.SettingsService.globMatches("k6_vus", "k6_vus_max")).isFalse();
+
+            // пустой список снова означает «отправлять всё»
+            mvc.perform(post("/settings/allow-metrics").with(csrf()).param("allowMetrics", "")).andExpect(flash().attributeExists("info"));
+            assertThat(orchestrator.allowedMetrics()).isEmpty();
         } finally {
-            settingsService.set(keyDrop, "");
+            settingsService.set(keyAllow, "");
             settingsService.set(ru.k6lab.server.settings.SettingsService.ONLY_NEEDED_HISTOGRAMS, "true");
         }
     }
@@ -738,7 +741,7 @@ class ScriptFlowIT extends AbstractIT {
         // форма показывает исполнителя и параметры, JSON-конфиг нагрузки содержит scenario объектом
         mvc.perform(get("/scripts/" + id + "/load")).andExpect(status().isOk())
                 .andExpect(content().string(containsString("constant-vus")))
-                .andExpect(content().string(containsString("Параметры сценария k6")))
+                .andExpect(content().string(containsString("op-panel")))
                 .andExpect(content().string(containsString("&quot;vus&quot; : 4")));
         String json = mvc.perform(get("/scripts/" + id + "/load.json")).andReturn().getResponse().getContentAsString();
         assertThat(json).contains("\"executor\" : \"constant-vus\"").contains("\"scenario\" : {").contains("\"duration\" : \"90s\"");

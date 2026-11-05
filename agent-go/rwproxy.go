@@ -83,11 +83,11 @@ func bucketsToClassic(h NativeHistogram) []float64 {
 // Гистограммы, которых нет в keep, отбрасываются: каждая даёт ~170 серий (сетка le), а админке нужны только перцентили
 // времени итерации/операции. keep == nil - оставить все.
 func convertSeries(in []TimeSeries, keep map[string]bool) (out []TimeSeries, converted int) {
-	return convertSeriesDrop(in, keep, nil)
+	return convertSeriesAllow(in, keep, nil)
 }
 
-// dropped: подходит ли имя метрики под одну из масок (* - любая последовательность символов).
-func dropped(name string, patterns []string) bool {
+// allowed: подходит ли имя метрики под одну из масок (* - любая последовательность символов).
+func allowed(name string, patterns []string) bool {
 	for _, p := range patterns {
 		if ok, _ := path.Match(p, name); ok {
 			return true
@@ -96,20 +96,21 @@ func dropped(name string, patterns []string) bool {
 	return false
 }
 
-// convertSeriesDrop - как convertSeries, но метрики, подходящие под маски drop, не попадают в результат вовсе.
-func convertSeriesDrop(in []TimeSeries, keep map[string]bool, drop []string) (out []TimeSeries, converted int) {
+// convertSeriesAllow - как convertSeries, но при непустом белом списке allow в результат попадают только метрики,
+// подходящие под одну из масок; остальные отбрасываются.
+func convertSeriesAllow(in []TimeSeries, keep map[string]bool, allow []string) (out []TimeSeries, converted int) {
 	for _, ts := range in {
 		if len(ts.Histograms) == 0 {
 			if len(ts.Samples) > 0 {
-				if len(drop) > 0 {
-					skip := false
+				if len(allow) > 0 {
+					ok := false
 					for _, l := range ts.Labels {
-						if l.Name == "__name__" && dropped(l.Value, drop) {
-							skip = true
+						if l.Name == "__name__" && allowed(l.Value, allow) {
+							ok = true
 							break
 						}
 					}
-					if skip {
+					if !ok {
 						continue
 					}
 				}
@@ -129,7 +130,7 @@ func convertSeriesDrop(in []TimeSeries, keep map[string]bool, drop []string) (ou
 		if keep != nil && !keep[name] {
 			continue
 		}
-		if dropped(name, drop) {
+		if len(allow) > 0 && !allowed(name, allow) {
 			continue
 		}
 		for _, h := range ts.Histograms {
@@ -156,7 +157,7 @@ func convertSeriesDrop(in []TimeSeries, keep map[string]bool, drop []string) (ou
 type RWProxy struct {
 	URL       string // куда k6 должен отправлять метрики
 	keep      map[string]bool
-	drop      []string
+	allow     []string
 	upstream  string
 	headers   map[string]string
 	srv       *http.Server
@@ -187,9 +188,9 @@ func StartRWProxy(upstream string, headers map[string]string, keepHistograms ...
 	return p, nil
 }
 
-// SetDrop задаёт маски метрик, которые не пересылаются в Prometheus; вызывать до начала работы k6.
-func (p *RWProxy) SetDrop(patterns []string) {
-	p.drop = patterns
+// SetAllow задаёт белый список масок метрик, которые пересылаются в Prometheus (пусто - все); вызывать до начала работы k6.
+func (p *RWProxy) SetAllow(patterns []string) {
+	p.allow = patterns
 }
 
 func (p *RWProxy) Close() {
@@ -218,7 +219,7 @@ func (p *RWProxy) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	out, conv := convertSeriesDrop(series, p.keep, p.drop)
+	out, conv := convertSeriesAllow(series, p.keep, p.allow)
 	p.Converted.Add(int64(conv))
 	if len(out) == 0 {
 		w.WriteHeader(http.StatusNoContent)
