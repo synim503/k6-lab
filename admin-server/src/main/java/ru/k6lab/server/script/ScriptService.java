@@ -9,6 +9,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import ru.k6lab.core.script.ScriptAnalyzer;
+import ru.k6lab.core.script.ScriptOptionsStripper;
 import ru.k6lab.core.util.ZipUtil;
 import ru.k6lab.server.audit.AuditService;
 import ru.k6lab.server.common.Hashes;
@@ -320,6 +321,16 @@ public class ScriptService {
         }
         if (!files.containsKey(entrypoint)) {
             throw new IllegalArgumentException("Entrypoint «" + entrypoint + "» не найден среди файлов версии");
+        }
+        // сценарии, пороги, теги и прочее, что админка подставляет при запуске, из options скрипта вырезаем: опции скрипта
+        // имели бы приоритет над --config и перекрыли бы нагрузку из админки
+        if (isScript(entrypoint)) {
+            var stripped = ScriptOptionsStripper.strip(new String(files.get(entrypoint), StandardCharsets.UTF_8));
+            if (stripped.changed()) {
+                files.put(entrypoint, stripped.source().getBytes(StandardCharsets.UTF_8));
+                notes.add("Из options скрипта вырезано: " + String.join(", ", stripped.removed())
+                        + ". Нагрузку, пороги и теги задаёт админка и подставляет их при запуске.");
+            }
         }
         byte[] zip = ZipUtil.write(files);
         String sha = sha256(zip);

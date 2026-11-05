@@ -6,32 +6,65 @@
 <th:block layout:fragment="content">
     <div class="page-head">
         <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-file-earmark-code"></i></span>Скрипты</h3>
-        <div class="btn-group">
-            <a class="btn btn-primary" th:href="@{/scripts/new}">Добавить скрипт</a>
-            <a class="btn btn-outline-secondary" th:href="@{/scripts/admin-helper}">Скачать admin.js</a>
+        <div class="d-flex gap-2 flex-wrap">
+            <a class="btn btn-outline-secondary" th:href="@{/scripts/admin-helper}" title="Вспомогательный файл для скриптов: точные метрики операций"><i class="bi bi-download me-1"></i>admin.js</a>
+            <a class="btn btn-primary" th:href="@{/scripts/new}"><i class="bi bi-plus-lg me-1"></i>Новый скрипт</a>
         </div>
     </div>
-    <p class="text-muted small">k6 на сервере (для <code>k6 inspect</code>):
+
+    <div class="d-flex align-items-center gap-3 mb-3 flex-wrap" th:if="${!scripts.isEmpty()}">
+        <input class="form-control list-filter" id="script-filter" type="search" placeholder="Найти скрипт" aria-label="Найти скрипт">
+        <span class="text-muted small" id="script-count" th:text="${scripts.size()} + ' ' + (${scripts.size() == 1} ? 'скрипт' : 'скриптов')"></span>
+    </div>
+
+    <div class="card">
+        <div class="empty-state" th:if="${scripts.isEmpty()}"><i class="bi bi-file-earmark-code"></i>
+            Скриптов пока нет. Загрузите файл k6, импортируйте из Git или напишите скрипт в браузере.
+            <div class="mt-3 d-flex gap-2 justify-content-center">
+                <a class="btn btn-primary" th:href="@{/scripts/new}">Добавить скрипт</a>
+                <a class="btn btn-outline-secondary" th:href="@{/scripts/sandbox}">Написать в браузере</a></div></div>
+        <div class="table-responsive" th:unless="${scripts.isEmpty()}"><table class="table table-hover align-middle mb-0" id="scripts-table">
+            <thead><tr><th>Скрипт</th><th>Версия</th><th class="text-end">Операций</th><th>Состояние</th><th>Обновлён</th><th></th></tr></thead>
+            <tbody>
+            <tr th:each="s : ${scripts}" th:with="v=${latest.get(s.id)}" class="run-row" th:attr="data-href=@{/scripts/{id}(id=${s.id})}" th:data-name="${#strings.toLowerCase(s.name)}">
+                <td><a class="fw-semibold" th:href="@{/scripts/{id}(id=${s.id})}" th:text="${s.name}"></a>
+                    <div class="small text-muted text-truncate" style="max-width:420px" th:if="${s.description != null and !s.description.isBlank()}" th:text="${s.description}"></div></td>
+                <td class="text-nowrap"><span th:text="${v != '' ? 'v' + v.number : '—'}"></span>
+                    <span class="text-muted small ms-1" th:if="${v != ''}" th:text="${v.sourceLabel()}"></span></td>
+                <td class="num" th:text="${v != '' ? v.operations.size() : '—'}"></td>
+                <td><span class="badge text-bg-primary" th:if="${runningIds.contains(s.id)}"><span class="dot dot-busy me-1" style="width:7px;height:7px"></span>выполняется</span>
+                    <span class="badge text-bg-success" th:if="${!runningIds.contains(s.id) and loadDefined.get(s.id)}">готов к запуску</span>
+                    <a class="badge text-bg-warning" th:if="${!loadDefined.get(s.id)}" th:href="@{/scripts/{id}/load(id=${s.id})}" title="Укажите, что и как нагружать">нужно описать нагрузку</a></td>
+                <td class="text-muted small text-nowrap" th:text="${#temporals.format(s.updatedAt, 'dd.MM.yyyy HH:mm')}"></td>
+                <td class="text-end text-nowrap">
+                    <form class="d-inline" th:if="${runningIds.contains(s.id)}" th:action="@{/scripts/{id}/stop(id=${s.id})}" method="post"
+                          onsubmit="return confirm('Остановить выполняющийся скрипт?')">
+                        <button class="btn btn-sm btn-outline-danger"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form>
+                    <a class="btn btn-sm btn-success" th:if="${!runningIds.contains(s.id) and loadDefined.get(s.id)}" th:href="@{/scripts/{id}/run(id=${s.id})}"><i class="bi bi-play-fill me-1"></i>Запустить</a>
+                    <a class="btn btn-sm btn-outline-primary" th:if="${!loadDefined.get(s.id)}" th:href="@{/scripts/{id}/load(id=${s.id})}">Описать нагрузку</a></td>
+            </tr></tbody></table></div>
+    </div>
+    <p class="text-muted small mt-3">k6 на сервере (для проверки скриптов):
         <span th:if="${k6Version}" th:text="${k6Version}"></span>
         <span th:unless="${k6Version}" class="text-warning">не найден — загрузите k6 для архитектуры сервера в «Дистрибутивы», версии будут проверяться приблизительно</span></p>
-    <div class="card"><table class="table table-sm table-hover mb-0">
-        <thead class="table-light"><tr><th>Скрипт</th><th>Версия</th><th>Источник</th><th>Операции</th><th>Нагрузка</th><th>Обновлён</th><th></th></tr></thead>
-        <tbody>
-        <tr th:if="${scripts.isEmpty()}"><td colspan="7"><div class="empty-state"><i class="bi bi-inbox"></i>Скриптов пока нет</div></td></tr>
-        <tr th:each="s : ${scripts}" th:with="v=${latest.get(s.id)}">
-            <td><a th:href="@{/scripts/{id}(id=${s.id})}" th:text="${s.name}"></a></td>
-            <td th:text="${v != '' ? 'v' + v.number : '—'}"></td>
-            <td th:text="${v != '' ? v.sourceLabel() : '—'}"></td>
-            <td th:text="${v != '' ? v.operations.size() : '—'}"></td>
-            <td><span class="badge" th:classappend="${loadDefined.get(s.id)} ? 'text-bg-success' : 'text-bg-secondary'" th:text="${loadDefined.get(s.id)} ? 'описана' : 'не описана'"></span>
-                <span class="badge text-bg-primary ms-1" th:if="${runningIds.contains(s.id)}">выполняется</span></td>
-            <td class="text-muted small text-nowrap" th:text="${#temporals.format(s.updatedAt, 'dd.MM.yyyy HH:mm')}"></td>
-            <td class="text-end text-nowrap">
-                <a class="btn btn-sm btn-success" th:classappend="${!loadDefined.get(s.id)} ? 'disabled'" th:href="@{/scripts/{id}/run(id=${s.id})}"><i class="bi bi-play-fill me-1"></i>Запустить</a>
-                <form class="d-inline" th:if="${runningIds.contains(s.id)}" th:action="@{/scripts/{id}/stop(id=${s.id})}" method="post"
-                      onsubmit="return confirm('Остановить выполняющийся скрипт?')">
-                    <button class="btn btn-sm btn-outline-danger" title="Остановить"><i class="bi bi-stop-fill"></i></button></form></td>
-        </tr></tbody></table></div>
+</th:block>
+
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        (function () {
+            var rows = [].slice.call(document.querySelectorAll('#scripts-table tbody tr'));
+            rows.forEach(function (r) {
+                r.addEventListener('click', function (e) { if (!e.target.closest('a,button,form')) location.href = r.dataset.href; });
+            });
+            var f = document.getElementById('script-filter'), cnt = document.getElementById('script-count');
+            if (!f) return;
+            f.addEventListener('input', function () {
+                var q = f.value.trim().toLowerCase(), shown = 0;
+                rows.forEach(function (r) { var ok = !q || r.dataset.name.indexOf(q) >= 0; r.classList.toggle('d-none', !ok); if (ok) shown++; });
+                cnt.textContent = q ? 'Найдено: ' + shown : rows.length + ' ' + (rows.length === 1 ? 'скрипт' : 'скриптов');
+            });
+        })();
+    </script>
 </th:block>
 </body>
 </html>

@@ -4,40 +4,93 @@
 <head><title>Новый скрипт</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-file-earmark-plus"></i></span>Новый скрипт</h3>
-        <a class="btn btn-outline-primary btn-sm" th:href="@{/scripts/sandbox}"><i class="bi bi-bug me-1"></i>Написать и отладить в браузере</a></div>
-    <ul class="nav nav-tabs mb-3">
-        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-upload" type="button">Загрузить файл</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-git" type="button">Из Git</button></li>
-    </ul>
-    <div class="tab-content">
-        <div class="tab-pane fade show active" id="tab-upload">
-            <form class="card card-body row g-3 mx-0" th:action="@{/scripts}" method="post" enctype="multipart/form-data">
-                <div class="col-md-4"><label class="form-label">Имя скрипта</label><input class="form-control" name="name" required></div>
-                <div class="col-md-8"><label class="form-label">Описание</label><input class="form-control" name="description"></div>
-                <div class="col-md-6"><label class="form-label">Файл: .js или архив .zip / .tar.gz (модули, данные, сертификаты)</label>
-                    <input class="form-control" type="file" name="file" required></div>
-                <div class="col-md-3"><label class="form-label">Entrypoint (для архива)</label>
-                    <input class="form-control" name="entrypoint" placeholder="main.js"></div>
-                <div class="col-md-3"><label class="form-label">Комментарий к версии</label><input class="form-control" name="comment"></div>
-                <div class="col-12"><button class="btn btn-primary">Загрузить и проверить</button>
-                    <span class="text-muted small ms-2">Версия проходит <code>k6 inspect</code>; опции scenarios/stages/vus/duration/iterations блокируют запуск теста.</span></div>
-            </form>
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/scripts}">Скрипты</a><i class="bi bi-chevron-right"></i><span>Новый скрипт</span></nav>
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-file-earmark-plus"></i></span>Новый скрипт</h3></div>
+
+    <div class="row g-3">
+        <div class="col-lg-8">
+            <div class="card"><div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                    <h6 class="mb-0 fw-semibold">Откуда взять скрипт</h6>
+                    <div class="seg" role="tablist">
+                        <button type="button" class="btn btn-sm active" data-src="file">Загрузить файл</button>
+                        <button type="button" class="btn btn-sm" data-src="git">Из Git</button></div></div>
+
+                <form id="src-file" class="row g-3" th:action="@{/scripts}" method="post" enctype="multipart/form-data">
+                    <div class="col-md-5"><label class="form-label" for="s-name">Имя скрипта</label>
+                        <input class="form-control" id="s-name" name="name" required placeholder="payments-api"></div>
+                    <div class="col-md-7"><label class="form-label" for="s-desc">Описание</label>
+                        <input class="form-control" id="s-desc" name="description" placeholder="необязательно: что проверяет скрипт"></div>
+                    <div class="col-12">
+                        <label class="dropzone d-block" for="s-file">
+                            <i class="bi bi-cloud-arrow-up"></i>
+                            <span class="picked">Перетащите файл или нажмите для выбора</span>
+                            <span class="d-block small mt-1">.js, либо архив .zip / .tar.gz с модулями, данными и сертификатами</span>
+                            <input class="visually-hidden" id="s-file" type="file" name="file" required></label></div>
+                    <div class="col-md-5"><label class="form-label" for="s-entry">Главный файл (для архива)</label>
+                        <input class="form-control" id="s-entry" name="entrypoint" placeholder="main.js">
+                        <div class="form-text">Для одиночного .js не нужен.</div></div>
+                    <div class="col-md-7"><label class="form-label" for="s-comment">Комментарий к версии</label>
+                        <input class="form-control" id="s-comment" name="comment" placeholder="необязательно"></div>
+                    <div class="col-12 form-actions"><button class="btn btn-primary">Загрузить и проверить</button>
+                        <a class="btn btn-link" th:href="@{/scripts}">Отмена</a></div>
+                </form>
+
+                <form id="src-git" class="row g-3 d-none" th:action="@{/scripts/git}" method="post">
+                    <div class="col-md-5"><label class="form-label" for="g-name">Имя скрипта</label><input class="form-control" id="g-name" name="name" required></div>
+                    <div class="col-md-7"><label class="form-label" for="g-repo">Репозиторий</label>
+                        <select class="form-select" id="g-repo" name="repoId" required>
+                            <option th:each="r : ${repos}" th:value="${r.id}" th:text="${r.name}"></option></select>
+                        <div class="form-text" th:if="${repos.isEmpty()}">Репозиториев нет. Администратор добавляет их в разделе «Ещё → Git-репозитории».</div></div>
+                    <div class="col-md-5"><label class="form-label" for="g-ref">Ветка, тег или коммит</label><input class="form-control" id="g-ref" name="ref" placeholder="main" required></div>
+                    <div class="col-md-7"><label class="form-label" for="g-entry">Путь к главному файлу</label>
+                        <input class="form-control" id="g-entry" name="entrypoint" placeholder="scripts/payments.js" required>
+                        <div class="form-text">От корня репозитория.</div></div>
+                    <div class="col-12 form-actions"><button class="btn btn-primary" th:disabled="${repos.isEmpty()}">Импортировать</button>
+                        <a class="btn btn-link" th:href="@{/scripts}">Отмена</a></div>
+                </form>
+            </div></div>
         </div>
-        <div class="tab-pane fade" id="tab-git">
-            <form class="card card-body row g-3 mx-0" th:action="@{/scripts/git}" method="post">
-                <div class="col-md-4"><label class="form-label">Имя скрипта</label><input class="form-control" name="name" required></div>
-                <div class="col-md-4"><label class="form-label">Репозиторий</label>
-                    <select class="form-select" name="repoId" required>
-                        <option th:each="r : ${repos}" th:value="${r.id}" th:text="${r.name}"></option></select>
-                    <div class="form-text" th:if="${repos.isEmpty()}">Репозиториев нет — их добавляет администратор в разделе «Git».</div></div>
-                <div class="col-md-4"><label class="form-label">Ветка, тег или коммит</label><input class="form-control" name="ref" placeholder="main" required></div>
-                <div class="col-md-6"><label class="form-label">Путь к entrypoint (от каталога репозитория)</label>
-                    <input class="form-control" name="entrypoint" placeholder="scripts/payments.js" required></div>
-                <div class="col-12"><button class="btn btn-primary" th:disabled="${repos.isEmpty()}">Импортировать</button></div>
-            </form>
+
+        <div class="col-lg-4">
+            <div class="card mb-3"><div class="card-body">
+                <h6 class="fw-semibold mb-2">Что происходит при загрузке</h6>
+                <ul class="small text-muted ps-3 mb-0">
+                    <li class="mb-1">Скрипт проверяется через <code>k6 inspect</code>, функции становятся операциями нагрузки.</li>
+                    <li class="mb-1">Сценарии, пороги и теги из <code>options</code> вырезаются: нагрузку задаёте вы на вкладке «Нагрузка».</li>
+                    <li>Каждая загрузка создаёт новую версию, старые можно вернуть.</li></ul></div></div>
+            <div class="card"><div class="card-body">
+                <h6 class="fw-semibold mb-1">Нет готового файла?</h6>
+                <p class="small text-muted mb-2">Напишите скрипт прямо в браузере, запустите на одном узле и посмотрите лог.</p>
+                <a class="btn btn-outline-primary btn-sm" th:href="@{/scripts/sandbox}"><i class="bi bi-bug me-1"></i>Написать и отладить в браузере</a></div></div>
         </div>
     </div>
+</th:block>
+
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        (function () {
+            document.querySelectorAll('.seg [data-src]').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    document.querySelectorAll('.seg [data-src]').forEach(function (x) { x.classList.toggle('active', x === b); });
+                    document.getElementById('src-file').classList.toggle('d-none', b.dataset.src !== 'file');
+                    document.getElementById('src-git').classList.toggle('d-none', b.dataset.src !== 'git');
+                });
+            });
+            var dz = document.querySelector('.dropzone'), input = document.getElementById('s-file'), name = document.getElementById('s-name');
+            if (!dz || !input) return;
+            var label = dz.querySelector('.picked'), initial = label.textContent;
+            function picked() {
+                label.textContent = input.files.length ? input.files[0].name : initial;
+                // имя скрипта подсказываем по имени файла, пока пользователь его не ввёл
+                if (input.files.length && name && !name.value) name.value = input.files[0].name.replace(/\.(js|mjs|ts|zip|tar\.gz|tgz)$/i, '');
+            }
+            input.addEventListener('change', picked);
+            ['dragenter', 'dragover'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add('drag'); }); });
+            ['dragleave', 'drop'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove('drag'); }); });
+            dz.addEventListener('drop', function (e) { if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; picked(); } });
+        })();
+    </script>
 </th:block>
 </body>
 </html>

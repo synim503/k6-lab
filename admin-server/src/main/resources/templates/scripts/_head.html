@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<body>
+<!-- Общая шапка страниц скрипта: где я, что можно сделать, куда перейти. active: overview | load | versions | debug | run -->
+<th:block th:fragment="head(script, active)">
+    <nav class="crumbs" aria-label="Навигация">
+        <a th:href="@{/scripts}">Скрипты</a><i class="bi bi-chevron-right"></i><span th:text="${script.name}"></span>
+    </nav>
+    <div class="script-head">
+        <div class="title-row">
+            <h3><span class="icon-tile"><i class="bi bi-file-earmark-code"></i></span><span class="name" th:text="${script.name}"></span></h3>
+            <div class="head-actions">
+                <a class="btn btn-success" th:if="${active != 'run'}" th:href="@{/scripts/{id}/run(id=${script.id})}"><i class="bi bi-play-fill me-1"></i>Запустить</a>
+            </div>
+        </div>
+        <ul class="script-tabs" role="tablist">
+            <li><a class="nav-link" th:classappend="${active == 'overview'} ? 'active'" th:href="@{/scripts/{id}(id=${script.id})}"><i class="bi bi-grid"></i>Обзор</a></li>
+            <li><a class="nav-link" th:classappend="${active == 'load'} ? 'active'" th:href="@{/scripts/{id}/load(id=${script.id})}"><i class="bi bi-speedometer2"></i>Нагрузка</a></li>
+            <li><a class="nav-link" id="tab-link-versions" th:classappend="${active == 'versions'} ? 'active'" th:href="@{/scripts/{id}(id=${script.id})} + '#versions'"><i class="bi bi-clock-history"></i>Версии</a></li>
+            <li sec:authorize="hasRole('ADMIN')"><a class="nav-link" th:classappend="${active == 'debug'} ? 'active'" th:href="@{/scripts/sandbox(script=${script.id})}"><i class="bi bi-bug"></i>Отладка</a></li>
+        </ul>
+    </div>
+</th:block>
+</body>
+</html>

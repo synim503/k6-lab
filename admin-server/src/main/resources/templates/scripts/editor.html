@@ -4,23 +4,25 @@
 <head><title>Редактор</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-        <h3 class="mb-0"><a th:href="@{/scripts/{id}(id=${script.id})}" th:text="${script.name}"></a> v<span th:text="${v.number}"></span>:
-            <code th:text="${path}"></code></h3>
-        <a class="btn btn-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}">← к версии</a>
+    <th:block th:replace="~{scripts/_head :: head(script=${script}, active='versions')}"></th:block>
+
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <h5 class="mb-0">Редактор: <code th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span th:text="${v.number}"></span></span></h5>
+        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}"><i class="bi bi-arrow-left me-1"></i>К версии</a>
     </div>
-    <div class="mb-2 small">Файлы:
+    <div class="mb-2 small text-muted">Файлы версии:
         <a class="me-2" th:each="f : ${scriptFiles}" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
            th:text="${f.path}" th:classappend="${f.path == path} ? 'fw-bold'"></a></div>
-    <div class="alert alert-info py-2 small">Сохранение создаёт <strong>новую версию</strong> (старая остаётся неизменной) и заново проверяет её через <code>k6 inspect</code>.</div>
+    <div class="alert alert-info py-2 small">Сохранение создаёт <strong>новую версию</strong>: старая остаётся неизменной. Сценарии, пороги и теги из <code>options</code> при сохранении вырезаются, их задаёт админка.</div>
     <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post">
         <input type="hidden" name="file" th:value="${path}">
         <input type="hidden" name="content" id="content">
-        <div id="editor" style="height: 65vh; border: 1px solid #ccc"
+        <div id="editor" style="height: 62vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden"
              th:attr="data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${path})}"></div>
-        <div class="mt-2 d-flex gap-2">
-            <input class="form-control w-50" name="comment" placeholder="комментарий к версии">
-            <button class="btn btn-primary" type="submit">Сохранить как новую версию</button>
+        <div class="sticky-actions">
+            <input class="form-control" style="max-width:420px" name="comment" placeholder="Что изменилось (необязательно)" aria-label="Комментарий к версии">
+            <button class="btn btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>Сохранить как новую версию</button>
+            <a class="btn btn-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}">Отмена</a>
         </div>
     </form>
 </th:block>

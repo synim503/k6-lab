@@ -4,7 +4,8 @@
 <head><title>Запустить скрипт</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-play-circle"></i></span>Запустить: <span th:text="${script.name}"></span></h3></div>
+    <th:block th:replace="~{scripts/_head :: head(script=${script}, active='run')}"></th:block>
+    <h5 class="mb-3">Запуск</h5>
 
     <div class="alert alert-danger" th:if="${blockReason != null}" th:text="${blockReason}"></div>
     <div class="alert alert-danger" th:each="e : ${errors}">

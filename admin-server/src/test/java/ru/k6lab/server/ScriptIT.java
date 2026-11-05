@@ -82,22 +82,32 @@ class ScriptIT extends AbstractIT {
     }
 
     @Test
-    void scriptDeclaringLoadOptionsIsBlockedWithExplanation() throws Exception {
+    void loadOptionsAreCutFromTheSourceBecauseTheAdminSetsThemAtRun() throws Exception {
         Assumptions.assumeTrue(k6.version().isPresent(), "k6 недоступен");
         ScriptVersion vus = upload(name(), "a.js", "export const options = { vus: 10, duration: '1m' };\nexport function op1() {}\nexport default function () {}");
-        assertThat(vus.isValidForModel()).isFalse();
-        assertThat(vus.getInvalidReason()).contains("vus", "duration").contains("приоритет над --config");
+        assertThat(vus.isValidForModel()).as(String.valueOf(vus.getInvalidReason())).isTrue();
+        assertThat(vus.getWarnings()).anyMatch(w -> w.contains("вырезано") && w.contains("vus") && w.contains("duration"));
+        assertThat(vus.getInspectResult().get("vus")).isNull();
 
-        ScriptVersion sc = upload(name(), "b.js", "export const options = { scenarios: { s: { executor: 'constant-vus', vus: 1, duration: '1s' } } };\nexport default function () {}");
-        assertThat(sc.isValidForModel()).isFalse();
-        assertThat(sc.getInvalidReason()).contains("scenarios");
+        ScriptVersion sc = upload(name(), "b.js", "export const options = { scenarios: { s: { executor: 'constant-vus', vus: 1, duration: '1s' } }, insecureSkipTLSVerify: true };\nexport default function () {}");
+        assertThat(sc.isValidForModel()).isTrue();
+        assertThat(sc.getWarnings()).anyMatch(w -> w.contains("scenarios"));
+        // прочие опции остались
+        assertThat(sc.getInspectResult().get("insecureSkipTLSVerify")).isEqualTo(true);
 
-        ScriptVersion st = upload(name(), "c.js", "export const options = { stages: [{ duration: '1s', target: 1 }], iterations: 5 };\nexport default function () {}");
-        assertThat(st.getInvalidReason()).contains("stages").contains("iterations");
+        ScriptVersion st = upload(name(), "c.js", "export const options = { stages: [{ duration: '1s', target: 1 }], iterations: 5, thresholds: { http_req_duration: ['p(95)<500'] }, tags: { a: 'b' } };\nexport default function () {}");
+        assertThat(st.isValidForModel()).isTrue();
+        assertThat(st.getWarnings()).anyMatch(w -> w.contains("stages") && w.contains("thresholds") && w.contains("tags"));
 
-        // допустимые опции (thresholds, tags) не блокируют
-        ScriptVersion ok = upload(name(), "d.js", "export const options = { thresholds: { http_req_duration: ['p(95)<500'] } };\nexport default function () {}");
+        // опции без таких полей скрипт не меняют и предупреждения не добавляют
+        ScriptVersion ok = upload(name(), "d.js", "export const options = { insecureSkipTLSVerify: true };\nexport default function () {}");
         assertThat(ok.isValidForModel()).isTrue();
+        assertThat(ok.getWarnings()).noneMatch(w -> w.contains("вырезано"));
+
+        // options, собранные динамически, вырезать нельзя: версия остаётся заблокированной с объяснением
+        ScriptVersion dyn = upload(name(), "e.js", "const o = { vus: 3, duration: '5s' };\nexport const options = o;\nexport default function () {}");
+        assertThat(dyn.isValidForModel()).isFalse();
+        assertThat(dyn.getInvalidReason()).contains("vus", "duration").contains("приоритет над --config");
     }
 
     @Test
