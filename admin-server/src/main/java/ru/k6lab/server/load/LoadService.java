@@ -85,7 +85,7 @@ public class LoadService {
         Script script = scripts.get(scriptId);
         LoadForm f = new LoadForm();
         f.setLevelPct(script.getLevelPct());
-        f.setRampSec(script.getRampSec());
+        f.setRampSec(0); // разгона нет: нагрузка стартует сразу на целевой интенсивности
         f.setHoldMinutes(script.getHoldSec() / 60.0);
         f.setGeneratorCount(script.getGeneratorCount());
         f.setEnvText(LoadForm.formatKv(script.getEnv()));

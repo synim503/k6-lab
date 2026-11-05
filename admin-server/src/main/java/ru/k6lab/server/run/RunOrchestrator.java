@@ -177,8 +177,11 @@ public class RunOrchestrator implements AgentEventListener {
         ctx.runId = run.getId();
         ctx.scriptName = run.getScriptName();
         ctx.policy = run.getFailurePolicy();
-        ctx.gracefulStopSec = snap.gracefulStopSec();
-        ctx.totalSec = snap.steps().stream().mapToInt(s -> s.rampSec() + s.holdSec()).sum();
+        // плановый конец - по самому долгому сценарию конфига k6, а не только по профилю: у constant-vus, stages, startTime и т.п. своя длительность,
+        // иначе сторож принял бы нормально идущий тест за зависший и прервал его
+        var span = ru.k6lab.core.k6config.ConfigDuration.of(run.getK6Config());
+        ctx.gracefulStopSec = (int) Math.max(snap.gracefulStopSec(), span.gracefulStopSec());
+        ctx.totalSec = (int) Math.max(snap.steps().stream().mapToInt(s -> s.rampSec() + s.holdSec()).sum(), span.totalSec());
         ctx.externallyControlled = run.getK6Config() != null && run.getK6Config().toString().contains("externally-controlled");
         ctx.plannedStart = run.getPlannedStartAt();
         ctx.startSent = run.getPlannedStartAt() != null;

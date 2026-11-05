@@ -247,3 +247,47 @@ a:hover > .tile-link, .tile-link:hover { transform: translateY(-2px); box-shadow
 .op-card.is-profile:not(.adv) .op-detail { display: none; }
 .op-card .op-adv { white-space: nowrap; }
 .op-card.is-profile.adv .op-adv { background: #eef0fb; border-color: #c7c4f8; color: var(--k6-primary); }
+
+/* ---------- список генераторов: компактно, с фильтрами ---------- */
+.gen-toolbar { display: flex; align-items: center; gap: .6rem 1rem; flex-wrap: wrap; margin-bottom: .85rem; }
+.status-chips { display: flex; gap: .4rem; flex-wrap: wrap; }
+.chip-btn { display: inline-flex; align-items: center; gap: .4rem; padding: .22rem .7rem; border: 1px solid var(--k6-border); background: #fff; border-radius: 999px;
+  font-size: .84rem; color: var(--k6-text); cursor: pointer; transition: border-color .12s, background .12s; }
+.chip-btn:hover { border-color: #c7c4f8; background: #f7f8ff; }
+.chip-btn.on { border-color: var(--k6-primary); background: #eef0ff; box-shadow: 0 0 0 2px rgba(79, 70, 229, .12); }
+.chip-btn .badge { padding: .2em .55em; font-size: .74rem; }
+.chip-btn b { font-variant-numeric: tabular-nums; }
+.gen-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.gen-table th.sortable:hover { color: var(--k6-primary); }
+.gen-table th.sortable.sorted { color: var(--k6-primary); }
+.gen-table th.sortable.sorted::after { content: " " attr(data-dir); font-size: .7em; }
+.gen-table > :not(caption) > * > * { padding: .4rem .75rem; }
+.gen-table td { font-size: .88rem; vertical-align: middle; }
+.mini { display: flex; align-items: center; gap: .45rem; min-width: 96px; }
+.mini .mini-bar { width: 52px; height: 6px; border-radius: 99px; background: #e8eaf4; overflow: hidden; flex: none; }
+.mini .mini-bar i { display: block; height: 100%; background: var(--k6-primary); border-radius: 99px; }
+.mini.hot .mini-bar i { background: #ef4444; }
+.mini.hot b { color: #dc2626; }
+.mini b { font-weight: 600; font-variant-numeric: tabular-nums; font-size: .84rem; }
+.attn .attn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .15rem 1.5rem; font-size: .9rem; }
+
+/* ---------- пары «название — значение» ---------- */
+.kv-grid { display: grid; grid-template-columns: minmax(130px, 190px) 1fr; gap: .6rem 1rem; margin: 0; padding: 1rem 1.15rem 1.1rem; }
+.kv-grid dt { color: var(--k6-muted); font-weight: 550; font-size: .86rem; }
+.kv-grid dd { margin: 0; overflow-wrap: anywhere; }
+.page-head .name { min-width: 0; }
+
+/* ---------- кнопки действий в строках таблиц ---------- */
+.btn-icon { width: 32px; height: 32px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; }
+.row-actions { white-space: nowrap; }
+.row-actions > * + * { margin-left: .25rem; }
+.page-head .sub { color: var(--k6-muted); font-size: .9rem; max-width: 760px; }
+.section-nav { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.section-nav a { padding: .25rem .8rem; border-radius: 999px; background: #fff; border: 1px solid var(--k6-border); color: var(--k6-text); font-size: .86rem; font-weight: 550; }
+.section-nav a:hover { border-color: #c7c4f8; background: #f7f8ff; text-decoration: none; color: var(--k6-primary); }
+html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* ---------- запуск: сводка ---------- */
+.run-summary { display: flex; align-items: center; gap: .75rem 1.5rem; flex-wrap: wrap; margin-bottom: .85rem; }
+.run-clock { font-size: 1.25rem; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }

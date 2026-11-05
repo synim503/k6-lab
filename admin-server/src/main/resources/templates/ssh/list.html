@@ -5,39 +5,42 @@
 <body>
 <th:block layout:fragment="content">
     <div class="page-head">
-        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-terminal"></i></span>SSH-учётки</h3>
-        <a class="btn btn-primary" th:href="@{/ssh-credentials/new}">Добавить</a>
+        <div>
+            <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-terminal"></i></span>SSH-учётки</h3>
+            <div class="sub mt-1">Как админка заходит на серверы, чтобы установить агент. Пароли и ключи шифруются и после сохранения не показываются.</div></div>
+        <a class="btn btn-primary" th:href="@{/ssh-credentials/new}"><i class="bi bi-plus-lg me-1"></i>Добавить учётку</a>
     </div>
-    <p class="text-muted">Секреты шифруются (AES-GCM) и после сохранения в интерфейсе не показываются.</p>
-    <div class="card mb-4"><table class="table table-sm table-hover mb-0">
-        <thead class="table-light"><tr><th>Имя</th><th>Пользователь</th><th>Тип</th><th>sudo</th><th>Jump-host</th><th></th></tr></thead>
-        <tbody>
-        <tr th:if="${items.isEmpty()}"><td colspan="6"><div class="empty-state"><i class="bi bi-inbox"></i>Учёток нет</div></td></tr>
-        <tr th:each="c : ${items}">
-            <td th:text="${c.name}"></td><td th:text="${c.username}"></td>
-            <td th:text="${c.authType.name() == 'KEY'} ? 'ключ' : 'пароль'"></td>
-            <td th:text="${c.sudoPasswordEnc != null} ? 'пароль задан' : '—'"></td>
-            <td th:text="${c.jumpHost} ? ${c.jumpHost} + ':' + (${c.jumpPort} ?: 22) : '—'"></td>
-            <td class="text-end text-nowrap">
-                <a class="btn btn-sm btn-outline-secondary py-0" th:href="@{/ssh-credentials/{id}/edit(id=${c.id})}">изменить</a>
-                <form class="d-inline" th:action="@{/ssh-credentials/{id}/delete(id=${c.id})}" method="post" onsubmit="return confirm('Удалить учётку?')">
-                    <button class="btn btn-sm btn-outline-danger py-0">удалить</button></form>
-            </td>
-        </tr></tbody></table></div>
 
-    <h5>Известные хосты (подтверждённые ключи)</h5>
-    <div class="card"><table class="table table-sm mb-0">
-        <thead class="table-light"><tr><th>Хост</th><th>Тип ключа</th><th>Fingerprint</th><th>Подтвердил</th><th></th></tr></thead>
+    <div class="card mb-4"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead><tr><th>Название</th><th>Пользователь</th><th>Вход</th><th>sudo</th><th>Через jump-host</th><th></th></tr></thead>
         <tbody>
-        <tr th:if="${knownHosts.isEmpty()}"><td colspan="5"><div class="empty-state"><i class="bi bi-inbox"></i>Пока пусто</div></td></tr>
+        <tr th:if="${items.isEmpty()}"><td colspan="6"><div class="empty-state"><i class="bi bi-terminal"></i>Учёток пока нет.
+            <div class="mt-3"><a class="btn btn-primary btn-sm" th:href="@{/ssh-credentials/new}">Добавить учётку</a></div></div></td></tr>
+        <tr th:each="c : ${items}">
+            <td class="fw-semibold" th:text="${c.name}"></td><td th:text="${c.username}"></td>
+            <td><span class="badge text-bg-secondary" th:text="${c.authType.name() == 'KEY'} ? 'ключ' : 'пароль'"></span></td>
+            <td class="text-muted" th:text="${c.sudoPasswordEnc != null} ? 'пароль задан' : '—'"></td>
+            <td class="text-muted" th:text="${c.jumpHost} ? ${c.jumpHost} + ':' + (${c.jumpPort} ?: 22) : '—'"></td>
+            <td class="text-end text-nowrap row-actions">
+                <a class="btn btn-sm btn-outline-secondary btn-icon" th:href="@{/ssh-credentials/{id}/edit(id=${c.id})}" title="Изменить" aria-label="Изменить"><i class="bi bi-pencil"></i></a>
+                <form class="d-inline" th:action="@{/ssh-credentials/{id}/delete(id=${c.id})}" method="post" onsubmit="return confirm('Удалить учётку?')">
+                    <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
+            </td>
+        </tr></tbody></table></div></div>
+
+    <div class="sect-title"><h5>Известные хосты</h5><span class="hint">подтверждённые ключи серверов: защита от подмены хоста</span></div>
+    <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead><tr><th>Хост</th><th>Тип ключа</th><th>Отпечаток (SHA256)</th><th>Подтвердил</th><th></th></tr></thead>
+        <tbody>
+        <tr th:if="${knownHosts.isEmpty()}"><td colspan="5"><div class="empty-state"><i class="bi bi-shield-check"></i>Пока пусто: ключи появятся после первого подключения к серверу.</div></td></tr>
         <tr th:each="k : ${knownHosts}">
-            <td th:text="${k.host} + ':' + ${k.port}"></td><td th:text="${k.keyType}"></td>
+            <td class="fw-semibold" th:text="${k.host} + ':' + ${k.port}"></td><td th:text="${k.keyType}"></td>
             <td><code class="small" th:text="${k.fingerprintSha256}"></code></td>
-            <td th:text="${k.confirmedBy} + ', ' + ${k.confirmedAt}"></td>
+            <td class="small text-muted" th:text="${k.confirmedBy} + ', ' + ${#temporals.format(k.confirmedAt, 'dd.MM.yyyy HH:mm')}"></td>
             <td class="text-end"><form th:action="@{/ssh-credentials/known-hosts/{id}/delete(id=${k.id})}" method="post"
                                        onsubmit="return confirm('Забыть ключ хоста? Следующее подключение потребует нового подтверждения.')">
-                <button class="btn btn-sm btn-outline-danger py-0">забыть</button></form></td>
-        </tr></tbody></table></div>
+                <button class="btn btn-sm btn-outline-danger" title="Забыть ключ: следующее подключение потребует подтверждения"><i class="bi bi-x-lg me-1"></i>Забыть</button></form></td>
+        </tr></tbody></table></div></div>
 </th:block>
 </body>
 </html>

@@ -13,7 +13,8 @@
         <a class="alert-link ms-1" th:href="@{/scripts/{id}/load(id=${script.id})}">Открыть нагрузку</a></div>
     <div class="alert alert-warning py-2" th:each="w : ${warnings}" th:text="${w}"></div>
 
-    <form class="card card-body mx-0 form-card" th:action="@{/scripts/{id}/run(id=${script.id})}" method="post">
+    <div class="row g-3"><div class="col-lg-7">
+    <form class="card card-body mx-0" th:action="@{/scripts/{id}/run(id=${script.id})}" method="post">
         <div class="text-muted" th:if="${generators.isEmpty()}">Серверов нет — <a th:href="@{/generators/add}">добавьте сервер</a>.</div>
         <div th:unless="${generators.isEmpty()}">
             <label class="form-label fw-semibold" for="gen-count">Количество генераторов</label>
@@ -59,6 +60,27 @@
             <a class="btn btn-link" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a></div>
         <div class="alert alert-danger mt-3 mb-0" th:if="${error}" th:text="${error}"></div>
     </form>
+    </div>
+    <div class="col-lg-5">
+        <div class="card"><div class="card-header">Что будет запущено</div>
+            <div class="card-body pb-2">
+                <div class="d-flex gap-4 flex-wrap mb-2">
+                    <div><div class="text-muted small">Длительность</div><b th:text="${#numbers.formatDecimal(script.holdSec / 60.0, 1, 1)} + ' мин'"></b></div>
+                    <div><div class="text-muted small">Уровень нагрузки</div><b th:text="${#numbers.formatDecimal(script.levelPct, 1, 0)} + '%'"></b></div>
+                    <div><div class="text-muted small">Генераторов</div><b th:text="${defaultCount}"></b></div>
+                </div></div>
+            <ul class="list-group list-group-flush">
+                <li class="list-group-item text-muted" th:if="${ops.isEmpty()}">Нагрузка не описана</li>
+                <li class="list-group-item d-flex justify-content-between align-items-center gap-2" th:each="o : ${ops}">
+                    <span><span class="fw-semibold" th:text="${o.name}"></span><br><code class="small" th:text="${o.execFn}"></code></span>
+                    <span class="text-end small">
+                        <span th:if="${o.profileDriven()}" th:text="${#numbers.formatDecimal(o.ratePerSec, 1, 2)} + ' оп/с'"></span>
+                        <span th:unless="${o.profileDriven()}" class="text-muted" th:text="${o.executor}"></span>
+                        <br><span class="text-muted" th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaThresholdMs, 1, 0)} + ' мс'"></span></span>
+                </li></ul>
+            <div class="card-body pt-2"><a class="small" th:href="@{/scripts/{id}/load(id=${script.id})}"><i class="bi bi-pencil me-1"></i>Изменить нагрузку</a></div>
+        </div>
+    </div></div>
 </th:block>
 <th:block layout:fragment="scripts">
     <script>

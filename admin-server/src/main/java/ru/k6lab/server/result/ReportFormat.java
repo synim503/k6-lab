@@ -62,4 +62,75 @@ public class ReportFormat {
             default -> s;
         };
     }
+
+    public String deployOperation(String s) {
+        return switch (s == null ? "" : s) {
+            case "PREFLIGHT" -> "Проверка хоста";
+            case "INSTALL" -> "Установка агента";
+            case "UPDATE" -> "Обновление агента";
+            case "RESTART" -> "Перезапуск агента";
+            case "UNINSTALL" -> "Удаление агента";
+            case "REDEPLOY" -> "Жёсткий редеплой";
+            default -> s;
+        };
+    }
+
+    public String deployStatus(String s) {
+        return switch (s == null ? "" : s) {
+            case "PENDING" -> "В очереди";
+            case "RUNNING" -> "Выполняется";
+            case "WAITING_HOST_KEY" -> "Ждёт подтверждения ключа";
+            case "SUCCEEDED" -> "Успешно";
+            case "FAILED" -> "Ошибка";
+            case "ROLLED_BACK" -> "Откат";
+            default -> s;
+        };
+    }
+
+    /** Класс бейджа для статуса операции над генератором. */
+    public String deployBadge(String s) {
+        return switch (s == null ? "" : s) {
+            case "SUCCEEDED" -> "text-bg-success";
+            case "FAILED", "ROLLED_BACK" -> "text-bg-danger";
+            case "WAITING_HOST_KEY" -> "text-bg-warning";
+            case "RUNNING" -> "text-bg-primary";
+            default -> "text-bg-secondary";
+        };
+    }
+
+    /** Состояние генератора внутри запуска. */
+    public String genRunStatus(String s) {
+        return switch (s == null ? "" : s) {
+            case "RESERVED" -> "Зарезервирован";
+            case "PREPARING" -> "Подготовка";
+            case "PREPARED" -> "Готов к старту";
+            case "RUNNING" -> "Выполняется";
+            case "STOPPING" -> "Останавливается";
+            case "EXITED" -> "Завершён";
+            case "FAILED" -> "Ошибка";
+            case "LOST" -> "Потерян";
+            default -> s;
+        };
+    }
+
+    public String genRunBadge(String s) {
+        return switch (s == null ? "" : s) {
+            case "RUNNING" -> "text-bg-primary";
+            case "EXITED" -> "text-bg-success";
+            case "FAILED", "LOST" -> "text-bg-danger";
+            case "STOPPING" -> "text-bg-warning";
+            default -> "text-bg-secondary";
+        };
+    }
+
+    /** Класс бейджа статуса запуска: пороги k6 не выполнены - предупреждение, а не авария. */
+    public String runBadge(String status, boolean thresholdsFailed) {
+        return switch (status == null ? "" : status) {
+            case "FINISHED" -> thresholdsFailed ? "text-bg-warning" : "text-bg-success";
+            case "FAILED" -> "text-bg-danger";
+            case "ABORTED" -> "text-bg-secondary";
+            case "STOPPING" -> "text-bg-warning";
+            default -> "text-bg-primary";
+        };
+    }
 }

@@ -78,13 +78,14 @@ public class RunPlanner {
                             + " (добавьте её на странице версии, если определение эвристикой неполное)");
                 }
             }
-            version.getWarnings().forEach(w -> warnings.add("Скрипт: " + w));
+            // информационное «из options вырезано» остаётся на странице версии: при запуске оно только шумит
+            version.getWarnings().stream().filter(w -> !w.startsWith("Из options")).forEach(w -> warnings.add("Скрипт: " + w));
         }
         if (version != null && !stale.isEmpty()) {
             warnings.add("Не участвуют в запуске: в версии v" + version.getNumber() + " нет функций операций " + String.join(", ", stale));
         }
         try {
-            steps = List.of(new StepPlan(1, script.getLevelPct(), script.getRampSec(), script.getHoldSec(),
+            steps = List.of(new StepPlan(1, script.getLevelPct(), 0, script.getHoldSec(),
                     String.format(Locale.ROOT, "%.0f%%", script.getLevelPct())));
         } catch (IllegalArgumentException e) {
             errors.add(e.getMessage());

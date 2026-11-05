@@ -43,12 +43,23 @@
             или загрузите скрипты заново.</div>
     </div>
 
-    <!-- внимание -->
-    <div class="alert alert-warning d-flex align-items-start gap-2" th:if="${!problems.isEmpty() or !hot.isEmpty()}">
-        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
-        <div>
-            <div th:each="v : ${problems}"><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a> — <span th:text="${v.statusLabel}"></span></div>
-            <div th:each="v : ${hot}"><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a> — CPU <span th:text="${#numbers.formatDecimal(v.cpu, 1, 0)}"></span>%: генератор может стать узким местом</div>
+    <!-- внимание: короткая сводка, подробности по раскрытию -->
+    <div class="alert alert-warning attn" th:if="${!problems.isEmpty() or !hot.isEmpty()}">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <strong th:if="${!problems.isEmpty()}" th:text="${problems.size()} + ' ' + (${problems.size() % 10 == 1 and problems.size() % 100 != 11} ? 'генератор требует' : 'генераторов требуют') + ' внимания'"></strong>
+            <span th:if="${!hot.isEmpty()}" th:text="(${problems.isEmpty()} ? '' : '· ') + 'CPU выше 80%: ' + ${hot.size()}"></span>
+            <span class="small text-muted d-none d-md-inline" th:if="${!problems.isEmpty()}"
+                  th:text="${problems[0].g().name} + ' — ' + ${problems[0].statusLabel} + (${problems.size() > 1} ? ' и ещё ' + ${problems.size() - 1} : '')"></span>
+            <span class="ms-auto d-flex gap-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#attn-list">Подробнее</button>
+                <a class="btn btn-sm btn-outline-secondary" th:href="@{/generators}">Все генераторы</a></span>
+        </div>
+        <div class="collapse mt-2" id="attn-list">
+            <div class="attn-grid">
+                <div th:each="v : ${problems}"><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a> <span class="text-muted" th:text="'— ' + ${v.statusLabel}"></span></div>
+                <div th:each="v : ${hot}"><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a> <span class="text-muted" th:text="'— CPU ' + ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%'"></span></div>
+            </div>
         </div>
     </div>
 
@@ -70,7 +81,7 @@
                     <tr th:each="v : ${running}" class="position-relative">
                         <td><a class="fw-semibold text-reset text-decoration-none stretched-link" th:href="@{/runs/{id}(id=${v.run().id})}" th:text="${v.run().scriptName}"></a>
                             <span class="text-muted small" th:text="'#' + ${v.run().id}"></span></td>
-                        <td><span class="badge" th:text="${v.run().status}"
+                        <td><span class="badge" th:text="${fmt.runStatus(v.run().status.name())}"
                                   th:classappend="${v.run().status.name() == 'RUNNING'} ? 'text-bg-primary' : (${v.run().status.name() == 'QUEUED'} ? 'text-bg-secondary' : 'text-bg-warning')"></span></td>
                         <td>
                             <div th:if="${v.run().status.name() == 'QUEUED'}" class="small text-muted">ждёт свободные генераторы</div>
@@ -98,7 +109,7 @@
                 <tr th:each="r : ${lastRuns}">
                     <td><a th:href="@{/runs/{id}(id=${r.id})}" th:text="${r.id}"></a></td>
                     <td th:text="${r.scriptName}"></td>
-                    <td><span class="badge" th:text="${r.status}"
+                    <td><span class="badge" th:text="${fmt.runStatus(r.status.name())}"
                               th:classappend="${r.status.name() == 'FINISHED'} ? (${r.thresholdsFailed} ? 'text-bg-warning' : 'text-bg-success') : (${r.status.name() == 'FAILED'} ? 'text-bg-danger' : (${r.status.name() == 'ABORTED'} ? 'text-bg-secondary' : 'text-bg-primary'))"></span></td>
                     <td class="text-muted small text-nowrap" th:text="${#temporals.format(r.queuedAt, 'dd.MM.yyyy HH:mm')}"></td>
                     <td class="text-muted small" th:text="${r.startedAt != null and r.finishedAt != null} ? ${T(java.time.Duration).between(r.startedAt, r.finishedAt).toMinutes()} + ' мин' : '—'"></td>
@@ -119,8 +130,8 @@
                         <div class="d-flex align-items-center gap-2">
                             <span class="dot" th:classappend="${v.g().status.name() == 'ONLINE'} ? (${v.g().busy} ? 'dot-busy' : 'dot-ok') : 'dot-bad'"></span>
                             <div><a class="fw-semibold" th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a>
-                                <div class="small text-muted"><span th:text="${v.g().host}"></span>
-                                    <span th:if="${v.cpu != null}" th:text="' · CPU ' + ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%'"></span></div></div>
+                                <div class="small text-muted"><span th:if="${v.g().host != v.g().name}" th:text="${v.g().host}"></span>
+                                    <span th:if="${v.cpu != null}" th:text="(${v.g().host != v.g().name} ? ' · ' : '') + 'CPU ' + ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%'"></span></div></div>
                         </div>
                         <span class="badge" th:text="${v.g().busy} ? 'занят' : ${v.statusLabel}"
                               th:classappend="${v.g().busy} ? 'text-bg-primary' : ${v.badgeClass}"></span>

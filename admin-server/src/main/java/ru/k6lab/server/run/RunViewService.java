@@ -59,7 +59,9 @@ public class RunViewService {
             return new GenView(rg, lg, cpu, mem, cpu != null && cpu > 80.0, lg != null && lg.offline());
         }).toList();
 
-        long total = snap.steps().stream().mapToLong(s -> s.rampSec() + s.holdSec()).sum();
+        // длительность - по самому долгому сценарию конфига: у сценариев не по профилю она своя
+        long total = Math.max(snap.steps().stream().mapToLong(s -> s.rampSec() + s.holdSec()).sum(),
+                ru.k6lab.core.k6config.ConfigDuration.of(run.getK6Config()).totalSec());
         long elapsed = 0;
         Integer current = null;
         String phase = null;

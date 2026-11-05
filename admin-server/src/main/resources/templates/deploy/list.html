@@ -4,23 +4,35 @@
 <head><title>Операции</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-tools"></i></span>Операции над генераторами</h3>
-    <div class="card"><table class="table table-sm table-hover mb-0">
-        <thead class="table-light"><tr><th>#</th><th>Операция</th><th>Хост</th><th>Статус</th><th>Начало</th><th>Окончание</th><th>Кто</th><th>Ошибка</th></tr></thead>
+    <div class="page-head">
+        <div>
+            <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-tools"></i></span>Операции над генераторами</h3>
+            <div class="sub mt-1">Установка, обновление и перезапуск агентов. Журнал каждой операции открывается по клику.</div></div>
+        <a class="btn btn-outline-secondary" th:href="@{/generators}"><i class="bi bi-hdd-network me-1"></i>К генераторам</a>
+    </div>
+    <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead><tr><th>№</th><th>Операция</th><th>Хост</th><th>Статус</th><th>Начало</th><th>Длительность</th><th>Кто</th><th>Ошибка</th></tr></thead>
         <tbody>
-        <tr th:if="${items.isEmpty()}"><td colspan="8"><div class="empty-state"><i class="bi bi-inbox"></i>Операций ещё не было</div></td></tr>
-        <tr th:each="d : ${items}">
-            <td><a th:href="@{/deployments/{id}(id=${d.id})}" th:text="${d.id}"></a></td>
-            <td th:text="${d.operation}"></td>
+        <tr th:if="${items.isEmpty()}"><td colspan="8"><div class="empty-state"><i class="bi bi-tools"></i>Операций ещё не было.
+            <div class="mt-2 small">Они появятся, когда вы установите или обновите агент на сервере.</div></div></td></tr>
+        <tr th:each="d : ${items}" class="run-row" th:attr="data-href=@{/deployments/{id}(id=${d.id})}">
+            <td><a th:href="@{/deployments/{id}(id=${d.id})}" th:text="'#' + ${d.id}"></a></td>
+            <td class="fw-semibold text-nowrap" th:text="${fmt.deployOperation(d.operation.name())}"></td>
             <td th:text="${d.targetHost}"></td>
-            <td><span class="badge" th:text="${d.status}"
-                      th:classappend="${d.status.name() == 'SUCCEEDED'} ? 'text-bg-success' : (${d.status.name() == 'FAILED' or d.status.name() == 'ROLLED_BACK'} ? 'text-bg-danger' : (${d.status.name() == 'WAITING_HOST_KEY'} ? 'text-bg-warning' : 'text-bg-info'))"></span></td>
-            <td th:text="${d.startedAt}"></td>
-            <td th:text="${d.finishedAt} ?: '—'"></td>
-            <td th:text="${d.startedBy}"></td>
-            <td class="text-danger small" th:text="${d.error}"></td>
+            <td><span class="badge" th:text="${fmt.deployStatus(d.status.name())}" th:classappend="${fmt.deployBadge(d.status.name())}"></span></td>
+            <td class="small text-muted text-nowrap" th:text="${#temporals.format(d.startedAt, 'dd.MM.yyyy HH:mm')}"></td>
+            <td class="small text-nowrap" th:text="${d.finishedAt != null} ? ${T(java.time.Duration).between(d.startedAt, d.finishedAt).toSeconds()} + ' с' : '—'"></td>
+            <td class="small" th:text="${d.startedBy}"></td>
+            <td class="text-danger small" style="max-width:360px" th:text="${d.error}"></td>
         </tr></tbody>
-    </table></div>
+    </table></div></div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        document.querySelectorAll('tr.run-row').forEach(function (r) {
+            r.addEventListener('click', function (e) { if (!e.target.closest('a,button')) location.href = r.dataset.href; });
+        });
+    </script>
 </th:block>
 </body>
 </html>

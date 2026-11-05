@@ -4,15 +4,17 @@
 <head><title th:text="'Run #' + ${run.id}">Run</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="page-head mb-2">
-        <h3>Запуск #<span th:text="${run.id}"></span>: <a th:if="${run.scriptId != null}" th:href="@{/scripts/{id}(id=${run.scriptId})}" th:text="${run.scriptName}"></a>
-            <span th:if="${run.scriptId == null}" th:text="${run.scriptName}"></span></h3>
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/scripts}">Скрипты</a><i class="bi bi-chevron-right"></i>
+        <a th:if="${run.scriptId != null}" th:href="@{/scripts/{id}(id=${run.scriptId})}" th:text="${run.scriptName}"></a><span th:if="${run.scriptId == null}" th:text="${run.scriptName}"></span>
+        <i class="bi bi-chevron-right"></i><span th:text="'Запуск #' + ${run.id}"></span></nav>
+    <div class="page-head mb-1">
+        <h3><span class="icon-tile"><i class="bi bi-activity"></i></span>Запуск #<span th:text="${run.id}"></span></h3>
         <a class="btn btn-outline-secondary btn-sm" th:if="${run.scriptId != null}" th:href="@{/scripts/{id}(id=${run.scriptId})}"><i class="bi bi-arrow-left me-1"></i>К скрипту</a>
     </div>
     <div class="small text-muted mb-3">
-        Скрипт <strong th:text="${snap.script.name}"></strong> v<span th:text="${snap.script.versionNumber}"></span>
+        <strong th:text="${snap.script.name}"></strong> v<span th:text="${snap.script.versionNumber}"></span>
         <span th:if="${snap.script.commit}" th:text="'(' + ${#strings.substring(snap.script.commit, 0, 8)} + ')'"></span> ·
-        политика отвала: <span th:text="${run.failurePolicy.title}"></span>
+        при потере генератора: <span th:text="${run.failurePolicy.title}"></span>
         <th:block th:if="${run.request != null and run.request.get('k6Flags') != null}">
             · флаги k6: <span class="badge text-bg-warning" th:each="f : ${run.request.get('k6Flags')}" th:text="${f}"></span></th:block>
     </div>
@@ -22,10 +24,10 @@
     </div>
 
     <ul class="nav nav-tabs mb-3">
-        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-metrics" type="button">Метрики</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-results" type="button" id="results-tab-btn">Результаты</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs" type="button">Логи</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-snapshot" type="button">Snapshot</button></li>
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-metrics" type="button"><i class="bi bi-graph-up me-1"></i>Метрики</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-results" type="button" id="results-tab-btn"><i class="bi bi-clipboard-data me-1"></i>Результаты</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs" type="button"><i class="bi bi-terminal me-1"></i>Логи</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-snapshot" type="button"><i class="bi bi-camera me-1"></i>Параметры запуска</button></li>
     </ul>
     <div class="tab-content">
         <div class="tab-pane fade show active" id="tab-metrics">
@@ -56,11 +58,11 @@
             <pre id="run-log" class="log-view mb-0"></pre>
         </div>
         <div class="tab-pane fade" id="tab-snapshot">
-            <div class="alert alert-secondary small">Полный снимок нагрузки и сгенерированного конфига на момент запуска: результаты не зависят от последующих правок.</div>
+            <div class="alert alert-secondary small">Снимок нагрузки и конфига k6 на момент запуска: последующие правки скрипта на него не влияют.</div>
             <div class="row g-3">
-                <div class="col-md-6"><div class="card"><div class="card-header">Ступени</div>
-                    <table class="table table-sm mb-0"><thead><tr><th>№</th><th>Метка</th><th>Уровень %</th><th>Разгон, с</th><th>Удержание, с</th></tr></thead>
-                        <tbody><tr th:each="s : ${snap.steps}"><td th:text="${s.no}"></td><td th:text="${s.label}"></td><td th:text="${s.levelPct}"></td><td th:text="${s.rampSec}"></td><td th:text="${s.holdSec}"></td></tr></tbody></table></div></div>
+                <div class="col-md-6"><div class="card"><div class="card-header">Профиль</div>
+                    <table class="table table-sm mb-0"><thead><tr><th>№</th><th>Метка</th><th>Уровень %</th><th>Удержание, с</th></tr></thead>
+                        <tbody><tr th:each="s : ${snap.steps}"><td th:text="${s.no}"></td><td th:text="${s.label}"></td><td th:text="${s.levelPct}"></td><td th:text="${s.holdSec}"></td></tr></tbody></table></div></div>
                 <div class="col-md-6"><div class="card"><div class="card-header">Операции и SLA</div>
                     <table class="table table-sm mb-0"><thead><tr><th>Операция</th><th>Функция</th><th>оп/с</th><th>SLA</th></tr></thead>
                         <tbody><tr th:each="o : ${snap.operations}"><td th:text="${o.name}"></td><td><code th:text="${o.execFn}"></code></td>

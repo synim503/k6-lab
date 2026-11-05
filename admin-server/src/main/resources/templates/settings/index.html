@@ -4,10 +4,17 @@
 <head><title>Настройки</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-gear"></i></span>Настройки</h3>
+    <div class="page-head">
+        <div>
+            <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-gear"></i></span>Настройки</h3>
+            <div class="sub mt-1">Связь с Prometheus, какие метрики собираются, хранение данных и логи агентов.</div></div>
+    </div>
+    <nav class="section-nav" aria-label="Разделы настроек">
+        <a href="#prom">Prometheus</a><a href="#diag">Диагностика</a><a href="#allow">Метрики агентов</a><a href="#names">Имена метрик</a><a href="#limits">Хранение и логи</a>
+    </nav>
     <div class="row g-3">
         <div class="col-lg-6">
-            <div class="card"><div class="card-header">Prometheus</div><div class="card-body">
+            <div class="card" id="prom"><div class="card-header">Prometheus</div><div class="card-body">
                 <form th:action="@{/settings/prometheus}" method="post">
                     <div class="mb-2"><label class="form-label">URL remote write (его используют генераторы)</label>
                         <input class="form-control" name="rwUrl" th:value="${p.rwUrl}" placeholder="http://prometheus:9090/api/v1/write"></div>
@@ -53,7 +60,7 @@
         </div>
 
         <div class="col-lg-6">
-            <div class="card"><div class="card-header">Имена метрик k6 в Prometheus</div><div class="card-body">
+            <div class="card" id="names"><div class="card-header">Имена метрик k6 в Prometheus</div><div class="card-body">
                 <form th:action="@{/settings/metric-names}" method="post">
                     <textarea class="form-control font-monospace mb-2" rows="11" name="json" th:text="${metricNames}"></textarea>
                     <button class="btn btn-primary">Сохранить</button>
@@ -81,7 +88,7 @@
                     выше не действует. Пустой список — отправляются все метрики (с учётом флажка). Работает в режиме классических гистограмм; применяется к следующим запускам.</div>
             </div></div>
 
-            <div class="card mt-3"><div class="card-header">Хранение и логи</div><div class="card-body">
+            <div class="card mt-3" id="limits"><div class="card-header">Хранение и логи</div><div class="card-body">
                 <form class="row g-2" th:action="@{/settings/limits}" method="post">
                     <div class="col-4"><label class="form-label">Строк лога агента в секунду</label><input class="form-control" type="number" min="1" name="logLines" th:value="${logLines}"></div>
                     <div class="col-4"><label class="form-label">Хранить логи, дней</label><input class="form-control" type="number" min="1" name="logDays" th:value="${logDays}"></div>

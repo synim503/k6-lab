@@ -4,34 +4,43 @@
 <head><title>Пользователи</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3 d-flex align-items-center gap-2"><span class="icon-tile"><i class="bi bi-people"></i></span>Пользователи</h3>
-    <div class="card mb-4"><div class="card-header">Новый пользователь</div>
-        <form class="card-body row g-2" th:action="@{/users}" method="post" autocomplete="off">
-            <div class="col-md-3"><input class="form-control" name="username" placeholder="Логин" required></div>
-            <div class="col-md-3"><input class="form-control" type="password" name="password" placeholder="Пароль (от 8 символов)" required autocomplete="new-password"></div>
-            <div class="col-md-3"><select class="form-select" name="role"><option th:each="r : ${roles}" th:value="${r}" th:text="${r}"></option></select></div>
-            <div class="col-md-3"><button class="btn btn-primary">Создать</button></div>
-        </form></div>
+    <div class="page-head">
+        <div>
+            <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-people"></i></span>Пользователи</h3>
+            <div class="sub mt-1">Администратор управляет всем, пользователь запускает скрипты и смотрит результаты.</div></div>
+    </div>
 
-    <div class="card"><table class="table table-sm mb-0">
-        <thead class="table-light"><tr><th>Логин</th><th>Роль</th><th>Активен</th><th>Новый пароль</th><th></th></tr></thead>
+    <div class="card mb-3"><div class="card-body">
+        <h6 class="fw-semibold mb-3">Новый пользователь</h6>
+        <form class="row g-3 align-items-end" th:action="@{/users}" method="post" autocomplete="off">
+            <div class="col-md-3"><label class="form-label" for="u-login">Логин</label><input class="form-control" id="u-login" name="username" required></div>
+            <div class="col-md-3"><label class="form-label" for="u-pass">Пароль</label>
+                <input class="form-control" id="u-pass" type="password" name="password" placeholder="от 8 символов" required autocomplete="new-password"></div>
+            <div class="col-md-3"><label class="form-label" for="u-role">Роль</label>
+                <select class="form-select" id="u-role" name="role"><option th:each="r : ${roles}" th:value="${r}" th:text="${r.name() == 'ADMIN'} ? 'Администратор' : 'Пользователь'"></option></select></div>
+            <div class="col-md-3"><button class="btn btn-primary w-100"><i class="bi bi-person-plus me-1"></i>Создать</button></div>
+        </form>
+    </div></div>
+
+    <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead><tr><th>Логин</th><th>Роль и доступ</th><th>Новый пароль</th><th></th></tr></thead>
         <tbody>
         <tr th:each="u : ${users}">
-            <td th:text="${u.username}"></td>
-            <td colspan="2">
-                <form class="d-flex gap-2 align-items-center" th:action="@{/users/{id}(id=${u.id})}" method="post">
-                    <select class="form-select form-select-sm w-auto" name="role">
-                        <option th:each="r : ${roles}" th:value="${r}" th:text="${r}" th:selected="${r == u.role}"></option></select>
-                    <div class="form-check"><input class="form-check-input" type="checkbox" name="enabled" value="true" th:checked="${u.enabled}">
-                        <label class="form-check-label">активен</label></div>
-                    <button class="btn btn-sm btn-outline-primary py-0">сохранить</button>
+            <td class="fw-semibold" th:text="${u.username}"></td>
+            <td>
+                <form class="d-flex gap-3 align-items-center flex-wrap" th:action="@{/users/{id}(id=${u.id})}" method="post">
+                    <select class="form-select form-select-sm w-auto" name="role" aria-label="Роль">
+                        <option th:each="r : ${roles}" th:value="${r}" th:text="${r.name() == 'ADMIN'} ? 'Администратор' : 'Пользователь'" th:selected="${r == u.role}"></option></select>
+                    <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" name="enabled" value="true" th:checked="${u.enabled}" th:id="'en' + ${u.id}">
+                        <label class="form-check-label small" th:for="'en' + ${u.id}">активен</label></div>
+                    <button class="btn btn-sm btn-outline-primary">Сохранить</button>
                 </form></td>
             <td><form class="d-flex gap-2" th:action="@{/users/{id}/password(id=${u.id})}" method="post" autocomplete="off">
-                <input class="form-control form-control-sm" type="password" name="password" placeholder="новый пароль" autocomplete="new-password">
-                <button class="btn btn-sm btn-outline-secondary py-0">сменить</button></form></td>
+                <input class="form-control form-control-sm" style="max-width:200px" type="password" name="password" placeholder="новый пароль" aria-label="Новый пароль" autocomplete="new-password">
+                <button class="btn btn-sm btn-outline-secondary">Сменить</button></form></td>
             <td class="text-end"><form th:action="@{/users/{id}/delete(id=${u.id})}" method="post" onsubmit="return confirm('Удалить пользователя?')">
-                <button class="btn btn-sm btn-outline-danger py-0">удалить</button></form></td>
-        </tr></tbody></table></div>
+                <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form></td>
+        </tr></tbody></table></div></div>
 </th:block>
 </body>
 </html>

@@ -4,9 +4,13 @@
 <head><title th:text="'Операция #' + ${d.id}">Операция</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h3 class="mb-0">Операция #<span th:text="${d.id}"></span>: <span th:text="${d.operation}"></span> <span th:text="${d.targetHost}"></span></h3>
-        <a class="btn btn-link" th:href="@{/deployments}">← к списку</a>
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/deployments}">Операции</a><i class="bi bi-chevron-right"></i><span th:text="'#' + ${d.id}"></span></nav>
+    <div class="page-head">
+        <div>
+            <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-tools"></i></span><span th:text="${fmt.deployOperation(d.operation.name())}"></span></h3>
+            <div class="sub mt-1"><span th:text="${d.targetHost}"></span> · запущена <span th:text="${#temporals.format(d.startedAt, 'dd.MM.yyyy HH:mm')}"></span>
+                <span th:if="${d.startedBy != null}" th:text="'· ' + ${d.startedBy}"></span></div></div>
+        <a class="btn btn-outline-secondary" th:href="@{/deployments}"><i class="bi bi-arrow-left me-1"></i>К списку</a>
     </div>
 
     <div class="row g-3">
@@ -15,8 +19,7 @@
                  hx-trigger="refresh" hx-swap="outerHTML">
                 <div class="card mb-3">
                     <div class="card-body">
-                        <span class="badge fs-6" th:text="${d.status}"
-                              th:classappend="${d.status.name() == 'SUCCEEDED'} ? 'text-bg-success' : (${d.status.name() == 'FAILED' or d.status.name() == 'ROLLED_BACK'} ? 'text-bg-danger' : (${d.status.name() == 'WAITING_HOST_KEY'} ? 'text-bg-warning' : 'text-bg-info'))"></span>
+                        <span class="badge fs-6" th:text="${fmt.deployStatus(d.status.name())}" th:classappend="${fmt.deployBadge(d.status.name())}"></span>
                         <div class="text-danger mt-2" th:if="${d.error}" th:text="${d.error}"></div>
                     </div>
                     <ul class="list-group list-group-flush">

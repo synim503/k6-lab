@@ -67,18 +67,16 @@
                 </div>
             </div>
         </div>
-        <div class="form-text mt-2">Операция без нагрузки «по профилю» в запуске не участвует. Любой другой исполнитель работает по своим параметрам, без разгона и ступеней профиля.
+        <div class="form-text mt-2">Операция без нагрузки «по профилю» в запуске не участвует. Любой другой исполнитель работает по своим параметрам.
             Список функций берётся из последней версии скрипта.</div>
 
-        <div class="sect-title"><h5>Параметры запуска</h5><span class="hint">общие для операций «по профилю»</span></div>
+        <div class="sect-title"><h5>Параметры запуска</h5><span class="hint">нагрузка стартует сразу и держится заданное время</span></div>
         <div class="card"><div class="card-body row g-3">
-            <div class="col-6 col-md-3"><label class="form-label" for="holdMinutes">Удержание</label>
+            <div class="col-6 col-md-4"><label class="form-label" for="holdMinutes">Удержание</label>
                 <div class="input-group"><input class="form-control" id="holdMinutes" type="number" step="any" min="0.02" th:field="*{holdMinutes}"><span class="input-group-text">мин</span></div></div>
-            <div class="col-6 col-md-3"><label class="form-label" for="rampSec">Разгон</label>
-                <div class="input-group"><input class="form-control" id="rampSec" type="number" min="0" th:field="*{rampSec}"><span class="input-group-text">с</span></div></div>
-            <div class="col-6 col-md-3"><label class="form-label" for="levelPct">Уровень нагрузки</label>
+            <div class="col-6 col-md-4"><label class="form-label" for="levelPct">Уровень нагрузки</label>
                 <div class="input-group"><input class="form-control" id="levelPct" type="number" step="any" min="1" th:field="*{levelPct}"><span class="input-group-text">%</span></div></div>
-            <div class="col-6 col-md-3"><label class="form-label" for="generatorCount">Генераторов</label>
+            <div class="col-12 col-md-4"><label class="form-label" for="generatorCount">Генераторов</label>
                 <input class="form-control" id="generatorCount" type="number" min="1" max="200" th:field="*{generatorCount}">
                 <div class="form-text">подставляется при запуске</div></div>
             <div class="col-12 form-text mt-0">Уровень — доля от заданной интенсивности: при 50% каждая операция идёт с половинной нагрузкой.</div>
@@ -139,7 +137,7 @@
     const EX = {
         'profile': {
             real: 'ramping-arrival-rate', title: 'По профилю нагрузки (оп/с)',
-            desc: 'Интенсивность (оп/с), разгон, удержание и уровень % берутся из формы. Здесь — только дополнительные параметры.',
+            desc: 'Интенсивность (оп/с), длительность и уровень % берутся из формы. Здесь — только дополнительные параметры.',
             fields: ['preAllocatedVUs', 'maxVUs'].concat(TAIL), def: {}
         },
         'constant-vus': {
@@ -400,7 +398,7 @@
             <form class="card-body" th:action="@{/scripts/{id}/load/json(id=${script.id})}" method="post">
                 <textarea class="form-control font-monospace" name="json" rows="18" spellcheck="false" th:text="${formJson}"></textarea>
                 <div class="form-text mb-2">Те же настройки, что в форме выше: <code>operations</code> (execFn, name, ratePerSec, slaPercentile, slaThresholdMs, maxErrorPct,
-                    expectedDurationSec, failureSource), <code>levelPct</code>, <code>rampSec</code>, <code>holdMinutes</code>, <code>generatorCount</code>, <code>env</code>, <code>dataFiles</code>.
+                    expectedDurationSec, failureSource), <code>levelPct</code>, <code>holdMinutes</code>, <code>generatorCount</code>, <code>env</code>, <code>dataFiles</code>.
                     Конфиг заменяет текущую нагрузку целиком; проверки те же, что у формы.</div>
                 <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить из конфига</button>
             </form></div></div>

@@ -27,6 +27,17 @@
         part(row, 'll-m', l.m);
         return row;
     }
+    // список генераторов в фильтре пополняется по мере прихода логов: на момент открытия страницы запуск мог ещё не назначить генераторы
+    var knownGens = {};
+    [].forEach.call(genSel.options, function (o) { if (o.value) { knownGens[o.value] = true; } });
+    function noteGen(g) {
+        if (!g || knownGens[g]) { return; }
+        knownGens[g] = true;
+        var o = document.createElement('option'); o.value = g; o.textContent = g;
+        var after = null;
+        [].forEach.call(genSel.options, function (x) { if (x.value && !after && x.value > g) { after = x; } });
+        genSel.insertBefore(o, after);
+    }
     function visible(l) {
         if (genSel.value && l.g !== genSel.value) { return false; }
         if (levelSel.value && l.l !== levelSel.value) { return false; }
@@ -53,7 +64,7 @@
     function append(batch) {
         var added = document.createDocumentFragment();
         var addedCount = 0;
-        batch.forEach(function (l) { lines.push(l); if (visible(l)) { added.appendChild(fmt(l)); addedCount++; } });
+        batch.forEach(function (l) { noteGen(l.g); lines.push(l); if (visible(l)) { added.appendChild(fmt(l)); addedCount++; } });
         if (lines.length > MAX) {
             lines.splice(0, lines.length - MAX);
             // в буфере режем сразу, на экране - когда не выделяют текст

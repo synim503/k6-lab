@@ -28,7 +28,7 @@
             <div class="fact"><div class="k">Нагрузка</div>
                 <div class="v" th:text="${loadDefined} ? ${ops.size()} + ' ' + (${ops.size() == 1} ? 'операция' : 'операций') : 'не описана'"></div>
                 <div class="s" th:if="${loadDefined}"
-                     th:text="'Уровень ' + ${#numbers.formatDecimal(script.levelPct, 1, 0)} + '%, разгон ' + ${script.rampSec} + ' с, удержание ' + ${#numbers.formatDecimal(script.holdSec / 60.0, 1, 1)} + ' мин'"></div>
+                     th:text="'Уровень ' + ${#numbers.formatDecimal(script.levelPct, 1, 0)} + '%, длительность ' + ${#numbers.formatDecimal(script.holdSec / 60.0, 1, 1)} + ' мин'"></div>
                 <div class="s" th:unless="${loadDefined}">Укажите, что и как нагружать</div></div>
             <div class="fact"><div class="k">Генераторов по умолчанию</div>
                 <div class="v" th:text="${script.generatorCount}"></div>

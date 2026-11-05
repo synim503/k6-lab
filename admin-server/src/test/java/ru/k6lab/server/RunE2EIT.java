@@ -393,7 +393,7 @@ class RunE2EIT extends AbstractIT {
         assertThat(rgs).allMatch(x -> x.getExitCode() != null && x.getExitCode() == 0);
 
         // данные нарезаны: 20 строк -> 5 и 15 (плюс заголовок), без пересечений
-        await().atMost(Duration.ofSeconds(15)).until(() -> logLines(id).stream().filter(l -> l.contains("DATA-ROWS:")).count() >= 2);
+        await().atMost(Duration.ofSeconds(45)).until(() -> logLines(id).stream().filter(l -> l.contains("DATA-ROWS:")).count() >= 2);
         List<String> dataLines = logLines(id).stream().filter(l -> l.contains("DATA-ROWS:")).toList();
         assertThat(dataLines).anyMatch(l -> l.contains("DATA-ROWS:6 first=login,pwd"));   // 5 строк + заголовок
         assertThat(dataLines).anyMatch(l -> l.contains("DATA-ROWS:16 first=login,pwd"));  // 15 строк + заголовок

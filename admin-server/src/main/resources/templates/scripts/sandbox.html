@@ -4,53 +4,62 @@
 <head><title>Отладка скрипта</title></head>
 <body>
 <th:block layout:fragment="content">
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/scripts}">Скрипты</a><i class="bi bi-chevron-right"></i><span>Отладка</span></nav>
     <div class="page-head">
         <h3><span class="icon-tile"><i class="bi bi-bug"></i></span>Отладка скрипта</h3>
-        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/new}"><i class="bi bi-arrow-left me-1"></i>К созданию скрипта</a>
+        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/new}"><i class="bi bi-plus-lg me-1"></i>Новый скрипт</a>
     </div>
     <div class="alert alert-warning py-2 small" th:if="${k6Version == null}">k6 на сервере админки не найден: загрузите k6 для архитектуры сервера в «Дистрибутивы» или задайте <code>K6LAB_K6_PATH</code>.</div>
-    <div class="text-muted small mb-3">Соберите скрипт из файлов (перетащите файлы и папки на список), запустите его здесь же и смотрите лог. Выполняется <strong>на сервере админки</strong>
-        (<span th:text="${k6Version ?: 'k6 не найден'}"></span>), поэтому доступность адресов может отличаться от генераторов. Окружение процесса пустое: переменные и секреты админки скрипту не видны.
-        Готовый набор файлов сохраняется как обычный скрипт.</div>
 
-    <div class="row g-2 align-items-end mb-3">
-        <div class="col-md-5">
-            <label class="form-label mb-1" for="sb-script">Скрипт</label>
-            <select class="form-select form-select-sm" id="sb-script" th:attr="data-pre=${preselect}">
+    <div class="card mb-3 sb-toolbar"><div class="card-body py-2">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <label class="visually-hidden" for="sb-script">Скрипт</label>
+            <select class="form-select form-select-sm" id="sb-script" style="width:280px" th:attr="data-pre=${preselect}">
                 <option value="">— новый скрипт —</option>
-                <option th:each="s : ${scriptList}" th:value="${s.id}" th:text="${s.name}"></option></select></div>
-        <div class="col-md-7 small text-muted" id="sb-script-info">Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.</div>
-    </div>
+                <option th:each="s : ${scriptList}" th:value="${s.id}" th:text="${s.name}"></option></select>
+            <span class="vr d-none d-md-block"></span>
+            <button type="button" class="btn btn-success btn-sm" id="sb-run" title="Ctrl+Enter"><i class="bi bi-play-fill me-1"></i>Запустить</button>
+            <button type="button" class="btn btn-outline-danger btn-sm" id="sb-stop" disabled><i class="bi bi-stop-fill me-1"></i>Остановить</button>
+            <span class="badge text-bg-secondary" id="sb-status">не запущено</span>
+            <span class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+                <input class="form-control form-control-sm" id="sb-name" placeholder="имя нового скрипта" aria-label="Имя скрипта" style="width:200px">
+                <input class="form-control form-control-sm d-none" id="sb-comment" placeholder="что изменилось" aria-label="Комментарий к версии" style="width:200px">
+                <button type="button" class="btn btn-primary btn-sm" id="sb-save"><i class="bi bi-check-lg me-1"></i>Сохранить как скрипт</button></span>
+        </div>
+        <div class="alert alert-danger py-2 mt-2 mb-0 d-none" id="sb-err"></div>
+    </div></div>
+    <div class="small text-muted mb-3" id="sb-script-info">Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.</div>
 
     <div class="row g-3">
-        <div class="col-lg-3">
+        <div class="col-lg-3 col-xl-2">
             <div class="card" id="sb-drop">
                 <div class="card-header d-flex justify-content-between align-items-center">Файлы
                     <span>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-add"><i class="bi bi-file-earmark-plus"></i></button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-pick" title="Выбрать файлы"><i class="bi bi-upload"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-add" title="Новый файл" aria-label="Новый файл"><i class="bi bi-file-earmark-plus"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-pick" title="Выбрать файлы" aria-label="Выбрать файлы"><i class="bi bi-upload"></i></button>
                     </span></div>
                 <div class="list-group list-group-flush" id="sb-files"></div>
                 <div class="card-body text-center text-muted small sb-hint"><i class="bi bi-cloud-arrow-up fs-4 d-block"></i>Перетащите сюда файлы или папки:
                     модули, данные, сертификаты</div>
                 <input type="file" id="sb-input" multiple hidden>
             </div>
-            <div class="form-text mt-2">Звёздочка — основной файл (entrypoint). Файлы читаются из скрипта по относительному пути: <code>open('./data/users.csv')</code>.</div>
+            <div class="form-text mt-2"><i class="bi bi-star-fill text-warning"></i> — основной файл. Файлы читаются из скрипта по относительному пути: <code>open('./data/users.csv')</code>.</div>
         </div>
-        <div class="col-lg-9">
-            <div class="card mb-3">
+        <div class="col-lg-9 col-xl-10">
+            <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center"><code id="sb-cur">—</code>
                     <span class="small text-muted">Ctrl+Enter — запустить</span></div>
-                <div id="sb-editor" style="height: 46vh"></div>
+                <div id="sb-editor" style="height: 68vh; min-height: 520px"></div>
             </div>
         </div>
     </div>
 
     <div class="row g-3 mt-0">
-        <div class="col-lg-5">
+        <div class="col-lg-4">
             <div class="card card-body">
+                <h6 class="fw-semibold mb-2">Параметры запуска</h6>
                 <div class="row g-2">
-                    <div class="col-12"><label class="form-label mb-1">Функция нагрузки <span class="text-muted small">(определяются автоматически по основному файлу)</span></label>
+                    <div class="col-12"><label class="form-label mb-1" for="sb-exec">Какую функцию запустить <span class="text-muted small">(список строится по основному файлу)</span></label>
                         <select class="form-select form-select-sm" id="sb-exec"><option value="default">default (основная функция)</option></select></div>
                     <div class="col-4"><label class="form-label mb-1">VU</label><input class="form-control form-control-sm" id="sb-vus" type="number" min="1" max="50" value="1"></div>
                     <div class="col-4"><label class="form-label mb-1">Итераций на VU</label><input class="form-control form-control-sm" id="sb-iter" type="number" min="1" max="1000" value="1"></div>
@@ -78,20 +87,9 @@
                 </details>
             </div>
         </div>
-        <div class="col-lg-7">
-            <div class="card card-body mb-3 py-2">
-                <div class="d-flex flex-wrap gap-2 align-items-center">
-                    <button type="button" class="btn btn-success" id="sb-run"><i class="bi bi-play-fill me-1"></i>Запустить</button>
-                    <button type="button" class="btn btn-outline-danger" id="sb-stop" disabled><i class="bi bi-stop-fill me-1"></i>Остановить</button>
-                    <span class="badge text-bg-secondary" id="sb-status">не запущено</span>
-                    <span class="ms-auto d-flex gap-2">
-                        <input class="form-control form-control-sm" id="sb-name" placeholder="имя скрипта" style="width:190px">
-                        <input class="form-control form-control-sm d-none" id="sb-comment" placeholder="комментарий к версии" style="width:190px">
-                        <button type="button" class="btn btn-primary btn-sm" id="sb-save"><i class="bi bi-check-lg me-1"></i>Сохранить как скрипт</button></span>
-                </div>
-                <div class="alert alert-danger py-2 mt-2 mb-0 d-none" id="sb-err"></div>
-            </div>
-            <pre id="sb-log" class="log-view mb-0" style="max-height:44vh">Лог появится после запуска.</pre>
+        <div class="col-lg-8">
+            <div class="sect-title mt-0 mb-2"><h5>Лог запуска</h5><span class="hint">выполняется на сервере админки</span></div>
+            <pre id="sb-log" class="log-view mb-0" style="min-height:280px;max-height:50vh">Лог появится после запуска.</pre>
         </div>
     </div>
 </th:block>
@@ -284,11 +282,17 @@
                     ? 'Загружена версия ' + existing.version + ' скрипта «' + existing.name + '». Сохранение создаст новую версию, прежние остаются. Секреты в переменных здесь не подставляются.'
                     : 'Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.';
             }
+            var loadSeq = 0;   // номер последнего запроса: ответ более раннего запроса игнорируется (иначе в редакторе оказывался прежний скрипт)
             function loadScript(id) {
                 showErr('');
+                var my = ++loadSeq;
+                $('sb-script').disabled = true;
+                $('sb-script-info').textContent = 'Загружаю скрипт…';
+                function done() { if (my === loadSeq) { $('sb-script').disabled = false; } }
                 return fetch('/scripts/sandbox/script/' + id).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
                     .then(function (res) {
-                        if (!res.ok) { showErr(res.j.error || 'Не удалось загрузить скрипт'); $('sb-script').value = existing ? String(existing.id) : ''; return; }
+                        if (my !== loadSeq) { return; }
+                        if (!res.ok) { showErr(res.j.error || 'Не удалось загрузить скрипт'); $('sb-script').value = existing ? String(existing.id) : ''; applyMode(); done(); return; }
                         var j = res.j;
                         resetFiles();
                         j.files.forEach(function (f) { addFile(f.path, f.text, f.base64, f.text ? f.text.length : 0); });
@@ -296,9 +300,10 @@
                         existing = {id: j.id, name: j.name, version: j.version};
                         $('sb-env').value = Object.keys(j.env || {}).map(function (k) { return k + '=' + j.env[k]; }).join('\n');
                         if (entry) { open(entry); } else { showEmpty(); }
-                        renderFiles(); refreshFns(); applyMode(); dirty = false;
+                        $('sb-script').value = String(j.id);
+                        renderFiles(); refreshFns(); applyMode(); dirty = false; done();
                     })
-                    .catch(function (e) { showErr('Ошибка запроса: ' + e); });
+                    .catch(function (e) { if (my === loadSeq) { showErr('Ошибка запроса: ' + e); applyMode(); done(); } });
             }
             $('sb-script').onchange = function () {
                 var v = this.value;
@@ -307,6 +312,8 @@
                     return;
                 }
                 if (v) { loadScript(v); return; }
+                loadSeq++;   // отменяем ещё не завершённую загрузку другого скрипта
+                $('sb-script').disabled = false;
                 existing = null; resetFiles(); addFile('main.js', TEMPLATE, null, TEMPLATE.length);
                 $('sb-env').value = ''; applyMode(); dirty = false;
             };

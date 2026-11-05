@@ -5,24 +5,29 @@
 <body>
 <th:block layout:fragment="content">
     <div class="page-head">
-        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-git"></i></span>Git-репозитории</h3>
-        <a sec:authorize="hasRole('ADMIN')" class="btn btn-primary" th:href="@{/git-repos/new}">Добавить</a>
+        <div>
+            <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-git"></i></span>Git-репозитории</h3>
+            <div class="sub mt-1">Откуда импортируются версии скриптов. Сервер забирает код сам, генераторам доступ к Git не нужен.</div></div>
+        <a sec:authorize="hasRole('ADMIN')" class="btn btn-primary" th:href="@{/git-repos/new}"><i class="bi bi-plus-lg me-1"></i>Добавить репозиторий</a>
     </div>
-    <div class="card mb-3"><table class="table table-sm table-hover mb-0">
-        <thead class="table-light"><tr><th>Имя</th><th>URL</th><th>Доступ</th><th>Подкаталог</th><th></th></tr></thead>
+    <div class="card mb-3"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead><tr><th>Имя</th><th>Адрес</th><th>Доступ</th><th>Подкаталог</th><th></th></tr></thead>
         <tbody>
-        <tr th:if="${repos.isEmpty()}"><td colspan="5"><div class="empty-state"><i class="bi bi-inbox"></i>Репозиториев нет</div></td></tr>
+        <tr th:if="${repos.isEmpty()}"><td colspan="5"><div class="empty-state"><i class="bi bi-git"></i>Репозиториев пока нет.
+            <div class="mt-3" sec:authorize="hasRole('ADMIN')"><a class="btn btn-primary btn-sm" th:href="@{/git-repos/new}">Добавить репозиторий</a></div></div></td></tr>
         <tr th:each="r : ${repos}">
-            <td th:text="${r.name}"></td><td><code th:text="${r.url}"></code></td>
-            <td th:text="${r.authType.name() == 'NONE'} ? 'без аутентификации' : (${r.authType.name() == 'SSH'} ? 'SSH-ключ' : 'HTTPS-токен')"></td>
-            <td th:text="${r.subdir} ?: '/'"></td>
-            <td class="text-end text-nowrap">
-                <button class="btn btn-sm btn-outline-secondary py-0" hx-post="" th:attr="hx-post=@{/git-repos/{id}/refresh(id=${r.id})}"
-                        hx-target="#refs-box" hx-indicator="#refs-box">Проверить доступ</button>
-                <a sec:authorize="hasRole('ADMIN')" class="btn btn-sm btn-outline-secondary py-0" th:href="@{/git-repos/{id}/edit(id=${r.id})}">изменить</a>
+            <td class="fw-semibold" th:text="${r.name}"></td>
+            <td><code th:text="${r.url}"></code></td>
+            <td><span class="badge text-bg-secondary" th:text="${r.authType.name() == 'NONE'} ? 'без аутентификации' : (${r.authType.name() == 'SSH'} ? 'SSH-ключ' : 'HTTPS-токен')"></span></td>
+            <td class="text-muted" th:text="${r.subdir} ?: '/'"></td>
+            <td class="text-end text-nowrap row-actions">
+                <button class="btn btn-sm btn-outline-secondary" hx-post="" th:attr="hx-post=@{/git-repos/{id}/refresh(id=${r.id})}"
+                        hx-target="#refs-box" hx-indicator="#refs-box" title="Подключиться к репозиторию и получить список веток и тегов"><i class="bi bi-plug me-1"></i>Проверить доступ</button>
+                <a sec:authorize="hasRole('ADMIN')" class="btn btn-sm btn-outline-secondary btn-icon" th:href="@{/git-repos/{id}/edit(id=${r.id})}" title="Изменить" aria-label="Изменить"><i class="bi bi-pencil"></i></a>
                 <form sec:authorize="hasRole('ADMIN')" class="d-inline" th:action="@{/git-repos/{id}/delete(id=${r.id})}" method="post"
-                      onsubmit="return confirm('Удалить репозиторий?')"><button class="btn btn-sm btn-outline-danger py-0">удалить</button></form>
-            </td></tr></tbody></table></div>
+                      onsubmit="return confirm('Удалить репозиторий? Уже загруженные версии скриптов останутся.')">
+                    <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
+            </td></tr></tbody></table></div></div>
     <div id="refs-box"></div>
 </th:block>
 </body>

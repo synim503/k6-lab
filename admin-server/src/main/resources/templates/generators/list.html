@@ -14,49 +14,139 @@
                     <i class="bi bi-arrow-repeat me-1"></i>Обновить агент на всех
                     <span class="badge text-bg-warning ms-1" th:if="${outdated > 0}" th:text="${outdated}"></span></button></form>
             <div class="btn-group" sec:authorize="hasRole('ADMIN')">
-            <a class="btn btn-primary" th:href="@{/generators/add}"><i class="bi bi-plus-lg me-1"></i>Добавить сервер</a>
-            <a class="btn btn-outline-secondary" th:href="@{/generators/new}">Расширенно</a>
-            <a class="btn btn-outline-primary" th:href="@{/generators/bulk}">Массовое добавление</a>
+                <a class="btn btn-primary" th:href="@{/generators/add}"><i class="bi bi-plus-lg me-1"></i>Добавить сервер</a>
+                <button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-label="Другие способы добавления"></button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><a class="dropdown-item" th:href="@{/generators/bulk}"><i class="bi bi-collection me-2 text-muted"></i>Массовое добавление</a></li>
+                    <li><a class="dropdown-item" th:href="@{/generators/new}"><i class="bi bi-sliders me-2 text-muted"></i>Расширенная форма</a></li></ul>
             </div>
+        </div>
+    </div>
+
+    <!-- фильтры вне обновляемого фрагмента: состояние не сбрасывается раз в 5 секунд -->
+    <div class="gen-toolbar">
+        <div class="status-chips" id="gen-chips" role="group" aria-label="Фильтр по состоянию"></div>
+        <div class="d-flex align-items-center gap-3 ms-auto flex-wrap">
+            <div class="form-check form-switch m-0" th:if="${outdated > 0}">
+                <input class="form-check-input" type="checkbox" id="gen-drift" role="switch">
+                <label class="form-check-label small" for="gen-drift">Только с устаревшей версией</label></div>
+            <input class="form-control form-control-sm" id="gen-q" type="search" placeholder="Найти по имени или адресу" aria-label="Поиск генератора" style="width:260px">
+            <span class="text-muted small" id="gen-count"></span>
         </div>
     </div>
 
     <div id="gen-table" hx-get="/generators/table" hx-trigger="every 5s" hx-swap="outerHTML" th:fragment="table">
         <div class="card"><div class="table-responsive">
-            <table class="table table-sm table-hover mb-0">
-                <thead class="table-light"><tr>
-                    <th>Имя</th><th>Хост</th><th>Статус</th><th>CPU</th><th>RAM</th><th>Сеть (rx / tx, МБ/с)</th>
-                    <th>Load</th><th>Диск, ГБ</th><th>Сокеты</th><th>Часы</th><th>Версии агент / k6</th>
+            <table class="table table-hover mb-0 gen-table">
+                <thead><tr>
+                    <th data-sort="name" class="sortable">Имя</th><th data-sort="status" class="sortable">Состояние</th>
+                    <th data-sort="cpu" class="sortable">CPU</th><th data-sort="ram" class="sortable">RAM</th>
+                    <th title="Приём / отправка, МБ/с">Сеть ↓ / ↑</th><th data-sort="load" class="sortable" title="Load average за минуту">Load</th>
+                    <th title="Свободно на диске, ГБ">Диск</th><th title="Открытые сокеты">Сокеты</th><th title="Расхождение часов с сервером">Часы</th><th>Агент · k6</th>
                 </tr></thead>
                 <tbody>
-                <tr th:if="${generators.isEmpty()}"><td colspan="11"><div class="empty-state"><i class="bi bi-inbox"></i>Генераторов пока нет</div></td></tr>
-                <tr th:each="v : ${generators}">
-                    <td><a th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a></td>
-                    <td th:text="${v.g().host}"></td>
-                    <td><span class="badge" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span>
+                <tr th:if="${generators.isEmpty()}"><td colspan="10"><div class="empty-state"><i class="bi bi-hdd-network"></i>
+                    Генераторов пока нет.<div class="mt-3" sec:authorize="hasRole('ADMIN')"><a class="btn btn-primary" th:href="@{/generators/add}">Добавить сервер</a></div></div></td></tr>
+                <tr th:each="v : ${generators}" th:attr="data-name=${#strings.toLowerCase(v.g().name + ' ' + v.g().host)},data-status=${v.statusLabel},data-badge=${v.badgeClass},data-drift=${v.hasDrift() ? '1' : '0'},data-cpu=${v.cpu != null ? v.cpu : -1},data-ram=${v.memPct != null ? v.memPct : -1},data-load=${v.load1 != null ? v.load1 : -1}">
+                    <td><a class="fw-semibold" th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a>
+                        <div class="small text-muted" th:if="${v.g().host != v.g().name}" th:text="${v.g().host}"></div></td>
+                    <td class="text-nowrap"><span class="badge" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span>
                         <form class="d-inline" sec:authorize="hasRole('ADMIN')" th:if="${v.g().status.name() == 'ERROR'}"
                               th:action="@{/generators/{id}/redeploy(id=${v.g().id},keepMode=true)}" method="post"
                               onsubmit="return confirm('Повторить установку агента?')">
-                            <button class="btn btn-sm btn-outline-danger py-0 ms-1" title="Повторить установку"><i class="bi bi-arrow-repeat"></i></button></form></td>
-                    <td th:classappend="${v.cpuHot} ? 'metric-hot'" th:text="${v.cpu != null} ? ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%' : '—'"></td>
-                    <td th:text="${v.memPct != null} ? ${#numbers.formatDecimal(v.memPct, 1, 0)} + '%' : '—'"></td>
-                    <td th:text="${v.netRx != null} ? ${#numbers.formatDecimal(v.netRx / 1048576.0, 1, 2)} + ' / ' + ${#numbers.formatDecimal(v.netTx / 1048576.0, 1, 2)} : '—'"></td>
-                    <td th:text="${v.load1 != null} ? ${#numbers.formatDecimal(v.load1, 1, 2)} : '—'"></td>
-                    <td th:text="${v.diskFreeGb != null} ? ${v.diskFreeGb} : '—'"></td>
-                    <td th:text="${v.sockets != null} ? ${v.sockets} : '—'"></td>
-                    <td th:classappend="${v.clockBad} ? 'metric-hot' : (${v.clockWarn} ? 'text-warning')"
+                            <button class="btn btn-sm btn-outline-danger py-0 ms-1" title="Повторить установку" aria-label="Повторить установку"><i class="bi bi-arrow-repeat"></i></button></form></td>
+                    <td><div class="mini" th:if="${v.cpu != null}" th:classappend="${v.cpuHot} ? 'hot'">
+                            <span class="mini-bar"><i th:style="'width:' + ${#numbers.formatDecimal(v.cpu, 1, 0)} + '%'"></i></span>
+                            <b th:text="${#numbers.formatDecimal(v.cpu, 1, 0)} + '%'"></b></div><span th:unless="${v.cpu != null}" class="text-muted">—</span></td>
+                    <td><div class="mini" th:if="${v.memPct != null}">
+                            <span class="mini-bar"><i th:style="'width:' + ${#numbers.formatDecimal(v.memPct, 1, 0)} + '%'"></i></span>
+                            <b th:text="${#numbers.formatDecimal(v.memPct, 1, 0)} + '%'"></b></div><span th:unless="${v.memPct != null}" class="text-muted">—</span></td>
+                    <td class="num text-nowrap" th:text="${v.netRx != null} ? ${#numbers.formatDecimal(v.netRx / 1048576.0, 1, 2)} + ' / ' + ${#numbers.formatDecimal(v.netTx / 1048576.0, 1, 2)} : '—'"></td>
+                    <td class="num" th:text="${v.load1 != null} ? ${#numbers.formatDecimal(v.load1, 1, 2)} : '—'"></td>
+                    <td class="num" th:text="${v.diskFreeGb != null} ? ${v.diskFreeGb} : '—'"></td>
+                    <td class="num" th:text="${v.sockets != null} ? ${v.sockets} : '—'"></td>
+                    <td class="num text-nowrap" th:classappend="${v.clockBad} ? 'metric-hot' : (${v.clockWarn} ? 'text-warning')"
                         th:text="${v.clockOffsetMs != null} ? ${v.clockOffsetMs} + ' мс' : '—'"></td>
-                    <td>
-                        <span th:text="${v.g().agentVersion} ?: '—'" th:classappend="${v.agentDrift} ? 'text-warning fw-bold'"
-                              th:title="${v.agentDrift} ? 'По умолчанию: ' + ${v.defaultAgent}"></span> /
+                    <td class="small text-nowrap" th:with="av=${v.g().agentVersion}">
+                        <span th:classappend="${v.agentDrift} ? 'text-warning fw-bold'" th:title="${av != null ? av : ''} + (${v.agentDrift} ? ' · по умолчанию: ' + ${v.defaultAgent} : '')"
+                              th:text="${av == null} ? '—' : (${#strings.contains(av, '+')} ? ${#strings.substringBefore(#strings.substringAfter(av, '+'), '-')} : ${av})"></span>
+                        <span class="text-muted">·</span>
                         <span th:text="${v.g().k6Version} ?: '—'" th:classappend="${v.k6Drift} ? 'text-warning fw-bold'"
-                              th:title="${v.k6Drift} ? 'По умолчанию: ' + ${v.defaultK6}"></span>
-                    </td>
+                              th:title="${v.k6Drift} ? 'По умолчанию: ' + ${v.defaultK6}"></span></td>
                 </tr>
                 </tbody>
             </table>
         </div></div>
     </div>
+</th:block>
+
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        (function () {
+            var q = document.getElementById('gen-q'), chips = document.getElementById('gen-chips'), drift = document.getElementById('gen-drift'),
+                count = document.getElementById('gen-count');
+            var st;
+            try { st = JSON.parse(sessionStorage.getItem('gen-filter') || '{}'); } catch (e) { st = {}; }
+            st = {status: st.status || '', sort: st.sort || 'name', dir: st.dir || 1, q: st.q || ''};
+            q.value = st.q;
+            function save() { try { sessionStorage.setItem('gen-filter', JSON.stringify(st)); } catch (e) { /* без сохранения */ } }
+            function rows() { return [].slice.call(document.querySelectorAll('#gen-table tbody tr[data-name]')); }
+
+            function buildChips(all) {
+                var by = {}, order = [];
+                all.forEach(function (r) {
+                    var s = r.dataset.status;
+                    if (!by[s]) { by[s] = {n: 0, badge: r.dataset.badge}; order.push(s); }
+                    by[s].n++;
+                });
+                if (st.status && !by[st.status]) { st.status = ''; }
+                var html = '<button type="button" class="chip-btn' + (st.status ? '' : ' on') + '" data-status="">Все <b>' + all.length + '</b></button>';
+                order.forEach(function (s) {
+                    html += '<button type="button" class="chip-btn' + (st.status === s ? ' on' : '') + '" data-status="' + s.replace(/"/g, '&quot;') + '">'
+                        + '<span class="badge ' + by[s].badge + '">' + s + '</span> <b>' + by[s].n + '</b></button>';
+                });
+                chips.innerHTML = html;
+            }
+            function apply() {
+                var all = rows();
+                buildChips(all);
+                var query = st.q.trim().toLowerCase(), shown = 0;
+                all.forEach(function (r) {
+                    var ok = (!st.status || r.dataset.status === st.status) && (!query || r.dataset.name.indexOf(query) >= 0) && (!drift || !drift.checked || r.dataset.drift === '1');
+                    r.classList.toggle('d-none', !ok);
+                    if (ok) { shown++; }
+                });
+                var key = st.sort, num = key === 'cpu' || key === 'ram' || key === 'load';
+                var body = document.querySelector('#gen-table tbody');
+                if (body && all.length) {
+                    all.sort(function (a, b) {
+                        var x = num ? parseFloat(a.dataset[key]) : (key === 'name' ? a.dataset.name : a.dataset.status);
+                        var y = num ? parseFloat(b.dataset[key]) : (key === 'name' ? b.dataset.name : b.dataset.status);
+                        return (x < y ? -1 : x > y ? 1 : 0) * st.dir;
+                    }).forEach(function (r) { body.appendChild(r); });
+                }
+                document.querySelectorAll('#gen-table th.sortable').forEach(function (th) {
+                    th.classList.toggle('sorted', th.dataset.sort === st.sort);
+                    th.dataset.dir = th.dataset.sort === st.sort ? (st.dir > 0 ? '▲' : '▼') : '';
+                });
+                count.textContent = all.length ? (shown === all.length ? all.length + ' шт.' : 'Показано ' + shown + ' из ' + all.length) : '';
+            }
+            chips.addEventListener('click', function (e) {
+                var b = e.target.closest('.chip-btn'); if (!b) { return; }
+                st.status = b.dataset.status; save(); apply();
+            });
+            q.addEventListener('input', function () { st.q = q.value; save(); apply(); });
+            if (drift) { drift.addEventListener('change', apply); }
+            document.addEventListener('click', function (e) {
+                var th = e.target.closest('#gen-table th.sortable'); if (!th) { return; }
+                if (st.sort === th.dataset.sort) { st.dir = -st.dir; } else { st.sort = th.dataset.sort; st.dir = 1; }
+                save(); apply();
+            });
+            // таблица обновляется раз в 5 секунд: после каждой подмены заново применяем фильтры и сортировку
+            document.body.addEventListener('htmx:afterSettle', apply);
+            apply();
+        })();
+    </script>
 </th:block>
 </body>
 </html>

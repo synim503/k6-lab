@@ -4,11 +4,15 @@
 <head><title>Добавить сервер</title></head>
 <body>
 <th:block layout:fragment="content">
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/generators}">Генераторы</a><i class="bi bi-chevron-right"></i><span>Добавить сервер</span></nav>
     <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-hdd-network"></i></span>Добавить сервер-генератор</h3></div>
-    <form class="card card-body row g-3 mx-0 form-card" th:action="@{/generators/add}" method="post">
+    <div class="row g-3"><div class="col-lg-8">
+    <form class="card card-body row g-3 mx-0" th:action="@{/generators/add}" method="post">
+        <div class="col-12 form-section">Сервер</div>
         <div class="col-8"><label class="form-label">Адрес сервера</label><input class="form-control" name="host" th:value="${host}" placeholder="10.0.0.5" required></div>
         <div class="col-4"><label class="form-label">SSH-порт</label><input class="form-control" type="number" name="port" th:value="${port} ?: 22"></div>
         <div class="col-12"><label class="form-label">Логин</label><input class="form-control" name="username" th:value="${username} ?: 'root'" required></div>
+        <div class="col-12 form-section">Вход по SSH</div>
         <div class="col-12">
             <label class="form-label">Как входить на сервер по SSH</label>
             <div class="btn-group w-100" role="group">
@@ -31,13 +35,26 @@
             <input class="form-control" type="password" name="sudoPassword" autocomplete="new-password">
             <div class="form-text">Агент ставится системным сервисом systemd (<code>systemctl</code>). Пусто — sudo без пароля (NOPASSWD).
                 Если sudo нет совсем, используйте «Расширенно» (пользовательский режим).</div></div>
+        <div class="col-12 form-section">Агент</div>
         <div class="col-12"><label class="form-label">Адрес админки для агента</label>
             <input class="form-control" name="serverUrl" th:value="${serverUrl}" required>
             <div class="form-text">Агент сам подключится по этому адресу, поэтому он должен быть доступен с сервера-генератора (порт агентов открыт).</div></div>
-        <div class="col-12"><button class="btn btn-primary">Установить агента</button>
-            <span class="text-muted small ms-2">Агент и k6 ставятся автоматически как служба; пароль и ключ хранятся в зашифрованном виде.</span></div>
+        <div class="col-12 form-actions"><button class="btn btn-primary"><i class="bi bi-cloud-arrow-down me-1"></i>Установить агента</button>
+            <a class="btn btn-link" th:href="@{/generators}">Отмена</a></div>
     </form>
-    <p class="text-muted small mt-3">Перед первой установкой загрузите в «Ещё → Дистрибутивы» агент (бинарь Go) и k6 под архитектуру сервера (один раз; в портативной версии они уже загружены).</p>
+    </div>
+    <div class="col-lg-4">
+        <div class="card"><div class="card-body">
+            <h6 class="fw-semibold mb-2">Что понадобится</h6>
+            <ul class="small text-muted ps-3 mb-3">
+                <li class="mb-1">SSH-доступ к серверу: пароль или ключ. Под не-root нужен sudo.</li>
+                <li class="mb-1">Загруженные в <a th:href="@{/distributions}">«Дистрибутивы»</a> агент и k6 под архитектуру сервера (одного раза достаточно).</li>
+                <li>Адрес админки должен открываться с этого сервера: агент подключится к нему сам.</li></ul>
+            <h6 class="fw-semibold mb-2">Что произойдёт</h6>
+            <p class="small text-muted mb-0">Агент и k6 установятся как служба systemd и подключатся к админке. Пароль и ключ хранятся в зашифрованном виде.
+                Ход установки виден в разделе «Операции». Нужен другой режим (без sudo, cron)? Используйте <a th:href="@{/generators/new}">расширенную форму</a>.</p>
+        </div></div>
+    </div></div>
     <script>
         (function () {
             function sync() {

@@ -21,7 +21,7 @@ public class LoadForm {
 
     private List<OpForm> ops = new ArrayList<>();
     private double levelPct = 100;
-    private int rampSec = 30;
+    private int rampSec = 0;
     private double holdMinutes = 5;
     /** Число генераторов, которое подставляется при запуске скрипта. */
     private int generatorCount = 1;

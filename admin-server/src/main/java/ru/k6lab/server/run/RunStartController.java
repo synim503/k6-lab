@@ -54,6 +54,7 @@ public class RunStartController {
         model.addAttribute("k6Flags", java.util.Arrays.stream(K6Flag.values()).filter(f -> !f.isHttpDebug()).toList());
         model.addAttribute("generators", all);
         model.addAttribute("freeCount", all.stream().filter(Generator::isAvailableForRuns).count());
+        model.addAttribute("ops", plan.operations());
         model.addAttribute("errors", plan.errors());
         model.addAttribute("warnings", plan.warnings());
         model.addAttribute("blockReason", runs.blockReason().orElse(null));

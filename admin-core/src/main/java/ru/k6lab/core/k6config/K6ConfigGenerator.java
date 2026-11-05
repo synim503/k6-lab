@@ -286,8 +286,6 @@ public final class K6ConfigGenerator {
             double unitSec = durationSec(String.valueOf(params.getOrDefault("timeUnit", "1s")));
             peakRate = unitSec > 0 ? number(params.get("rate")) / unitSec : 0;
         }
-        warnings.add(new Warning("CUSTOM_SCENARIO", op.name(), "Исполнитель " + op.executor()
-                + ": сценарий работает по своим параметрам, ступени профиля (разгон, удержание, уровень %) не применяются"));
         int n = in.steps().size();
         return new OpPlan(op.name(), op.executor().contains("arrival") ? Mode.OPEN : Mode.CLOSED, 1, new long[0], new double[n],
                 new long[n], pre, vus, peakRate);
