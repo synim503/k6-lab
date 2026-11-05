@@ -61,7 +61,8 @@ public final class K6ConfigGenerator {
 
         List<OpPlan> plans = new ArrayList<>();
         for (OperationSpec op : ops) {
-            OpPlan plan = op.mode() == Mode.OPEN ? openScenario(op, in, scenarios, warnings)
+            OpPlan plan = !op.profileDriven() ? customScenario(op, in, scenarios, warnings)
+                    : op.mode() == Mode.OPEN ? openScenario(op, in, scenarios, warnings)
                     : closedScenario(op, in, scenarios, warnings);
             if (plan != null) {
                 plans.add(plan);
@@ -90,7 +91,8 @@ public final class K6ConfigGenerator {
             if (op.execFn() == null || !SAFE_FN.matcher(op.execFn()).matches()) {
                 throw new IllegalArgumentException("Операция «" + op.name() + "»: некорректное имя exec-функции");
             }
-            if (op.mode() == Mode.CLOSED) {
+            validateExecutor(op);
+            if (op.mode() == Mode.CLOSED && op.profileDriven()) {
                 if (!in.usesHelper()) {
                     throw new IllegalArgumentException("Операция «" + op.name() + "»: закрытая модель запрещена без admin.js "
                             + "(pacing попал бы во время операции). Используйте op() из __admin/admin.js или откройте модель");
@@ -102,7 +104,7 @@ public final class K6ConfigGenerator {
             if (op.ratePerSec() < 0) {
                 throw new IllegalArgumentException("Операция «" + op.name() + "»: интенсивность не может быть отрицательной");
             }
-            if (op.mode() == Mode.OPEN && op.expectedDurationSec() <= 0) {
+            if (op.profileDriven() && op.mode() == Mode.OPEN && op.expectedDurationSec() <= 0) {
                 throw new IllegalArgumentException("Операция «" + op.name() + "»: укажите ожидаемую длительность (нужна для расчёта VU)");
             }
             if (op.slaPercentile() != 90 && op.slaPercentile() != 95 && op.slaPercentile() != 99) {
@@ -164,6 +166,12 @@ public final class K6ConfigGenerator {
             stages.addObject().put("duration", s.holdSec() + "s").put("target", sel.targets()[i]);
         }
         sc.put("gracefulStop", in.gracefulStopSec() + "s");
+        // свои значения из параметров сценария: когда стартовать и сколько ждать завершения итераций
+        for (String k : List.of("startTime", "gracefulStop")) {
+            if (op.scenario().get(k) != null) {
+                sc.put(k, String.valueOf(op.scenario().get(k)));
+            }
+        }
         putExec(sc, op);
         putEnvAndTags(sc, op, null);
 
@@ -185,6 +193,131 @@ public final class K6ConfigGenerator {
             vus[i] = ceil(actual[i] * op.expectedDurationSec());
         }
         return new OpPlan(op.name(), Mode.OPEN, sel.unitSec(), sel.targets(), actual, vus, pre, max, peak);
+    }
+
+    // ------------------------------------------------------------------ свой сценарий (любой исполнитель k6)
+
+    /** Поля сценария, общие для всех исполнителей. */
+    private static final java.util.Set<String> COMMON_KEYS = java.util.Set.of("startTime", "gracefulStop", "env", "tags");
+
+    /** Поля исполнителей k6 (без общих); для ramping-arrival-rate - только то, что можно менять поверх расчёта по профилю. */
+    private static final Map<String, java.util.Set<String>> EXECUTOR_KEYS = Map.of(
+            "constant-vus", java.util.Set.of("vus", "duration"),
+            "ramping-vus", java.util.Set.of("startVUs", "stages", "gracefulRampDown"),
+            "constant-arrival-rate", java.util.Set.of("rate", "timeUnit", "duration", "preAllocatedVUs", "maxVUs"),
+            "ramping-arrival-rate", java.util.Set.of("startRate", "timeUnit", "stages", "preAllocatedVUs", "maxVUs"),
+            "per-vu-iterations", java.util.Set.of("vus", "iterations", "maxDuration"),
+            "shared-iterations", java.util.Set.of("vus", "iterations", "maxDuration"),
+            "externally-controlled", java.util.Set.of("vus", "maxVUs", "duration"));
+
+    /** Исполнители k6, которые поддерживает админка. */
+    public static java.util.Set<String> executors() {
+        java.util.Set<String> all = new java.util.LinkedHashSet<>();
+        all.add(OperationSpec.PROFILE_EXECUTOR); // по умолчанию - первым
+        all.addAll(new java.util.TreeSet<>(EXECUTOR_KEYS.keySet()));
+        return all;
+    }
+
+    /** Допустимые поля сценария для исполнителя (общие + свои). */
+    public static java.util.Set<String> scenarioKeys(String executor) {
+        java.util.Set<String> keys = new java.util.TreeSet<>(COMMON_KEYS);
+        keys.addAll(EXECUTOR_KEYS.getOrDefault(executor, java.util.Set.of()));
+        return keys;
+    }
+
+    public static void validateExecutor(OperationSpec op) {
+        java.util.Set<String> own = EXECUTOR_KEYS.get(op.executor());
+        if (own == null) {
+            throw new IllegalArgumentException("Операция «" + op.name() + "»: неизвестный исполнитель «" + op.executor()
+                    + "». Допустимые: " + String.join(", ", executors()));
+        }
+        if (op.profileDriven()) {
+            // у сценария по профилю поверх расчёта можно менять только время старта/завершения, VU, env и теги
+            java.util.Set<String> allowed = java.util.Set.of("startTime", "gracefulStop", "preAllocatedVUs", "maxVUs", "env", "tags");
+            for (String k : op.scenario().keySet()) {
+                if (!allowed.contains(k)) {
+                    throw new IllegalArgumentException("Операция «" + op.name() + "»: поле «" + k + "» задаётся профилем нагрузки "
+                            + "(интенсивность, разгон, удержание). Здесь можно: " + String.join(", ", new java.util.TreeSet<>(allowed))
+                            + ". Для полного управления добавьте свои stages (или выберите другого исполнителя)");
+                }
+            }
+            return;
+        }
+        java.util.Set<String> keys = scenarioKeys(op.executor());
+        for (String k : op.scenario().keySet()) {
+            if (!keys.contains(k)) {
+                throw new IllegalArgumentException("Операция «" + op.name() + "»: поле «" + k + "» не поддерживается исполнителем "
+                        + op.executor() + ". Допустимые: " + String.join(", ", keys));
+            }
+        }
+    }
+
+    /**
+     * Сценарий целиком из параметров операции (executor и поля как в options.scenarios): без ступеней профиля.
+     * Всё, что задал пользователь, попадает в конфиг как есть - проверку значений делает k6.
+     */
+    private static OpPlan customScenario(OperationSpec op, ConfigInput in, ObjectNode scenarios, List<Warning> warnings) {
+        ObjectNode sc = scenarios.putObject(op.name());
+        sc.put("executor", op.executor());
+        Map<String, Object> params = new LinkedHashMap<>(op.scenario());
+        Object env = params.remove("env");
+        Object tags = params.remove("tags");
+        for (Map.Entry<String, Object> e : params.entrySet()) {
+            sc.set(e.getKey(), MAPPER.valueToTree(e.getValue()));
+        }
+        putExec(sc, op);
+        Map<String, String> envMap = new java.util.TreeMap<>(op.env());
+        envMap.putAll(stringMap(env));
+        if (!envMap.isEmpty()) {
+            ObjectNode e = sc.putObject("env");
+            envMap.forEach(e::put);
+        }
+        Map<String, String> tagMap = new java.util.TreeMap<>(op.tags());
+        tagMap.putAll(stringMap(tags));
+        tagMap.remove("scenario"); // системный тег scenario = операция, не переопределяем
+        if (!tagMap.isEmpty()) {
+            ObjectNode t = sc.putObject("tags");
+            tagMap.forEach(t::put);
+        }
+        long vus = Math.max(number(params.get("vus")), Math.max(number(params.get("preAllocatedVUs")), number(params.get("maxVUs"))));
+        long pre = Math.max(number(params.get("vus")), number(params.get("preAllocatedVUs")));
+        double peakRate = 0;
+        if ("constant-arrival-rate".equals(op.executor()) && params.get("rate") != null) {
+            double unitSec = durationSec(String.valueOf(params.getOrDefault("timeUnit", "1s")));
+            peakRate = unitSec > 0 ? number(params.get("rate")) / unitSec : 0;
+        }
+        warnings.add(new Warning("CUSTOM_SCENARIO", op.name(), "Исполнитель " + op.executor()
+                + ": сценарий работает по своим параметрам, ступени профиля (разгон, удержание, уровень %) не применяются"));
+        int n = in.steps().size();
+        return new OpPlan(op.name(), op.executor().contains("arrival") ? Mode.OPEN : Mode.CLOSED, 1, new long[0], new double[n],
+                new long[n], pre, vus, peakRate);
+    }
+
+    private static Map<String, String> stringMap(Object o) {
+        Map<String, String> out = new java.util.TreeMap<>();
+        if (o instanceof Map<?, ?> m) {
+            m.forEach((k, v) -> out.put(String.valueOf(k), String.valueOf(v)));
+        }
+        return out;
+    }
+
+    private static long number(Object o) {
+        return o instanceof Number n ? n.longValue() : 0;
+    }
+
+    /** "30s", "1m", "2h", "500ms" -> секунды; нераспознанное - 0. */
+    private static double durationSec(String s) {
+        java.util.regex.Matcher m = Pattern.compile("^\\s*([0-9]*\\.?[0-9]+)\\s*(ms|s|m|h)?\\s*$").matcher(s);
+        if (!m.matches()) {
+            return 0;
+        }
+        double v = Double.parseDouble(m.group(1));
+        return switch (m.group(2) == null ? "s" : m.group(2)) {
+            case "ms" -> v / 1000;
+            case "m" -> v * 60;
+            case "h" -> v * 3600;
+            default -> v;
+        };
     }
 
     // ------------------------------------------------------------------ закрытая модель

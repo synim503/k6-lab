@@ -33,6 +33,16 @@
             <div><div class="stat-value" th:text="${scriptsCount}">0</div><div class="stat-label">скриптов</div></div></div></div></a></div>
     </div>
 
+    <!-- потерянное хранилище скриптов -->
+    <div class="alert alert-danger d-flex align-items-start gap-2" th:if="${!scriptsNoFiles.isEmpty()}">
+        <i class="bi bi-exclamation-octagon-fill mt-1"></i>
+        <div><strong>У скриптов нет файлов в хранилище сервера:</strong>
+            <span th:text="${#strings.listJoin(scriptsNoFiles.size() > 8 ? scriptsNoFiles.subList(0, 8) : scriptsNoFiles, ', ')}"></span><span th:if="${scriptsNoFiles.size() > 8}" th:text="' и ещё ' + ${scriptsNoFiles.size() - 8}"></span>.
+            Запись о скриптах в базе есть, а архивы версий пропали: обычно после переустановки админки без переноса каталогов
+            <code>config/</code> и <code>data/</code>. Ищем в <code th:text="${storagePath}"></code>. Верните каталог на место
+            или загрузите скрипты заново.</div>
+    </div>
+
     <!-- внимание -->
     <div class="alert alert-warning d-flex align-items-start gap-2" th:if="${!problems.isEmpty() or !hot.isEmpty()}">
         <i class="bi bi-exclamation-triangle-fill mt-1"></i>

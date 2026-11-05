@@ -40,3 +40,38 @@ func TestConvertSeriesDropsHistogramsNotInKeep(t *testing.T) {
 		t.Fatalf("без фильтра ожидалось 3 гистограммы, получено %d", all)
 	}
 }
+
+func TestConvertSeriesDropsMetricsByMask(t *testing.T) {
+	h := nativeFromValues([]float64{0.1, 0.2}, 2)
+	var in []TimeSeries
+	for _, name := range []string{"k6_iteration_duration_seconds", "k6_http_req_blocked_seconds"} {
+		series, err := parseWriteRequest(encodeNative([]Label{{"__name__", name}}, h))
+		if err != nil {
+			t.Fatal(err)
+		}
+		in = append(in, series...)
+	}
+	for _, name := range []string{"k6_iterations_total", "k6_data_sent_total", "k6_data_received_total"} {
+		in = append(in, TimeSeries{Labels: []Label{{"__name__", name}}, Samples: []Sample{{1, 1000}}})
+	}
+	out, _ := convertSeriesDrop(in, nil, []string{"k6_data_*", "k6_http_req_blocked*"})
+	names := map[string]int{}
+	for _, ts := range out {
+		for _, l := range ts.Labels {
+			if l.Name == "__name__" {
+				names[l.Value]++
+			}
+		}
+	}
+	for _, gone := range []string{"k6_data_sent_total", "k6_data_received_total", "k6_http_req_blocked_seconds_bucket", "k6_http_req_blocked_seconds_count"} {
+		if names[gone] != 0 {
+			t.Fatalf("%s должна быть отброшена: %v", gone, names)
+		}
+	}
+	if names["k6_iterations_total"] != 1 || names["k6_iteration_duration_seconds_count"] != 1 {
+		t.Fatalf("нужные метрики потеряны: %v", names)
+	}
+	if dropped("k6_vus", nil) || !dropped("k6_vus", []string{"k6_*"}) || dropped("k6_vus", []string{"vus"}) {
+		t.Fatal("маска сопоставляется неверно")
+	}
+}

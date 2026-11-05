@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -82,9 +83,36 @@ func bucketsToClassic(h NativeHistogram) []float64 {
 // Гистограммы, которых нет в keep, отбрасываются: каждая даёт ~170 серий (сетка le), а админке нужны только перцентили
 // времени итерации/операции. keep == nil - оставить все.
 func convertSeries(in []TimeSeries, keep map[string]bool) (out []TimeSeries, converted int) {
+	return convertSeriesDrop(in, keep, nil)
+}
+
+// dropped: подходит ли имя метрики под одну из масок (* - любая последовательность символов).
+func dropped(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if ok, _ := path.Match(p, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// convertSeriesDrop - как convertSeries, но метрики, подходящие под маски drop, не попадают в результат вовсе.
+func convertSeriesDrop(in []TimeSeries, keep map[string]bool, drop []string) (out []TimeSeries, converted int) {
 	for _, ts := range in {
 		if len(ts.Histograms) == 0 {
 			if len(ts.Samples) > 0 {
+				if len(drop) > 0 {
+					skip := false
+					for _, l := range ts.Labels {
+						if l.Name == "__name__" && dropped(l.Value, drop) {
+							skip = true
+							break
+						}
+					}
+					if skip {
+						continue
+					}
+				}
 				out = append(out, TimeSeries{Labels: ts.Labels, Samples: ts.Samples})
 			}
 			continue
@@ -99,6 +127,9 @@ func convertSeries(in []TimeSeries, keep map[string]bool) (out []TimeSeries, con
 			}
 		}
 		if keep != nil && !keep[name] {
+			continue
+		}
+		if dropped(name, drop) {
 			continue
 		}
 		for _, h := range ts.Histograms {
@@ -125,6 +156,7 @@ func convertSeries(in []TimeSeries, keep map[string]bool) (out []TimeSeries, con
 type RWProxy struct {
 	URL       string // куда k6 должен отправлять метрики
 	keep      map[string]bool
+	drop      []string
 	upstream  string
 	headers   map[string]string
 	srv       *http.Server
@@ -155,6 +187,11 @@ func StartRWProxy(upstream string, headers map[string]string, keepHistograms ...
 	return p, nil
 }
 
+// SetDrop задаёт маски метрик, которые не пересылаются в Prometheus; вызывать до начала работы k6.
+func (p *RWProxy) SetDrop(patterns []string) {
+	p.drop = patterns
+}
+
 func (p *RWProxy) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -181,7 +218,7 @@ func (p *RWProxy) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	out, conv := convertSeries(series, p.keep)
+	out, conv := convertSeriesDrop(series, p.keep, p.drop)
 	p.Converted.Add(int64(conv))
 	if len(out) == 0 {
 		w.WriteHeader(http.StatusNoContent)

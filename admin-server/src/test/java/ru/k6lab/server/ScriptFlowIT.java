@@ -19,6 +19,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.flash;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -243,6 +244,41 @@ class ScriptFlowIT extends AbstractIT {
     ru.k6lab.server.run.RunOrchestrator orchestrator;
     @Autowired
     ru.k6lab.server.metrics.RunMonitor runMonitor;
+
+    @Test
+    void droppedMetricsAreConfigurableAndEssentialOnesAreProtected() throws Exception {
+        var keyDrop = ru.k6lab.server.settings.SettingsService.DROP_METRICS;
+        try {
+            // по умолчанию список пуст, гистограммы фильтруются
+            settingsService.set(keyDrop, "");
+            settingsService.set(ru.k6lab.server.settings.SettingsService.ONLY_NEEDED_HISTOGRAMS, "true");
+            assertThat(settingsService.dropMetrics()).isEmpty();
+            assertThat(settingsService.onlyNeededHistograms()).isTrue();
+
+            mvc.perform(post("/settings/drop-metrics").with(csrf()).param("dropMetrics", "k6_data_sent_total\nk6_http_req_blocked*, k6_data_sent_total"))
+                    .andExpect(redirectedUrl("/settings#drop")).andExpect(flash().attributeExists("info"));
+            assertThat(settingsService.dropMetrics()).containsExactly("k6_data_sent_total", "k6_http_req_blocked*");
+            assertThat(settingsService.onlyNeededHistograms()).isFalse(); // флажок не передан - выключен
+
+            // метрики, на которых строится SLA, отбросить нельзя: маска-«всё» и точное имя отклоняются, список не меняется
+            for (String bad : new String[]{"k6_*", "k6_iterations_total", "*duration_seconds*", "k6_vus"}) {
+                mvc.perform(post("/settings/drop-metrics").with(csrf()).param("dropMetrics", bad).param("onlyNeeded", "true"))
+                        .andExpect(flash().attributeExists("error"));
+                assertThat(settingsService.dropMetrics()).containsExactly("k6_data_sent_total", "k6_http_req_blocked*");
+            }
+            mvc.perform(post("/settings/drop-metrics").with(csrf()).param("dropMetrics", "k6 data!").param("onlyNeeded", "true"))
+                    .andExpect(flash().attributeExists("error"));
+
+            // страница показывает сохранённое, а агенту уходят маски
+            mvc.perform(get("/settings")).andExpect(content().string(containsString("Какие метрики отбрасывают агенты")))
+                    .andExpect(content().string(containsString("k6_http_req_blocked*")));
+            assertThat(ru.k6lab.server.settings.SettingsService.globMatches("k6_http_req_blocked*", "k6_http_req_blocked_seconds")).isTrue();
+            assertThat(ru.k6lab.server.settings.SettingsService.globMatches("k6_vus", "k6_vus_max")).isFalse();
+        } finally {
+            settingsService.set(keyDrop, "");
+            settingsService.set(ru.k6lab.server.settings.SettingsService.ONLY_NEEDED_HISTOGRAMS, "true");
+        }
+    }
 
     @Test
     void metricsPushIntervalIsConfigurableAndOnlyNeededHistogramsAreKept() throws Exception {
@@ -500,6 +536,43 @@ class ScriptFlowIT extends AbstractIT {
         mvc.perform(get("/generators/" + ok.getId())).andExpect(content().string(org.hamcrest.Matchers.not(containsString("Агент в ошибке"))));
     }
 
+    @Autowired
+    ru.k6lab.server.common.StorageService storageService;
+    @Autowired
+    ru.k6lab.server.script.StorageHealth storageHealth;
+
+    @Test
+    void scriptWithLostStorageFileIsReportedClearlyInsteadOfFailingToPrepareRun() throws Exception {
+        var v = script("flow-lost-files");
+        long id = v.getScriptId();
+        mvc.perform(post("/scripts/" + id + "/load").with(csrf())
+                        .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", "5")
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("ops[0].expectedDurationSec", "0.3").param("holdMinutes", "1").param("rampSec", "0").param("levelPct", "100"))
+                .andExpect(redirectedUrl("/scripts/" + id));
+        // пока файл на месте - предупреждений нет
+        storageHealth.invalidate();
+        mvc.perform(get("/scripts/" + id)).andExpect(content().string(org.hamcrest.Matchers.not(containsString("Файлы последней версии отсутствуют"))));
+
+        // имитация переустановки без переноса data/storage: записи в базе есть, архива версии нет
+        storageService.delete(v.getStorageKey());
+        storageHealth.invalidate();
+
+        mvc.perform(get("/scripts/" + id)).andExpect(status().isOk())
+                .andExpect(content().string(containsString("Файлы последней версии отсутствуют в хранилище сервера")))
+                .andExpect(content().string(containsString("файл потерян")));
+        // запуск не стартует с понятной причиной, а не «не удалось подготовить запуск»
+        mvc.perform(get("/scripts/" + id + "/run")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("отсутствуют в хранилище сервера")));
+        // скачивание - 404 с объяснением, а не 500
+        mvc.perform(get("/scripts/" + id + "/versions/" + v.getId() + "/download")).andExpect(status().isNotFound())
+                .andExpect(content().string(containsString("отсутствуют в хранилище")));
+        // на главной - предупреждение со списком скриптов и путём хранилища
+        mvc.perform(get("/")).andExpect(content().string(containsString("У скриптов нет файлов в хранилище сервера")))
+                .andExpect(content().string(containsString("flow-lost-files")));
+        assertThat(storageHealth.scriptsWithoutFiles()).contains("flow-lost-files");
+    }
+
     @Test
     void sandboxPageValidatesFilesAndSavesScript() throws Exception {
         mvc.perform(get("/scripts/sandbox")).andExpect(status().isOk()).andExpect(content().string(containsString("Отладка скрипта")));
@@ -625,6 +698,68 @@ class ScriptFlowIT extends AbstractIT {
                 .andExpect(content().string(containsString("ожидается число")));
         mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json", "["))
                 .andExpect(status().isOk()).andExpect(content().string(containsString("Некорректный конфиг")));
+    }
+
+    @Autowired
+    ru.k6lab.server.load.RunPlanner runPlanner;
+
+    @Test
+    void operationCanBeAnyK6ExecutorWithItsOwnParametersAndSeveralScenariosPerFunction() throws Exception {
+        long id = script("flow-executors").getScriptId();
+        var req = post("/scripts/" + id + "/load").with(csrf())
+                .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].executor", "ramping-arrival-rate")
+                .param("ops[0].ratePerSec", "5").param("ops[0].scenarioJson", "{\"startTime\":\"10s\",\"maxVUs\":40}")
+                .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                // вторая функция pay: два сценария с разными исполнителями
+                .param("ops[1].execFn", "pay").param("ops[1].name", "paySoak").param("ops[1].executor", "constant-vus")
+                .param("ops[1].scenarioJson", "{\"vus\":4,\"duration\":\"90s\",\"env\":{\"MODE\":\"soak\"}}")
+                .param("ops[1].slaPercentile", "95").param("ops[1].slaThresholdMs", "800").param("ops[1].maxErrorPct", "1")
+                .param("ops[2].execFn", "pay").param("ops[2].name", "payBurst").param("ops[2].executor", "ramping-arrival-rate")
+                .param("ops[2].scenarioJson", "{\"startRate\":1,\"timeUnit\":\"1s\",\"preAllocatedVUs\":4,\"maxVUs\":20,"
+                        + "\"stages\":[{\"duration\":\"30s\",\"target\":20}]}")
+                .param("ops[2].slaPercentile", "95").param("ops[2].slaThresholdMs", "800").param("ops[2].maxErrorPct", "1")
+                .param("holdMinutes", "1").param("rampSec", "10").param("levelPct", "100");
+        mvc.perform(req).andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(load.operations(id)).extracting(LoadOperation::getName).containsExactly("login", "paySoak", "payBurst");
+        assertThat(load.operations(id)).extracting(LoadOperation::getExecutor).containsExactly("ramping-arrival-rate", "constant-vus", "ramping-arrival-rate");
+
+        // итоговый конфиг k6: по профилю - как раньше (+ свои startTime/maxVUs), остальные - по своим параметрам
+        var cfg = runPlanner.plan(id, 1);
+        assertThat(cfg.errors()).isEmpty();
+        var sc = cfg.config().path("scenarios");
+        assertThat(sc.path("login").path("startTime").asText()).isEqualTo("10s");
+        assertThat(sc.path("login").path("maxVUs").asInt()).isEqualTo(40);
+        assertThat(sc.path("paySoak").path("executor").asText()).isEqualTo("constant-vus");
+        assertThat(sc.path("paySoak").path("exec").asText()).isEqualTo("pay");
+        assertThat(sc.path("paySoak").path("env").path("MODE").asText()).isEqualTo("soak");
+        assertThat(sc.path("payBurst").path("stages").path(0).path("target").asInt()).isEqualTo(20);
+        assertThat(sc.path("payBurst").path("exec").asText()).isEqualTo("pay");
+
+        // форма показывает исполнителя и параметры, JSON-конфиг нагрузки содержит scenario объектом
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("constant-vus")))
+                .andExpect(content().string(containsString("Параметры сценария k6")))
+                .andExpect(content().string(containsString("&quot;vus&quot; : 4")));
+        String json = mvc.perform(get("/scripts/" + id + "/load.json")).andReturn().getResponse().getContentAsString();
+        assertThat(json).contains("\"executor\" : \"constant-vus\"").contains("\"scenario\" : {").contains("\"duration\" : \"90s\"");
+        // и он же принимается обратно целиком
+        mvc.perform(post("/scripts/" + id + "/load/json").with(csrf()).param("json", json)).andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(load.operations(id)).extracting(LoadOperation::getName).containsExactly("login", "paySoak", "payBurst");
+        assertThat(load.operations(id).get(1).getScenario()).containsEntry("vus", 4).containsEntry("duration", "90s");
+
+        // ошибки: неизвестный исполнитель, чужое поле, битый JSON - понятным сообщением, нагрузка не меняется
+        for (String[] bad : new String[][]{
+                {"magic", "{}", "неизвестный исполнитель"},
+                {"constant-vus", "{\"rate\":5}", "не поддерживается исполнителем"},
+                {"constant-vus", "{\"vus\":", "некорректный JSON"},
+                {"constant-vus", "[1]", "JSON-объектом"}}) {
+            mvc.perform(post("/scripts/" + id + "/load").with(csrf())
+                            .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", "5")
+                            .param("ops[0].executor", bad[0]).param("ops[0].scenarioJson", bad[1])
+                            .param("ops[0].slaPercentile", "95").param("holdMinutes", "1").param("levelPct", "100"))
+                    .andExpect(status().isOk()).andExpect(content().string(containsString(bad[2])));
+        }
+        assertThat(load.operations(id)).extracting(LoadOperation::getName).containsExactly("login", "paySoak", "payBurst");
     }
 
     @Test

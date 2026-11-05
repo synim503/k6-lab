@@ -222,7 +222,8 @@ public class RunOrchestrator implements AgentEventListener {
         SettingsService.Prometheus prom = settings.prometheus();
         Messages.PrometheusParams promParams = prom.configured()
                 ? new Messages.PrometheusParams(prom.rwUrl(), prom.authHeaders(), settings.pushIntervalSec() + "s", true,
-                        settings.classicHistograms(), keptHistograms()) : null;
+                        settings.classicHistograms(), settings.onlyNeededHistograms() ? keptHistograms() : List.of(),
+                        settings.dropMetrics()) : null;
         String cmdId = UUID.randomUUID().toString();
         pendingCmds.put(cmdId, new CmdRef(run.getId(), rg.getGeneratorId(), "PREPARE"));
         session.send(new Messages.Prepare(cmdId, String.valueOf(run.getId()), artifactUrl(gen.getServerUrl(), run.getId(), token),

@@ -132,7 +132,10 @@ public class RunMonitor {
             st.evaluator.reset(); // новая ступень - счётчики нарушений начинаем заново
         }
 
-        List<LiveRow> rows = liveRows(snap, current, hold && intoHold >= window ? current.getLevelPct() : null, run.getId(), window, now, p);
+        // сверку с целью делаем, только когда окно целиком лежит после стабилизации ступени (как и в итогах по ступеням):
+        // иначе в окно попадает хвост разгона/переключения уровня и факт выходит заниженным
+        boolean settled = hold && intoHold - SETTLE_SEC >= window;
+        List<LiveRow> rows = liveRows(snap, current, settled ? current.getLevelPct() : null, run.getId(), window, now, p);
         ObjectNode json = MAPPER.createObjectNode();
         json.put("ts", wall.toEpochMilli());
         json.put("dataTs", now.toEpochMilli());

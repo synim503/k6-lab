@@ -40,6 +40,8 @@ type PrometheusParams struct {
 	// KeepHistograms: имена гистограмм, которые отправлять в Prometheus (остальные отбрасываются: каждая даёт ~170 серий);
 	// пусто - отправлять все
 	KeepHistograms []string `json:"keepHistograms"`
+	// DropMetrics: маски имён метрик (с *), которые не отправлять в Prometheus; для гистограмм сверяется базовое имя
+	DropMetrics []string `json:"dropMetrics"`
 }
 
 type DataRule struct {

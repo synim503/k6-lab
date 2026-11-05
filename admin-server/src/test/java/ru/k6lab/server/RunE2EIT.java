@@ -338,6 +338,45 @@ class RunE2EIT extends AbstractIT {
     }
 
     @Test
+    @Order(11)
+    void scenariosWithOtherExecutorsRunInRealK6NextToTheProfileOne() throws Exception {
+        Agent a = startAgent("e2eexec", 1);
+        Script s = scriptWithLoad("executors", 10, false, "work");
+        LoadForm f = load.toForm(s.getId());
+        LoadForm.OpForm soak = new LoadForm.OpForm();
+        soak.setName("soak");
+        soak.setExecFn("work");
+        soak.setExecutor("constant-vus");
+        soak.setScenarioJson("{\"vus\": 1, \"duration\": \"6s\", \"gracefulStop\": \"2s\"}");
+        soak.setSlaThresholdMs(500.0);
+        LoadForm.OpForm once = new LoadForm.OpForm();
+        once.setName("once");
+        once.setExecFn("work");
+        once.setExecutor("shared-iterations");
+        once.setScenarioJson("{\"vus\": 1, \"iterations\": 3, \"maxDuration\": \"20s\"}");
+        once.setSlaThresholdMs(500.0);
+        f.getOps().removeIf(o -> !o.getName().equals("work"));
+        f.getOps().add(soak);
+        f.getOps().add(once);
+        load.save(s.getId(), f);
+        Run run = startRun(s, Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1));
+        var scenarios = run.getK6Config().path("scenarios");
+        assertThat(scenarios.path("soak").path("executor").asText()).isEqualTo("constant-vus");
+        assertThat(scenarios.path("once").path("executor").asText()).isEqualTo("shared-iterations");
+        assertThat(scenarios.path("work").path("executor").asText()).isEqualTo("ramping-arrival-rate");
+        Run finished = awaitStatus(run.getId(), Duration.ofSeconds(120), RunStatus.FINISHED, RunStatus.FAILED);
+        assertThat(finished.getStatus()).as(dump(run.getId())).isEqualTo(RunStatus.FINISHED);
+        var g = runService.generatorsOf(run.getId()).get(0);
+        assertThat(g.getExitCode()).isZero();
+        // все три сценария выполнились: по каждому есть свой подмножество метрик в итоговой сводке k6
+        var metrics = g.getSummary().path("metrics");
+        for (String sc : new String[]{"work", "soak", "once"}) {
+            assertThat(metrics.has("op_duration{scenario:" + sc + "}"))
+                    .as("сценарий " + sc + " в сводке: " + metrics.properties().stream().map(java.util.Map.Entry::getKey).toList()).isTrue();
+        }
+    }
+
+    @Test
     @Order(2)
     void twoGeneratorsShareLoadByWeightsAndSplitData() throws Exception {
         Agent a = startAgent("e2e2a", 1);

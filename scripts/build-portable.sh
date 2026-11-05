@@ -154,7 +154,8 @@ if [ "$WITH_JRE" -eq 1 ]; then
 fi
 
 # ---------------------------------------------------------------- упаковка (утилита на Go, зависимостей нет)
-cp scripts/portable/start.sh scripts/portable/start.bat scripts/portable/install-service.sh scripts/portable/uninstall-service.sh \
+cp scripts/portable/upgrade.sh scripts/portable/upgrade.bat \
+   scripts/portable/start.sh scripts/portable/start.bat scripts/portable/install-service.sh scripts/portable/uninstall-service.sh \
    scripts/portable/install-service.bat scripts/portable/uninstall-service.bat scripts/portable/README-PORTABLE.txt "$OUT/"
 chmod +x "$OUT/"*.sh
 echo "== manifest.json и архив"

@@ -38,6 +38,62 @@ class K6ConfigGeneratorTest {
         return s;
     }
 
+
+    private static OperationSpec custom(String name, String fn, String executor, Map<String, Object> scenario) {
+        return new OperationSpec(name, fn, Mode.OPEN, 0, 0.3, null, null, null, null, 95, 800, 1.0, FailureSource.HTTP, Map.of(),
+                Map.of(), true, null, executor, scenario);
+    }
+
+    @Test
+    void customExecutorsGoToTheConfigAsIs() {
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(
+                openPerSec("api", 5, 0.2),
+                custom("soak", "work", "constant-vus", Map.of("vus", 10, "duration", "5m", "startTime", "30s", "env", Map.of("MODE", "soak"))),
+                custom("burst", "work", "ramping-arrival-rate", Map.of("startRate", 1, "timeUnit", "1s", "preAllocatedVUs", 5, "maxVUs", 50,
+                        "stages", List.of(Map.of("duration", "1m", "target", 100)))),
+                custom("once", "setupOnce", "shared-iterations", Map.of("vus", 1, "iterations", 1, "maxDuration", "1m"))),
+                steps(100), 30, 30, 1, 1.5, 3, true));
+        JsonNode sc = cfg.config().path("scenarios");
+        // несколько сценариев на одну функцию: exec общий, имена разные
+        assertThat(sc.path("soak").path("executor").asText()).isEqualTo("constant-vus");
+        assertThat(sc.path("soak").path("exec").asText()).isEqualTo("work");
+        assertThat(sc.path("soak").path("vus").asInt()).isEqualTo(10);
+        assertThat(sc.path("soak").path("startTime").asText()).isEqualTo("30s");
+        assertThat(sc.path("soak").path("env").path("MODE").asText()).isEqualTo("soak");
+        assertThat(sc.path("burst").path("exec").asText()).isEqualTo("work");
+        // свой ramping-arrival-rate: stages как задал пользователь, профиль не применяется
+        assertThat(sc.path("burst").path("stages").path(0).path("target").asInt()).isEqualTo(100);
+        assertThat(sc.path("once").path("executor").asText()).isEqualTo("shared-iterations");
+        // обычная операция по профилю не затронута
+        assertThat(sc.path("api").path("executor").asText()).isEqualTo("ramping-arrival-rate");
+        // SLA-пороги строятся для всех сценариев
+        assertThat(cfg.config().path("thresholds").has("op_duration{scenario:soak}")).isTrue();
+        assertThat(cfg.operations()).hasSize(4);
+    }
+
+    @Test
+    void profileScenarioAcceptsStartTimeAndVuOverrides() {
+        var op = custom("api", "api", "ramping-arrival-rate", Map.of("startTime", "10s", "gracefulStop", "5s"));
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(new OperationSpec("api", "api", Mode.OPEN, 5, 0.2, null, null, 7, 70, 95, 800, 1.0,
+                FailureSource.HTTP, Map.of(), Map.of(), true, null, "ramping-arrival-rate", op.scenario())), steps(100), 30, 30, 1, 1.5, 3, true));
+        JsonNode sc = cfg.config().path("scenarios").path("api");
+        assertThat(sc.path("startTime").asText()).isEqualTo("10s");
+        assertThat(sc.path("gracefulStop").asText()).isEqualTo("5s");
+        assertThat(sc.path("preAllocatedVUs").asInt()).isEqualTo(7);
+        assertThat(sc.path("maxVUs").asInt()).isEqualTo(70);
+    }
+
+    @Test
+    void unknownExecutorAndForeignFieldsAreRejectedWithAClearMessage() {
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("x", "x", "magic", Map.of())), steps(100), 30, 30, 1, 1.5, 3, true)))
+                .hasMessageContaining("неизвестный исполнитель").hasMessageContaining("constant-vus");
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("x", "x", "constant-vus", Map.of("rate", 5))), steps(100), 30, 30, 1, 1.5, 3, true)))
+                .hasMessageContaining("«rate»").hasMessageContaining("constant-vus").hasMessageContaining("duration");
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("x", "x", "ramping-arrival-rate", Map.of("rate", 5))), steps(100), 30, 30, 1, 1.5, 3, true)))
+                .hasMessageContaining("«rate»");
+        assertThat(K6ConfigGenerator.executors()).startsWith("ramping-arrival-rate").contains("constant-vus", "externally-controlled");
+    }
+
     @Test
     void defaultFunctionGetsNoExecField() {
         var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(openPerSec("default", 5, 0.2), openPerSec("pay", 2, 0.2)),

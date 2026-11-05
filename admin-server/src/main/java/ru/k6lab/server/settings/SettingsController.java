@@ -46,6 +46,8 @@ public class SettingsController {
         model.addAttribute("grafana", settings.get(SettingsService.GRAFANA_URL_TPL, ""));
         model.addAttribute("classicHist", settings.classicHistograms());
         model.addAttribute("pushSec", settings.pushIntervalSec());
+        model.addAttribute("dropMetrics", String.join("\n", settings.dropMetrics()));
+        model.addAttribute("onlyNeeded", settings.onlyNeededHistograms());
         model.addAttribute("metricNames", names.json());
         model.addAttribute("logLines", settings.logLinesPerSecond());
         model.addAttribute("logDays", settings.logRetentionDays());
@@ -79,6 +81,43 @@ public class SettingsController {
         }
         ra.addFlashAttribute("info", "Параметры Prometheus сохранены. Выполните диагностику.");
         return "redirect:/settings";
+    }
+
+    /** Какие метрики агент не отправляет в Prometheus. Метрики, на которых строятся SLA и графики админки, отбросить нельзя. */
+    @PostMapping("/drop-metrics")
+    public String saveDropMetrics(@RequestParam(required = false) String dropMetrics,
+                                  @RequestParam(defaultValue = "false") boolean onlyNeeded, RedirectAttributes ra) {
+        List<String> patterns = SettingsService.parseDropMetrics(dropMetrics);
+        for (String pat : patterns) {
+            if (!pat.matches("[A-Za-z0-9_:*]+")) {
+                ra.addFlashAttribute("error", "Недопустимая маска «" + pat + "»: имя метрики состоит из букв, цифр, _ и :, допускается *");
+                return "redirect:/settings#drop";
+            }
+            String essential = essentialMetric(pat);
+            if (essential != null) {
+                ra.addFlashAttribute("error", "Маска «" + pat + "» отбросила бы «" + essential + "» — на ней строятся SLA и графики. Уточните маску.");
+                return "redirect:/settings#drop";
+            }
+        }
+        settings.set(SettingsService.DROP_METRICS, String.join("\n", patterns));
+        settings.set(SettingsService.ONLY_NEEDED_HISTOGRAMS, String.valueOf(onlyNeeded));
+        ra.addFlashAttribute("info", patterns.isEmpty() ? "Список отбрасываемых метрик пуст" : "Агенты не будут отправлять: " + String.join(", ", patterns)
+                + ". Применится к следующим запускам.");
+        return "redirect:/settings#drop";
+    }
+
+    /** Имя нужной админке метрики (или её серии _bucket/_count/_sum), которую задевает маска; null - не задевает. */
+    private String essentialMetric(String pattern) {
+        ru.k6lab.core.prom.PromQueries.Names n = names.names();
+        for (String base : List.of(n.opDuration(), n.iterationDuration(), n.iterations(), n.dropped(), n.opCount(), n.opErrors(),
+                n.httpReqFailed(), n.checks(), n.vus())) {
+            for (String suffix : List.of("", "_bucket", "_count", "_sum")) {
+                if (SettingsService.globMatches(pattern, base + suffix)) {
+                    return base + suffix;
+                }
+            }
+        }
+        return null;
     }
 
     @PostMapping("/diagnostics")

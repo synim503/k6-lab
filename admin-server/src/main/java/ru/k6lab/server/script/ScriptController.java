@@ -113,7 +113,10 @@ public class ScriptController {
     public String detail(@PathVariable Long id, Model model) {
         Script s = service.get(id);
         model.addAttribute("script", s);
-        model.addAttribute("versions", service.versionsOf(id));
+        var versionList = service.versionsOf(id);
+        model.addAttribute("versions", versionList);
+        // версии, чьих файлов нет в хранилище (например, после переустановки админки без переноса data/storage)
+        model.addAttribute("missingFiles", versionList.stream().filter(v -> !service.hasFiles(v)).map(ScriptVersion::getId).collect(java.util.stream.Collectors.toSet()));
         model.addAttribute("repos", gitRepos.list());
         model.addAttribute("gitRepo", s.getGitRepoId() == null ? null : gitRepos.get(s.getGitRepoId()));
         model.addAttribute("refs", s.getGitRepoId() == null ? List.of() : gitRepos.cachedRefs(s.getGitRepoId()));
@@ -202,6 +205,11 @@ public class ScriptController {
     @GetMapping("/{id}/versions/{vid}/download")
     public ResponseEntity<byte[]> download(@PathVariable Long id, @PathVariable Long vid) throws IOException {
         ScriptVersion v = service.version(id, vid);
+        if (!service.hasFiles(v)) {
+            return ResponseEntity.status(404).contentType(new MediaType("text", "plain", StandardCharsets.UTF_8))
+                    .body(("Файлы версии v" + v.getNumber() + " отсутствуют в хранилище сервера (K6LAB_STORAGE_DIR). "
+                            + "Загрузите скрипт заново новой версией.").getBytes(StandardCharsets.UTF_8));
+        }
         Script s = service.get(id);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)

@@ -19,6 +19,11 @@
         </div>
     </div>
     <p class="text-muted" th:if="${script.description != null and !script.description.isBlank()}" th:text="${script.description}"></p>
+    <div class="alert alert-danger" th:if="${!missingFiles.isEmpty() and !versions.isEmpty() and missingFiles.contains(versions[0].id)}">
+        <i class="bi bi-exclamation-octagon me-1"></i><strong>Файлы последней версии отсутствуют в хранилище сервера.</strong>
+        Скрипт нельзя запустить и скачать. Обычно так бывает после переустановки админки без переноса каталогов
+        <code>config/</code> и <code>data/</code> прежней установки (или после смены <code>K6LAB_STORAGE_DIR</code>).
+        Верните каталог хранилища на место либо загрузите скрипт заново новой версией (справа).</div>
 
     <div class="row g-3">
         <div class="col-lg-8">
@@ -42,7 +47,8 @@
                         <thead class="table-light"><tr><th>Версия</th><th>Источник</th><th>Комментарий</th><th>Операции</th><th>Пригодность</th><th>Создана</th></tr></thead>
                         <tbody>
                         <tr th:each="v, st : ${versions}">
-                            <td><a th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}" th:text="'v' + ${v.number}"></a></td>
+                            <td><a th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}" th:text="'v' + ${v.number}"></a>
+                                <span class="badge text-bg-danger ms-1" th:if="${missingFiles.contains(v.id)}" title="Файла версии нет в хранилище сервера">файл потерян</span></td>
                             <td th:text="${v.sourceLabel()}"></td>
                             <td class="small" th:text="${v.comment}"></td>
                             <td th:text="${v.operations.size()}"></td>

@@ -61,6 +61,24 @@
                 <div class="form-text mt-2">Имена зависят от версии k6 и настроек remote write; меняйте, если в вашем Prometheus они другие.</div>
             </div></div>
 
+            <div class="card mt-3" id="drop"><div class="card-header">Какие метрики отбрасывают агенты</div><div class="card-body">
+                <form th:action="@{/settings/drop-metrics}" method="post">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="onlyNeeded" name="onlyNeeded" value="true" th:checked="${onlyNeeded}">
+                        <label class="form-check-label" for="onlyNeeded">Отправлять только нужные гистограммы</label>
+                        <div class="form-text">Время итерации, время операции и http_req_duration. Остальные гистограммы k6 (blocked, connecting, tls_handshaking,
+                            sending, waiting, receiving) отбрасываются: каждая даёт ~170 серий на набор меток. Снимите флажок, если они нужны в Grafana.</div>
+                    </div>
+                    <label class="form-label" for="dropMetrics">Дополнительно отбрасывать метрики (по одной маске на строку)</label>
+                    <textarea class="form-control font-monospace mb-2" id="dropMetrics" rows="5" name="dropMetrics" th:text="${dropMetrics}"
+                              placeholder="k6_data_sent_total&#10;k6_data_received_total&#10;k6_http_req_blocked*"></textarea>
+                    <button class="btn btn-primary">Сохранить</button>
+                </form>
+                <div class="form-text mt-2">Маска — имя метрики в Prometheus, <code>*</code> заменяет любую часть; для гистограмм сверяется имя без
+                    <code>_bucket</code>/<code>_count</code>/<code>_sum</code>. Метрики, на которых строятся SLA и графики админки (iterations, dropped_iterations,
+                    время итерации и операций, ошибки, checks, VUs), отбросить нельзя. Работает в режиме классических гистограмм; применяется к следующим запускам.</div>
+            </div></div>
+
             <div class="card mt-3"><div class="card-header">Хранение и логи</div><div class="card-body">
                 <form class="row g-2" th:action="@{/settings/limits}" method="post">
                     <div class="col-4"><label class="form-label">Строк лога агента в секунду</label><input class="form-control" type="number" min="1" name="logLines" th:value="${logLines}"></div>

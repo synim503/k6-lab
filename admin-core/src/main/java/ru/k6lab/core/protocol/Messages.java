@@ -29,15 +29,21 @@ public final class Messages {
      * (_bucket{le}, _count, _sum) вместо native histograms - для Prometheus без --enable-feature=native-histograms.
      */
     public record PrometheusParams(String url, Map<String, String> headers, String pushInterval,
-                                   boolean trendAsNativeHistogram, boolean classicHistograms, List<String> keepHistograms) {
+                                   boolean trendAsNativeHistogram, boolean classicHistograms, List<String> keepHistograms,
+                                   List<String> dropMetrics) {
 
         public PrometheusParams(String url, Map<String, String> headers, String pushInterval, boolean trendAsNativeHistogram) {
-            this(url, headers, pushInterval, trendAsNativeHistogram, false, List.of());
+            this(url, headers, pushInterval, trendAsNativeHistogram, false, List.of(), List.of());
         }
 
         public PrometheusParams(String url, Map<String, String> headers, String pushInterval,
                                 boolean trendAsNativeHistogram, boolean classicHistograms) {
-            this(url, headers, pushInterval, trendAsNativeHistogram, classicHistograms, List.of());
+            this(url, headers, pushInterval, trendAsNativeHistogram, classicHistograms, List.of(), List.of());
+        }
+
+        public PrometheusParams(String url, Map<String, String> headers, String pushInterval,
+                                boolean trendAsNativeHistogram, boolean classicHistograms, List<String> keepHistograms) {
+            this(url, headers, pushInterval, trendAsNativeHistogram, classicHistograms, keepHistograms, List.of());
         }
     }
 

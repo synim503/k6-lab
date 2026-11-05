@@ -2,6 +2,7 @@ package ru.k6lab.server.load;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.k6lab.core.model.OperationSpec;
 import ru.k6lab.server.audit.AuditService;
 import ru.k6lab.server.script.Script;
 import ru.k6lab.server.script.ScriptRepository;
@@ -99,6 +100,8 @@ public class LoadService {
             of.setMaxErrorPct(o.getMaxErrorPct());
             of.setExpectedDurationSec(o.getExpectedDurationSec());
             of.setFailureSource(o.getFailureSource());
+            of.setExecutor(o.getExecutor());
+            of.setScenario(o.getScenario());
             f.getOps().add(of);
         }
         Set<String> have = new HashSet<>();
@@ -174,9 +177,15 @@ public class LoadService {
                 continue;
             }
             validateOp(o, names);
+            String executor = o.getExecutor() == null || o.getExecutor().isBlank() ? OperationSpec.PROFILE_EXECUTOR : o.getExecutor().trim();
+            Map<String, Object> scenario = o.parseScenario();
+            boolean profile = OperationSpec.isProfile(executor, scenario);
             double rate = o.getRatePerSec() == null ? 0 : o.getRatePerSec();
-            if (rate <= 0) {
+            if (profile && rate <= 0) {
                 continue; // операция без интенсивности в нагрузке не участвует и не хранится
+            }
+            if (!profile) {
+                rate = 0; // сценарий работает по своим параметрам, интенсивность профиля не используется
             }
             LoadOperation op = new LoadOperation();
             op.setScriptId(scriptId);
@@ -189,10 +198,15 @@ public class LoadService {
             op.setSlaThresholdMs(o.getSlaThresholdMs() == null ? 1000 : o.getSlaThresholdMs());
             op.setMaxErrorPct(o.getMaxErrorPct() == null ? 1 : o.getMaxErrorPct());
             op.setFailureSource(o.getFailureSource());
+            op.setExecutor(executor);
+            op.setScenario(scenario);
             built.add(op);
         }
+        for (LoadOperation b : built) {
+            ru.k6lab.core.k6config.K6ConfigGenerator.validateExecutor(b.toSpec()); // поля сценария - сразу при сохранении
+        }
         if (built.isEmpty()) {
-            throw new IllegalArgumentException("Укажите интенсивность (оп/с) хотя бы для одной операции");
+            throw new IllegalArgumentException("Укажите интенсивность (оп/с) хотя бы для одной операции или выберите для неё другого исполнителя");
         }
 
         operations.deleteByScriptId(scriptId);
@@ -240,6 +254,12 @@ public class LoadService {
         if (o.getExecFn() == null || !FN_NAME.matcher(o.getExecFn().trim()).matches()) {
             throw new IllegalArgumentException("Операция «" + label + "»: укажите функцию скрипта (имя экспортируемой функции)");
         }
+        String ex = o.getExecutor() == null || o.getExecutor().isBlank() ? OperationSpec.PROFILE_EXECUTOR : o.getExecutor().trim();
+        if (!ru.k6lab.core.k6config.K6ConfigGenerator.executors().contains(ex)) {
+            throw new IllegalArgumentException("Операция «" + label + "»: неизвестный исполнитель «" + ex + "». Допустимые: "
+                    + String.join(", ", ru.k6lab.core.k6config.K6ConfigGenerator.executors()));
+        }
+        o.parseScenario(); // ошибка в JSON параметров - сразу понятным сообщением
         if (o.getSlaPercentile() != 90 && o.getSlaPercentile() != 95 && o.getSlaPercentile() != 99) {
             throw new IllegalArgumentException("Операция «" + label + "»: перцентиль SLA - 90, 95 или 99");
         }

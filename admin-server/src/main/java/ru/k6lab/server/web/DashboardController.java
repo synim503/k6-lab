@@ -27,9 +27,11 @@ public class DashboardController {
     private final RunService runs;
     private final RunViewService runViews;
     private final ScriptService scripts;
+    private final ru.k6lab.server.script.StorageHealth storageHealth;
 
     public DashboardController(GeneratorViewService views, DeploymentRepository deployments, RunService runs,
-                               RunViewService runViews, ScriptService scripts) {
+                               RunViewService runViews, ScriptService scripts, ru.k6lab.server.script.StorageHealth storageHealth) {
+        this.storageHealth = storageHealth;
         this.views = views;
         this.deployments = deployments;
         this.runs = runs;
@@ -56,6 +58,8 @@ public class DashboardController {
         model.addAttribute("recent", deployments.findTop50ByOrderByStartedAtDesc().stream().limit(8).toList());
         model.addAttribute("runsCount", runs.count());
         model.addAttribute("scriptsCount", scripts.list().size());
+        model.addAttribute("scriptsNoFiles", storageHealth.scriptsWithoutFiles());
+        model.addAttribute("storagePath", storageHealth.storagePath());
         model.addAttribute("lastRuns", runs.search(null, null, 8));
         addRunning(model);
         return "dashboard";

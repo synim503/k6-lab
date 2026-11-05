@@ -1,5 +1,9 @@
 package ru.k6lab.server.load;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.Setter;
 import ru.k6lab.core.model.OperationSpec;
@@ -36,6 +40,50 @@ public class LoadForm {
         private Double maxErrorPct = 1.0;
         private Double expectedDurationSec = 0.3;
         private OperationSpec.FailureSource failureSource = OperationSpec.FailureSource.HTTP;
+        /** Исполнитель k6 (ramping-arrival-rate - по профилю нагрузки: оп/с, разгон, удержание). */
+        private String executor = OperationSpec.PROFILE_EXECUTOR;
+        /** Параметры сценария JSON-объектом, как в options.scenarios (для формы - текстом). */
+        @JsonIgnore
+        private String scenarioJson;
+
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+
+        /** Параметры сценария для конфига (JSON-экспорт); при ошибке в тексте - пусто, ошибку покажет {@link #parseScenario()}. */
+        @JsonProperty("scenario")
+        public Map<String, Object> getScenario() {
+            try {
+                return parseScenario();
+            } catch (IllegalArgumentException e) {
+                return new LinkedHashMap<>();
+            }
+        }
+
+        @JsonProperty("scenario")
+        public void setScenario(Map<String, Object> scenario) {
+            try {
+                scenarioJson = scenario == null || scenario.isEmpty() ? "" : MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(scenario);
+            } catch (JsonProcessingException e) {
+                throw new IllegalArgumentException("Параметры сценария: " + e.getOriginalMessage());
+            }
+        }
+
+        /** Текст параметров сценария -> объект; пусто - без параметров. */
+        public Map<String, Object> parseScenario() {
+            if (scenarioJson == null || scenarioJson.isBlank()) {
+                return new LinkedHashMap<>();
+            }
+            try {
+                Object v = MAPPER.readValue(scenarioJson, Object.class);
+                if (!(v instanceof Map<?, ?> m)) {
+                    throw new IllegalArgumentException("Параметры сценария должны быть JSON-объектом: {\"vus\": 10, \"duration\": \"5m\"}");
+                }
+                Map<String, Object> out = new LinkedHashMap<>();
+                m.forEach((k, val) -> out.put(String.valueOf(k), val));
+                return out;
+            } catch (JsonProcessingException e) {
+                throw new IllegalArgumentException("Параметры сценария: некорректный JSON (" + e.getOriginalMessage() + ")");
+            }
+        }
 
         public boolean blank() {
             return (name == null || name.isBlank()) && (execFn == null || execFn.isBlank());

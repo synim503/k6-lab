@@ -60,6 +60,10 @@ public class RunPlanner {
         List<String> overridePaths = List.of();
         if (version == null) {
             errors.add("У скрипта нет версий");
+        } else if (!scripts.hasFiles(version)) {
+            errors.add("Файлы версии v" + version.getNumber() + " отсутствуют в хранилище сервера (K6LAB_STORAGE_DIR, по умолчанию "
+                    + "data/storage). Обычно так бывает после переустановки админки без переноса каталогов config/ и data/ "
+                    + "прежней установки. Загрузите скрипт заново новой версией или верните каталог хранилища.");
         } else if (!version.isValidForModel()) {
             errors.add("Версия скрипта v" + version.getNumber() + " непригодна для запуска: " + version.getInvalidReason());
         }
@@ -104,8 +108,10 @@ public class RunPlanner {
                 finalConfig.path("scenarios").fields().forEachRemaining(e -> {
                     long maxVus = e.getValue().path("maxVUs").asLong(Long.MAX_VALUE);
                     long preVus = e.getValue().path("preAllocatedVUs").asLong(Long.MAX_VALUE);
-                    if (maxVus < gens || preVus < gens) {
-                        warnings.add("Сценарий «" + e.getKey() + "»: VU (preAllocated " + (preVus == Long.MAX_VALUE ? "—" : preVus)
+                    long fixedVus = e.getValue().path("vus").asLong(Long.MAX_VALUE);
+                    if (maxVus < gens || preVus < gens || fixedVus < gens) {
+                        warnings.add("Сценарий «" + e.getKey() + "»: VU (" + (fixedVus == Long.MAX_VALUE ? "" : "vus " + fixedVus + ", ")
+                                + "preAllocated " + (preVus == Long.MAX_VALUE ? "—" : preVus)
                                 + ", max " + (maxVus == Long.MAX_VALUE ? "—" : maxVus) + ") меньше числа генераторов (" + gens
                                 + "). k6 делит VU между генераторами целыми числами: часть генераторов не получит VU и ничего не выполнит. "
                                 + "Увеличьте preAllocatedVUs и maxVUs хотя бы до числа генераторов.");

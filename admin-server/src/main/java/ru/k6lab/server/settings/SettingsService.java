@@ -134,6 +134,39 @@ public class SettingsService {
         return Math.max(5, Math.min(60, getInt(PUSH_INTERVAL_SEC, DEFAULT_PUSH_INTERVAL_SEC)));
     }
 
+    public static final String DROP_METRICS = "metrics.drop";
+    public static final String ONLY_NEEDED_HISTOGRAMS = "metrics.histograms.only_needed";
+
+    /** Маски метрик, которые агент не отправляет в Prometheus (по одной на строку в настройке). */
+    public List<String> dropMetrics() {
+        return parseDropMetrics(get(DROP_METRICS, ""));
+    }
+
+    /** true (по умолчанию) - агент отправляет только нужные админке гистограммы, остальные отбрасывает. */
+    public boolean onlyNeededHistograms() {
+        return !"false".equals(get(ONLY_NEEDED_HISTOGRAMS, "true"));
+    }
+
+    /** Строки/запятые/пробелы -> список масок без пустых и повторов. */
+    public static List<String> parseDropMetrics(String text) {
+        if (text == null) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(text.split("[\\s,;]+")).map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+    }
+
+    /** Маска (с * в любом месте) подходит к имени метрики? */
+    public static boolean globMatches(String glob, String name) {
+        StringBuilder re = new StringBuilder();
+        for (String part : glob.split("\\*", -1)) {
+            if (re.length() > 0) {
+                re.append(".*");
+            }
+            re.append(java.util.regex.Pattern.quote(part));
+        }
+        return name.matches(re.toString());
+    }
+
     public int logLinesPerSecond() {
         return Math.max(1, getInt(LOG_LINES_PER_SEC, 200));
     }

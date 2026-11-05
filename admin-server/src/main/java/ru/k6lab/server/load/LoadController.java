@@ -199,6 +199,7 @@ public class LoadController {
         model.addAttribute("generators", plan.generatorCount());
         model.addAttribute("secretNames", secrets.list().stream().map(Secret::getName).toList());
         model.addAttribute("modes", ScriptDataFile.Mode.values());
+        model.addAttribute("executors", ru.k6lab.core.k6config.K6ConfigGenerator.executors());
         model.addAttribute("operationNames", scripts.latest(id).map(v -> v.operationNames()).orElse(List.of()));
         model.addAttribute("chart", plan.generated() == null ? "null" : chartJson(plan.generated()));
         model.addAttribute("overridePaths", plan.overridePaths());

@@ -102,6 +102,11 @@ public class ScriptService {
         return versions.findFirstByScriptIdOrderByNumberDesc(scriptId);
     }
 
+    /** Файл версии на месте в хранилище (после переустановки без переноса data/storage его может не быть). */
+    public boolean hasFiles(ScriptVersion v) {
+        return storage.exists(v.getStorageKey());
+    }
+
     public byte[] zipBytes(ScriptVersion v) throws IOException {
         try (InputStream in = storage.open(v.getStorageKey())) {
             return in.readAllBytes();
