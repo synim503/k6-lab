@@ -255,6 +255,11 @@
                             <goal>repackage</goal>
                             <goal>build-info</goal>
                         </goals>
+                        <configuration>
+                            <additionalProperties>
+                                <label>${app.build}</label>
+                            </additionalProperties>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

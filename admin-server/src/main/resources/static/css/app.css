@@ -327,3 +327,5 @@ html { scroll-behavior: smooth; scroll-padding-top: 72px; }
 .gens-box[open] .when-open { display: inline; }
 .gens-toggle::after { content: " \25BE"; }
 .gens-box[open] .gens-toggle::after { content: " \25B4"; }
+
+.app-footer { text-align: center; color: var(--k6-muted); font-size: .76rem; padding: 0 0 1.2rem; }

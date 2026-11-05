@@ -115,7 +115,9 @@ if [ "$WITH_TESTS" -eq 1 ]; then
   $MVN -q verify
 fi
 echo "== Сборка админки"
-$MVN -q -DskipTests package
+# метка сборки (тег релиза или коммит) попадает в подвал страниц админки
+APP_BUILD="$(git describe --tags --always 2>/dev/null || echo dev)"
+$MVN -q -DskipTests -Dapp.build="$APP_BUILD" package
 cp admin-server/target/k6-lab-admin.jar "$OUT/"
 
 # ---------------------------------------------------------------- агент на Go (зависимости - agent-go/vendor, без сети)
