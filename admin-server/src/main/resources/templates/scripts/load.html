@@ -14,6 +14,14 @@
 
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post">
 
+        <div class="stage-warm mb-3 is-off" id="gw-box">
+            <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="gw-on" aria-label="Прогрев для всех сценариев">
+                <label class="form-check-label fw-semibold" for="gw-on">Прогрев</label></div>
+            <div class="input-group input-group-sm stage-warm-n"><span class="input-group-text">Стадий в прогреве</span>
+                <input class="form-control" id="gw-n" type="number" min="1" max="10" step="1" value="1" disabled aria-label="Сколько первых стадий считать прогревом"></div>
+            <span class="small text-muted">Общий для всех сценариев со стадиями (ramping-*): в каждом появляются жёлтые стадии прогрева. Ошибки, dropped и время ответа
+                в них не попадают в итоги и SLA, на графиках они выделены. Выключение превращает стадии прогрева в обычные. У constant-* прогрев — длительность в самом сценарии.</span>
+        </div>
         <div class="sect-title mt-0"><h5>Операции</h5>
             <span class="hint">каждая функция скрипта — отдельная операция; для одной функции можно добавить несколько сценариев</span></div>
         <div class="op-list" id="ops-body">
@@ -40,6 +48,8 @@
                     <input type="hidden" class="op-exec-val" th:name="|ops[${st.index}].executor|" th:value="${o.executor}">
                     <span class="op-state"></span>
                     <span class="op-tools">
+                        <button type="button" class="btn btn-sm btn-outline-secondary op-copy" title="Скопировать сценарий целиком (исполнитель и параметры), чтобы вставить в другой"><i class="bi bi-copy me-1"></i>Копировать</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary op-paste" disabled title="Заменить исполнителя и параметры этого сценария скопированными"><i class="bi bi-clipboard-plus me-1"></i>Вставить</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary op-add" title="Ещё один сценарий на эту функцию: свой исполнитель, параметры и требования"><i class="bi bi-plus-lg me-1"></i>Сценарий</button>
                         <button type="button" class="btn btn-sm btn-outline-danger op-del d-none" title="Убрать этот сценарий" aria-label="Убрать сценарий"><i class="bi bi-trash"></i></button></span>
                 </div>
@@ -101,17 +111,17 @@
 (function () {
     // ---- описание полей сценария k6 (подписи, типы, подсказки)
     const F = {
-        vus: {label: 'VU', type: 'int', hint: 'Сколько виртуальных пользователей работают одновременно'},
+        vus: {label: 'VU', type: 'int', hint: 'Сколько виртуальных пользователей работают одновременно (всего, на все генераторы)'},
         duration: {label: 'Длительность', type: 'dur', ph: '5m', hint: 'Сколько длится сценарий: 30s, 5m, 1h'},
         iterations: {label: 'Итераций', type: 'int', hint: 'Сколько итераций выполнить (в per-vu — на каждого VU, в shared — всего)'},
         maxDuration: {label: 'Максимальная длительность', type: 'dur', ph: '10m', hint: 'Если итерации не закончились за это время, k6 остановит сценарий'},
         startVUs: {label: 'Стартовые VU', type: 'int', hint: 'Сколько VU работает в момент старта'},
         gracefulRampDown: {label: 'Плавное снижение VU', type: 'dur', ph: '30s', hint: 'Сколько ждать завершения итерации при уменьшении числа VU'},
-        rate: {label: 'Итераций за интервал', type: 'num', hint: 'Интенсивность: сколько итераций запускать за один «Интервал»'},
+        rate: {label: 'Итераций за интервал', type: 'num', hint: 'Интенсивность: сколько итераций запускать за один «Интервал» (всего, на все генераторы)'},
         timeUnit: {label: 'Интервал', type: 'dur', ph: '1s', hint: 'Период, к которому относится интенсивность (1s — «в секунду»)'},
         startRate: {label: 'Начальная интенсивность', type: 'num', hint: 'Итераций за интервал в момент старта'},
-        preAllocatedVUs: {label: 'preAllocatedVUs', type: 'int', hint: 'Сколько VU подготовить заранее'},
-        maxVUs: {label: 'maxVUs', type: 'int', hint: 'Максимум VU, до которого k6 может добавлять, если не успевает'},
+        preAllocatedVUs: {label: 'preAllocatedVUs на генератор', type: 'int', hint: 'Сколько VU подготовить заранее на ОДНОМ генераторе. При запуске умножается на число генераторов'},
+        maxVUs: {label: 'maxVUs на генератор', type: 'int', hint: 'Максимум VU на ОДНОМ генераторе, до которого k6 может добавлять, если не успевает. При запуске умножается на число генераторов'},
         startTime: {label: 'Старт через', type: 'dur', ph: '0s', hint: 'Задержка старта сценария относительно начала теста'},
         gracefulStop: {label: 'Ждать завершения итераций', type: 'dur', ph: '30s', hint: 'Сколько ждать, пока текущие итерации закончатся после остановки'},
         stages: {label: 'Стадии', type: 'stages'},
@@ -129,7 +139,7 @@
         'ramping-vus': {
             real: 'ramping-vus', title: 'ramping-vus — число VU по стадиям',
             desc: 'Число VU меняется по стадиям: на каждой стадии задаётся длительность и целевое число VU.',
-            fields: ['warmup', 'startVUs', 'stages', 'gracefulRampDown'].concat(TAIL),
+            fields: ['startVUs', 'stages', 'gracefulRampDown'].concat(TAIL),
             def: {startVUs: 0, stages: [{duration: '1m', target: 20}, {duration: '5m', target: 20}]}
         },
         'constant-arrival-rate': {
@@ -141,7 +151,7 @@
         'ramping-arrival-rate': {
             real: 'ramping-arrival-rate', title: 'ramping-arrival-rate — интенсивность по стадиям',
             desc: 'Интенсивность меняется по своим стадиям (профиль нагрузки из формы не применяется).',
-            fields: ['warmup', 'startRate', 'timeUnit', 'stages', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
+            fields: ['startRate', 'timeUnit', 'stages', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
             def: {startRate: 0, timeUnit: '1s', preAllocatedVUs: 20, maxVUs: 100, stages: [{duration: '1m', target: 50}, {duration: '5m', target: 50}]}
         },
         'per-vu-iterations': {
@@ -163,64 +173,56 @@
 
     const body = document.getElementById('ops-body');
     if (!body) return;
+    const gwOnEl = document.getElementById('gw-on'), gwNEl = document.getElementById('gw-n'), gwBox = document.getElementById('gw-box');
+    const isRamp = ex => ex.indexOf('ramping') === 0;
 
-    // буфер скопированных стадий: общий для всех сценариев, сохраняется на время сессии браузера
-    let stageClipboard = [];
-    try { stageClipboard = JSON.parse(sessionStorage.getItem('k6lab-stages') || '[]') || []; } catch (e) { stageClipboard = []; }
-    function readStages(container) {
-        return [...container.querySelectorAll('.op-stage')].map(r => ({duration: r.querySelector('.op-st-d').value.trim(), target: Number(r.querySelector('.op-st-t').value || 0)}))
-            .filter(x => x.duration !== '');
-    }
-    function stageNote(row, text) {
-        const n = row.querySelector('.op-stage-note');
-        if (!n) return;
-        n.textContent = text;
-        clearTimeout(n._t);
-        n._t = setTimeout(() => { n.textContent = ''; }, 3500);
-    }
+    // буфер скопированного сценария целиком (исполнитель и параметры): общий для всех сценариев, живёт до закрытия вкладки
+    let scenarioClipboard = null;
+    try { scenarioClipboard = JSON.parse(sessionStorage.getItem('k6lab-scenario') || 'null'); } catch (e) { scenarioClipboard = null; }
 
     function esc(v) {
         return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     }
+    function readStages(container) {
+        return [...container.querySelectorAll('.op-stage')].map(r => ({duration: r.querySelector('.op-st-d').value.trim(), target: Number(r.querySelector('.op-st-t').value || 0)}))
+            .filter(x => x.duration !== '');
+    }
+    function parseDur(v) {
+        const m = /^\s*([0-9]*\.?[0-9]+)\s*(ms|s|m|h)?\s*$/.exec(String(v || ''));
+        if (!m) return 0;
+        return Number(m[1]) * ({ms: 0.001, s: 1, m: 60, h: 3600}[m[2] || 's']);
+    }
+    function warmOf(row) { return parseInt(row.dataset.warm, 10) || 0; }
+    function flash(row, text) {
+        const st = row.querySelector('.op-state');
+        st.textContent = text;
+        clearTimeout(row._t);
+        row._t = setTimeout(() => refreshRow(row), 2500);
+    }
 
     // ---- отрисовка панели параметров сценария
-    function fieldHtml(key, val, exKey, state) {
+    function fieldHtml(key, val, exKey) {
         const f = F[key];
         if (f.type === 'warmup') {
+            // у constant-* стадий нет: прогрев - длительность первых минут сценария; у ramping-* прогрев - общие жёлтые стадии
             const on = !!(val && val.duration);
-            const ramp = exKey.indexOf('ramping') === 0;
-            if (ramp) return ''; // у ramping-* прогрев - первые стадии списка (переключатель в блоке стадий)
-            const unit = exKey.indexOf('arrival') >= 0 ? 'Итераций за интервал' : 'VU';
             const dis = on ? '' : ' disabled';
-            const help = ramp
-                ? 'Первые минуты сценария считаются прогревом. Если указать интенсивность, прогрев идёт отдельной первой стадией на ней, затем основная нагрузка; пусто — прогрев остаётся частью ваших стадий.'
-                : 'Первые минуты сценария считаются прогревом, нагрузка остаётся той, что задана ниже.';
             return '<div class="col-12"><div class="op-warm' + (on ? '' : ' is-off') + '">'
                 + '<div class="form-check form-switch m-0"><input class="form-check-input op-warm-on" type="checkbox" role="switch"' + (on ? ' checked' : '') + ' aria-label="Прогрев сценария">'
                 + '<label class="form-check-label fw-semibold">Прогрев</label></div>'
                 + '<div class="input-group input-group-sm op-warm-field"><span class="input-group-text">Длительность</span>'
                 + '<input class="form-control op-warm-d" placeholder="2m" value="' + esc(on ? val.duration : '') + '" aria-label="Длительность прогрева"' + dis + '></div>'
-                + (ramp ? '<div class="input-group input-group-sm op-warm-field"><span class="input-group-text">' + esc(unit) + '</span>'
-                    + '<input class="form-control op-warm-t" type="number" step="any" min="0" placeholder="как в стадиях" value="' + esc(on && val.target ? val.target : '') + '" aria-label="Интенсивность прогрева"' + dis + '></div>' : '')
-                + '<span class="small text-muted op-warm-help">' + help + ' Ошибки, dropped и время ответа прогрева не попадают в итоги и SLA, на графиках он виден и выделен.</span></div></div>';
-        }        if (f.type === 'stages') {
+                + '<span class="small text-muted op-warm-help">Первые минуты сценария считаются прогревом, нагрузка остаётся той, что задана ниже. '
+                + 'Ошибки, dropped и время ответа прогрева не попадают в итоги и SLA, на графиках он виден и выделен.</span></div></div>';
+        }
+        if (f.type === 'stages') {
             const unit = exKey.indexOf('arrival') >= 0 ? 'Итераций за интервал' : 'VU';
             const rows = (val || []).map(s => stageRow(s.duration, s.target, unit)).join('');
-            const wn = state && state.warmup && state.warmup.stages ? state.warmup.stages : 0;
             return '<div class="col-12"><div class="small fw-semibold mb-1">' + f.label + '</div>'
-                + '<div class="stage-warm' + (wn ? '' : ' is-off') + '">'
-                + '<div class="form-check form-switch m-0"><input class="form-check-input op-swarm-on" type="checkbox" role="switch"' + (wn ? ' checked' : '') + ' aria-label="Прогрев">'
-                + '<label class="form-check-label fw-semibold">Прогрев</label></div>'
-                + '<div class="input-group input-group-sm stage-warm-n"><span class="input-group-text">Стадий в прогреве</span>'
-                + '<input class="form-control op-swarm-n" type="number" min="1" step="1" value="' + (wn || 1) + '"' + (wn ? '' : ' disabled') + ' aria-label="Сколько первых стадий считать прогревом"></div>'
-                + '<span class="small text-muted">Первые стадии (жёлтые) — прогрев: ошибки, dropped и время ответа в них не попадают в итоги и SLA, на графиках они выделены.</span></div>'
                 + '<div class="op-stages" data-k="stages" data-unit="' + esc(unit) + '">' + rows + '</div>'
-                + '<div class="d-flex gap-2 flex-wrap mt-1">'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-first d-none"><i class="bi bi-plus-lg me-1"></i>Первая стадия</button>'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-copy" title="Скопировать стадии, чтобы вставить их в другой сценарий"><i class="bi bi-copy me-1"></i>Копировать</button>'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-paste"' + (stageClipboard.length ? '' : ' disabled') + ' title="Заменить стадии этого сценария скопированными"><i class="bi bi-clipboard-plus me-1"></i>Вставить</button>'
-                + '<span class="small text-muted align-self-center op-stage-note" role="status"></span></div></div>';
-        }        if (f.type === 'kv') {
+                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-first d-none"><i class="bi bi-plus-lg me-1"></i>Первая стадия</button></div>';
+        }
+        if (f.type === 'kv') {
             const rows = Object.keys(val || {}).map(k => kvRow(k, val[k], f.ph)).join('');
             return '<div class="col-md-6"><div class="small fw-semibold mb-1">' + f.label + '</div>'
                 + '<div class="op-kv" data-k="' + key + '">' + rows + '</div>'
@@ -232,13 +234,14 @@
             + '<input class="form-control form-control-sm op-f" data-k="' + key + '" data-t="' + f.type + '" type="' + t + '"' + step
             + (t === 'number' ? ' min="0"' : '') + ' placeholder="' + esc(f.ph || '') + '" value="' + esc(val) + '" title="' + esc(f.hint) + '"></div>';
     }
+    // строка стадии: между строками при наведении появляется линия с плюсом (как в Excel), вставляет копию стадии, у границы которой нажали
     function stageRow(d, tg, unit) {
-        return '<div class="input-group input-group-sm mb-1 op-stage">'
+        return '<div class="input-group input-group-sm op-stage">'
             + '<span class="input-group-text stage-lbl">Длительность</span><input class="form-control op-st-d" placeholder="1m" value="' + esc(d) + '">'
             + '<span class="input-group-text">' + esc(unit) + '</span><input class="form-control op-st-t" type="number" step="any" min="0" value="' + esc(tg) + '">'
-            + '<button type="button" class="btn btn-outline-secondary stage-tool op-stage-up" title="Добавить стадию выше (копия этой)" aria-label="Добавить стадию выше"><i class="bi bi-arrow-bar-up"></i></button>'
-            + '<button type="button" class="btn btn-outline-secondary stage-tool op-stage-down" title="Добавить стадию ниже (копия этой)" aria-label="Добавить стадию ниже"><i class="bi bi-arrow-bar-down"></i></button>'
-            + '<button type="button" class="btn btn-outline-danger op-stage-del" title="Убрать стадию" aria-label="Убрать стадию">×</button></div>';
+            + '<button type="button" class="btn btn-outline-danger op-stage-del" title="Убрать стадию" aria-label="Убрать стадию">×</button>'
+            + '<button type="button" class="stage-ins stage-ins-above" title="Добавить стадию выше (копия этой)" aria-label="Добавить стадию выше"><span>+</span></button>'
+            + '<button type="button" class="stage-ins stage-ins-below" title="Добавить стадию ниже (копия этой)" aria-label="Добавить стадию ниже"><span>+</span></button></div>';
     }
     // состояние блока стадий: жёлтые строки прогрева, недоступное удаление единственной стадии прогрева, кнопка «Первая стадия»
     function refreshStages(row) {
@@ -246,23 +249,19 @@
         const box = panel.querySelector('.op-stages');
         if (!box) return;
         const rows = [...box.querySelectorAll('.op-stage')];
-        const on = panel.querySelector('.op-swarm-on'), n = panel.querySelector('.op-swarm-n');
-        let wn = on && on.checked ? Math.max(1, Math.min(rows.length, parseInt(n.value, 10) || 1)) : 0;
-        if (on && on.checked && !rows.length) { on.checked = false; wn = 0; }
-        if (n) { n.max = Math.max(1, rows.length); if (wn) n.value = wn; n.disabled = !wn; }
-        const wbox = panel.querySelector('.stage-warm');
-        if (wbox) wbox.classList.toggle('is-off', !wn);
+        const wn = Math.min(warmOf(row), rows.length);
+        row.dataset.warm = wn;
         rows.forEach((r, i) => {
             r.classList.toggle('is-warm', i < wn);
             r.querySelector('.stage-lbl').textContent = i < wn ? 'Прогрев' : 'Длительность';
-            r.querySelector('.op-stage-del').disabled = wn > 0 && wn === 1 && i === 0; // обязательная стадия прогрева
+            r.querySelector('.op-stage-del').disabled = wn === 1 && i === 0; // обязательная стадия прогрева
         });
         const first = panel.querySelector('.op-stage-first');
         if (first) first.classList.toggle('d-none', rows.length > 0);
     }
     // нормализация прогрева у ramping-*: прогрев - число первых стадий; прежний формат {duration[, target]} превращается в стадии
     function normalizeWarm(exKey, state) {
-        if (exKey.indexOf('ramping') !== 0 || !state.warmup || state.warmup.stages) return state;
+        if (!isRamp(exKey) || !state.warmup || state.warmup.stages) return state;
         const w = state.warmup, st = (state.stages || []).map(x => Object.assign({}, x));
         const startKey = exKey === 'ramping-vus' ? 'startVUs' : 'startRate';
         if (w.target) {
@@ -278,11 +277,8 @@
         state.stages = st;
         return state;
     }
-    function parseDur(v) {
-        const m = /^\s*([0-9]*\.?[0-9]+)\s*(ms|s|m|h)?\s*$/.exec(String(v || ''));
-        if (!m) return 0;
-        return Number(m[1]) * ({ms: 0.001, s: 1, m: 60, h: 3600}[m[2] || 's']);
-    }    function kvRow(k, v, ph) {
+    function warmStage(base) { return {duration: '2m', target: Math.max(1, Math.round((Number(base) || 0) * 0.3))}; }
+    function kvRow(k, v, ph) {
         return '<div class="input-group input-group-sm mb-1 op-kvrow"><input class="form-control op-kv-k" placeholder="' + esc(ph[0]) + '" value="' + esc(k) + '">'
             + '<input class="form-control op-kv-v" placeholder="' + esc(ph[1]) + '" value="' + esc(v) + '">'
             + '<button type="button" class="btn btn-outline-danger op-kv-del" title="Убрать">×</button></div>';
@@ -292,9 +288,18 @@
     function render(row, exKey, state) {
         const ex = EX[exKey];
         state = normalizeWarm(exKey, state);
+        // общий прогрев включён: у сценария со стадиями без прогрева сверху появляются стадии прогрева
+        if (isRamp(exKey) && gwOnEl && gwOnEl.checked && !(state.warmup && state.warmup.stages)) {
+            const n = Math.max(1, parseInt(gwNEl.value, 10) || 1), st = (state.stages || []).map(x => Object.assign({}, x));
+            const w = warmStage(st.length ? st[0].target : 0);
+            for (let i = 0; i < n; i++) st.unshift(Object.assign({}, w));
+            state.stages = st;
+            state.warmup = {stages: n};
+        }
+        row.dataset.warm = isRamp(exKey) && state.warmup && state.warmup.stages ? state.warmup.stages : 0;
         const panel = detailOf(row).querySelector('.op-panel');
         panel.innerHTML = '<div class="op-desc">' + esc(ex.desc) + '</div><div class="row g-2">'
-            + ex.fields.map(k => fieldHtml(k, state[k], exKey, state)).join('') + '</div>';
+            + ex.fields.map(k => fieldHtml(k, state[k], exKey)).join('') + '</div>';
         row.dataset.prev = exKey; // исполнитель, под который отрисована панель
         refreshRow(row);
         refreshStages(row);
@@ -311,16 +316,14 @@
             o[i.dataset.k] = i.dataset.t === 'dur' ? v : Number(v);
         });
         const st = panel.querySelector('.op-stages');
-        if (st) { o.stages = readStages(st); }
-        const sOn = panel.querySelector('.op-swarm-on');
-        if (sOn && sOn.checked && o.stages && o.stages.length) {
-            o.warmup = {stages: Math.max(1, Math.min(o.stages.length, parseInt(panel.querySelector('.op-swarm-n').value, 10) || 1))};
+        if (st) {
+            o.stages = readStages(st);
+            const wn = Math.min(warmOf(row), o.stages.length);
+            if (isRamp(exKey) && wn > 0) o.warmup = {stages: wn};
         }
         const wOn = panel.querySelector('.op-warm-on');
         if (wOn && wOn.checked) {
-            const wd = panel.querySelector('.op-warm-d').value.trim(), wtEl = panel.querySelector('.op-warm-t');
-            o.warmup = {duration: wd};
-            if (wtEl && wtEl.value !== '') o.warmup.target = Number(wtEl.value);
+            o.warmup = {duration: panel.querySelector('.op-warm-d').value.trim()};
         }
         panel.querySelectorAll('.op-kv').forEach(c => {
             const m = {};
@@ -355,6 +358,63 @@
         const count = {};
         rows.forEach(r => count[r.dataset.fn] = (count[r.dataset.fn] || 0) + 1);
         rows.forEach(r => r.querySelector('.op-del').classList.toggle('d-none', count[r.dataset.fn] < 2));
+        document.querySelectorAll('.op-paste').forEach(b => { b.disabled = !scenarioClipboard; });
+    }
+
+    // ---- общий прогрев: один рубильник и число стадий на все сценарии со стадиями
+    function rampRows() { return [...body.querySelectorAll('.op-row')].filter(r => isRamp(r.querySelector('.op-exec').value)); }
+    function gwRefresh() {
+        if (!gwOnEl) return;
+        gwNEl.disabled = !gwOnEl.checked;
+        gwBox.classList.toggle('is-off', !gwOnEl.checked);
+    }
+    function gwFromRows() {
+        if (!gwOnEl) return;
+        const max = Math.max(0, ...rampRows().map(warmOf));
+        gwOnEl.checked = max > 0;
+        if (max > 0) gwNEl.value = max;
+        gwRefresh();
+    }
+    function insertStages(row, atStart, list) {
+        const c = row.querySelector('.op-stages');
+        if (!c) return;
+        const html = list.map(s => stageRow(s.duration, s.target, c.dataset.unit)).join('');
+        if (atStart === 0) c.insertAdjacentHTML('afterbegin', html);
+        else {
+            const rows = c.querySelectorAll('.op-stage');
+            if (atStart <= rows.length && atStart > 0) rows[atStart - 1].insertAdjacentHTML('afterend', html);
+            else c.insertAdjacentHTML('beforeend', html);
+        }
+    }
+    function gwApply() {
+        const on = gwOnEl.checked, n = Math.max(1, parseInt(gwNEl.value, 10) || 1);
+        rampRows().forEach(row => {
+            const c = row.querySelector('.op-stages');
+            if (!c) return;
+            const w = warmOf(row);
+            if (!on) {
+                row.dataset.warm = 0; // стадии прогрева остаются обычными стадиями
+            } else if (w === 0) {
+                const first = c.querySelector('.op-stage .op-st-t');
+                const st = warmStage(first ? first.value : 0);
+                insertStages(row, 0, Array.from({length: n}, () => Object.assign({}, st)));
+                row.dataset.warm = n;
+            } else if (n > w) {
+                const rows = c.querySelectorAll('.op-stage'), last = rows[Math.min(w, rows.length) - 1];
+                const st = {duration: last.querySelector('.op-st-d').value, target: last.querySelector('.op-st-t').value};
+                insertStages(row, w, Array.from({length: n - w}, () => Object.assign({}, st)));
+                row.dataset.warm = n;
+            } else {
+                row.dataset.warm = n; // лишние стадии прогрева становятся обычными
+            }
+            refreshStages(row);
+            sync(row);
+        });
+        gwRefresh();
+    }
+    if (gwOnEl) {
+        gwOnEl.addEventListener('change', () => { gwApply(); markDirty(); });
+        gwNEl.addEventListener('change', () => { if (gwOnEl.checked) { gwApply(); markDirty(); } });
     }
 
     function initRow(row) {
@@ -398,34 +458,37 @@
         if (!row) return;
         if (t.closest('.op-add')) { addScenario(row); markDirty(); return; }
         if (t.closest('.op-del')) { row.remove(); refreshAll(); markDirty(); return; }
-        if (t.closest('.op-stage-up') || t.closest('.op-stage-down')) {
-            // новая стадия - копия той, у которой нажали кнопку, выше или ниже неё; внутри прогрева она тоже становится прогревом
-            const cur = t.closest('.op-stage'), c = row.querySelector('.op-stages'), up = !!t.closest('.op-stage-up');
-            const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur), pos = up ? idx : idx + 1;
-            const on = row.querySelector('.op-swarm-on'), n = row.querySelector('.op-swarm-n');
-            cur.insertAdjacentHTML(up ? 'beforebegin' : 'afterend', stageRow(cur.querySelector('.op-st-d').value, cur.querySelector('.op-st-t').value, c.dataset.unit));
-            if (on && on.checked && pos < (parseInt(n.value, 10) || 1)) n.value = (parseInt(n.value, 10) || 1) + 1;
+        if (t.closest('.op-copy')) {
+            // копируется сценарий целиком: исполнитель и все его параметры (стадии, VU, прогрев)
+            scenarioClipboard = {executor: row.querySelector('.op-exec').value, scenario: collect(row)};
+            try { sessionStorage.setItem('k6lab-scenario', JSON.stringify(scenarioClipboard)); } catch (err) { /* без сохранения между страницами */ }
+            refreshAll();
+            flash(row, 'Скопировано');
+            return;
+        }
+        if (t.closest('.op-paste')) {
+            if (!scenarioClipboard || !EX[scenarioClipboard.executor]) return;
+            row.querySelector('.op-exec').value = scenarioClipboard.executor;
+            render(row, scenarioClipboard.executor, JSON.parse(JSON.stringify(scenarioClipboard.scenario)));
+            if (gwOnEl && !gwOnEl.checked && warmOf(row) > 0) gwFromRows();
+            sync(row);
+            flash(row, 'Вставлено');
+            markDirty();
+            return;
+        }
+        if (t.closest('.stage-ins')) {
+            // новая стадия - копия той, у границы которой нажали плюс; внутри прогрева она тоже становится прогревом
+            const cur = t.closest('.op-stage'), c = row.querySelector('.op-stages'), above = !!t.closest('.stage-ins-above');
+            const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur), pos = above ? idx : idx + 1;
+            cur.insertAdjacentHTML(above ? 'beforebegin' : 'afterend', stageRow(cur.querySelector('.op-st-d').value, cur.querySelector('.op-st-t').value, c.dataset.unit));
+            if (warmOf(row) > 0 && pos < warmOf(row)) row.dataset.warm = warmOf(row) + 1;
         } else if (t.closest('.op-stage-first')) {
             const c = row.querySelector('.op-stages');
             c.insertAdjacentHTML('beforeend', stageRow('1m', 1, c.dataset.unit));
-        } else if (t.closest('.op-stage-copy')) {
-            const st = readStages(row.querySelector('.op-stages'));
-            if (!st.length) { stageNote(row, 'Нет стадий для копирования'); return; }
-            stageClipboard = st;
-            try { sessionStorage.setItem('k6lab-stages', JSON.stringify(st)); } catch (e) { /* без сохранения между страницами */ }
-            document.querySelectorAll('.op-stage-paste').forEach(b => { b.disabled = false; });
-            stageNote(row, 'Скопировано: ' + st.length);
-            return;
-        } else if (t.closest('.op-stage-paste')) {
-            if (!stageClipboard.length) { return; }
-            const c = row.querySelector('.op-stages');
-            c.innerHTML = stageClipboard.map(x => stageRow(x.duration, x.target, c.dataset.unit)).join('');
-            stageNote(row, 'Вставлено: ' + stageClipboard.length);
         } else if (t.closest('.op-stage-del')) {
             const cur = t.closest('.op-stage'), c = row.querySelector('.op-stages');
             const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur);
-            const on = row.querySelector('.op-swarm-on'), n = row.querySelector('.op-swarm-n');
-            if (on && on.checked && idx < (parseInt(n.value, 10) || 1)) n.value = Math.max(1, (parseInt(n.value, 10) || 1) - 1);
+            if (warmOf(row) > 0 && idx < warmOf(row)) row.dataset.warm = Math.max(1, warmOf(row) - 1);
             cur.remove();
         } else if (t.closest('.op-kv-add')) {
             const b = t.closest('.op-kv-add');
@@ -443,27 +506,10 @@
         const row = e.target.closest('.op-row');
         if (!row) return;
         if (e.target.classList.contains('op-on')) { refreshRow(row); return; }
-        if (e.target.classList.contains('op-swarm-on') || e.target.classList.contains('op-swarm-n')) {
-            const c = row.querySelector('.op-stages'), n = row.querySelector('.op-swarm-n');
-            if (e.target.classList.contains('op-swarm-on')) {
-                if (e.target.checked) {
-                    // обязательная стадия прогрева появляется первой в списке: на трети первой стадии, 2 минуты
-                    const first = c.querySelector('.op-stage');
-                    const base = first ? Number(first.querySelector('.op-st-t').value || 0) : 0;
-                    c.insertAdjacentHTML('afterbegin', stageRow('2m', Math.max(1, Math.round(base * 0.3)), c.dataset.unit));
-                    n.value = 1;
-                } else {
-                    stageNote(row, 'Прогрев выключен, стадии оставлены');
-                }
-            }
-            refreshStages(row);
-            sync(row);
-            return;
-        }
         if (e.target.classList.contains('op-warm-on')) {
             const box = e.target.closest('.op-warm'), on = e.target.checked;
             box.classList.toggle('is-off', !on);
-            box.querySelectorAll('.op-warm-d, .op-warm-t').forEach(i => { i.disabled = !on; });
+            box.querySelectorAll('.op-warm-d').forEach(i => { i.disabled = !on; });
             if (on) {
                 const d = box.querySelector('.op-warm-d');
                 if (!d.value.trim()) d.value = '2m';
@@ -497,6 +543,7 @@
     }
 
     body.querySelectorAll('.op-row').forEach(initRow);
+    gwFromRows();
     refreshAll();
     // начальная расстановка не считается правкой
     dirty = false;

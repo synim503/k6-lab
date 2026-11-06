@@ -19,6 +19,9 @@ public class AgentMessageService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentMessageService.class);
 
+    /** Как часто повторять замер расхождения часов агента (на пульсе агента). */
+    static final long CLOCK_PING_PERIOD_MS = 20_000;
+
     private final GeneratorStateService state;
     private final GeneratorMetricsService metrics;
     private final List<AgentEventListener> listeners;
@@ -66,6 +69,15 @@ public class AgentMessageService {
             return;
         }
         session.heartbeat(hb);
+        // часы замеряются не только при подключении: хост мог выровнять или сдвинуть их позже, а устаревший замер блокировал старт
+        if (System.currentTimeMillis() - session.lastPingAtMs() > CLOCK_PING_PERIOD_MS) {
+            session.markPing();
+            try {
+                session.send(new Messages.Ping("clk-" + System.nanoTime(), System.currentTimeMillis()));
+            } catch (IllegalStateException e) {
+                log.debug("Не удалось отправить замер часов {}: {}", session.generatorName(), e.getMessage());
+            }
+        }
         state.onHeartbeat(session.generatorId(), hb);
         metrics.record(session.generatorId(), hb, hb.activeRuns() == null ? 0 : hb.activeRuns().size());
     }
@@ -74,8 +86,9 @@ public class AgentMessageService {
         long t4 = System.currentTimeMillis();
         // NTP-формула: offset = ((t2 - t1) + (t3 - t4)) / 2 - смещение часов агента относительно сервера
         long offset = ((pong.t2() - pong.t1()) + (pong.t3() - t4)) / 2;
-        long median = session.addOffsetSample(offset);
-        state.saveClockOffset(session.generatorId(), median);
+        long rtt = (t4 - pong.t1()) - (pong.t3() - pong.t2());
+        long best = session.addOffsetSample(offset, rtt);
+        state.saveClockOffset(session.generatorId(), best);
     }
 
     private void onSequenced(AgentSession session, Message.Sequenced event) {

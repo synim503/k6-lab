@@ -24,7 +24,6 @@ public class AgentSession {
     private final TokenKind tokenKind;
     private final WebSocketSession ws;
     private final Instant connectedAt = Instant.now();
-    private final Deque<Long> offsetSamples = new ConcurrentLinkedDeque<>();
 
     private volatile long lastSeq;
     private volatile long lastAckedToAgent;
@@ -55,25 +54,53 @@ public class AgentSession {
         }
     }
 
-    /** Добавляет замер смещения часов (агент минус сервер, мс) и возвращает медиану последних 5. */
-    public long addOffsetSample(long offsetMs) {
-        offsetSamples.addLast(offsetMs);
-        while (offsetSamples.size() > 5) {
-            offsetSamples.pollFirst();
-        }
-        List<Long> sorted = new ArrayList<>(offsetSamples);
-        sorted.sort(Long::compare);
-        return sorted.get(sorted.size() / 2);
+    /** Замер смещения часов: смещение (агент минус сервер, мс), круговая задержка и время замера. */
+    private record OffsetSample(long offsetMs, long rttMs, long atMs) {
     }
 
-    /** Текущая медианная оценка смещения часов агента (агент минус сервер, мс) либо null, если замеров ещё нет. */
-    public Long clockOffsetMs() {
-        if (offsetSamples.isEmpty()) {
-            return null;
+    private final Deque<OffsetSample> samples = new ConcurrentLinkedDeque<>();
+    private volatile long lastPingAtMs;
+
+    /**
+     * Добавляет замер смещения часов и возвращает оценку: по замеру с наименьшей круговой задержкой из последних 8
+     * (как в NTP: чем короче путь, тем меньше ошибка из-за несимметричной задержки). Одиночный медленный ответ не искажает оценку.
+     */
+    public long addOffsetSample(long offsetMs, long rttMs) {
+        samples.addLast(new OffsetSample(offsetMs, Math.max(0, rttMs), System.currentTimeMillis()));
+        while (samples.size() > 8) {
+            samples.pollFirst();
         }
-        List<Long> sorted = new ArrayList<>(offsetSamples);
-        sorted.sort(Long::compare);
-        return sorted.get(sorted.size() / 2);
+        return clockOffsetMs();
+    }
+
+    /** Совместимость: замер без измеренной задержки. */
+    public long addOffsetSample(long offsetMs) {
+        return addOffsetSample(offsetMs, 0);
+    }
+
+    /** Текущая оценка смещения часов агента (агент минус сервер, мс) либо null, если замеров ещё нет. */
+    public Long clockOffsetMs() {
+        return samples.stream().min(java.util.Comparator.comparingLong(OffsetSample::rttMs).thenComparing(
+                java.util.Comparator.comparingLong(OffsetSample::atMs).reversed())).map(OffsetSample::offsetMs).orElse(null);
+    }
+
+    /** Сколько мс назад был последний замер; Long.MAX_VALUE, если замеров нет. */
+    public long lastSampleAgeMs() {
+        OffsetSample last = samples.peekLast();
+        return last == null ? Long.MAX_VALUE : System.currentTimeMillis() - last.atMs();
+    }
+
+    /** Забывает прежние замеры (часы могли уйти или быть выровнены после них). */
+    public void resetOffsetSamples() {
+        samples.clear();
+    }
+
+    public long lastPingAtMs() {
+        return lastPingAtMs;
+    }
+
+    public void markPing() {
+        lastPingAtMs = System.currentTimeMillis();
     }
 
     public long generatorId() {

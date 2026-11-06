@@ -357,6 +357,16 @@ html { scroll-behavior: smooth; scroll-padding-top: 72px; }
 .stage-warm-n .op-swarm-n { max-width: 70px; }
 .op-stage.is-warm .input-group-text, .op-stage.is-warm .form-control { background: #fff4d6; border-color: #f0d9a0; }
 .op-stage.is-warm .stage-lbl { color: #8a5a00; font-weight: 600; }
-.op-stage .stage-tool { opacity: 0; transition: opacity .12s; }
-.op-stage:hover .stage-tool, .op-stage:focus-within .stage-tool { opacity: 1; }
-@media (hover: none) { .op-stage .stage-tool { opacity: 1; } }
+.op-stage { position: relative; margin-bottom: .5rem; }
+.op-stages { padding: .15rem 0; }
+/* вставка стадии как в таблице: у границы строк при наведении появляется линия с плюсом */
+.op-stage > .stage-ins { position: absolute; left: 0; right: 0; height: 16px; margin: 0; padding: 0; border: 0; background: transparent; z-index: 3;
+    display: flex; align-items: center; cursor: pointer; opacity: 0; transition: opacity .1s; }
+.op-stage > .stage-ins::before { content: ''; flex: 1; height: 2px; background: var(--k6-primary); border-radius: 2px; }
+.op-stage > .stage-ins span { position: absolute; left: 8px; width: 20px; height: 20px; line-height: 18px; text-align: center; border-radius: 50%;
+    background: var(--k6-primary); color: #fff; font-weight: 700; font-size: 15px; }
+.op-stage > .stage-ins-below { bottom: -12px; }
+.op-stage > .stage-ins-above { top: -12px; display: none; }
+.op-stage:first-child > .stage-ins-above { display: flex; }
+.op-stage > .stage-ins:hover, .op-stage > .stage-ins:focus-visible { opacity: 1; }
+@media (hover: none) { .op-stage > .stage-ins { opacity: .55; } }

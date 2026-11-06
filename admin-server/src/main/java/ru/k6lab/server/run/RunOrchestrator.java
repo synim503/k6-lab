@@ -393,6 +393,41 @@ public class RunOrchestrator implements AgentEventListener {
         fail(ctx, "Генератор " + g.name + " не смог подготовиться: " + reason);
     }
 
+    /**
+     * Расхождение часов агента для синхронного старта. Свежий хороший замер берётся как есть; устаревший или превышающий допуск
+     * замер перед отказом перемеряется заново: раньше единственный замер при подключении мог устареть (часы выровняли после него),
+     * и запуск блокировался, пока агент не переустановят.
+     */
+    private Long freshClockOffset(AgentSession s) {
+        Long cur = s.clockOffsetMs();
+        if (cur != null && Math.abs(cur) <= MAX_CLOCK_SKEW_MS && s.lastSampleAgeMs() < 60_000) {
+            return cur;
+        }
+        s.resetOffsetSamples();
+        for (int i = 0; i < 5; i++) {
+            try {
+                s.send(new Messages.Ping("clk-start-" + System.nanoTime(), System.currentTimeMillis()));
+            } catch (RuntimeException e) {
+                break;
+            }
+        }
+        long deadline = System.currentTimeMillis() + 2500;
+        while (System.currentTimeMillis() < deadline && s.clockOffsetMs() == null) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        try {
+            Thread.sleep(300); // дать прийти остальным ответам: берётся замер с наименьшей задержкой
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return s.clockOffsetMs();
+    }
+
     /** Все PREPARED: проверка часов, затем START всем с общим start_at. */
     private void startAll(Ctx ctx) {
         cancel(ctx.prepareTimeout);
@@ -403,7 +438,7 @@ public class RunOrchestrator implements AgentEventListener {
                 fail(ctx, "Генератор " + g.name + " отключился перед стартом");
                 return;
             }
-            Long off = s.clockOffsetMs();
+            Long off = freshClockOffset(s);
             if (off == null) {
                 fail(ctx, "Не измерено расхождение часов генератора " + g.name + " - синхронный старт невозможен");
                 return;

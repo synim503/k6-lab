@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<body>
+<div id="tuning-table" th:fragment="table"
+     th:hx-get="${anyRunning} ? @{/tuning/table} : null" th:hx-trigger="${anyRunning} ? 'every 3s' : null" th:hx-swap="${anyRunning} ? 'outerHTML' : null">
+    <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead><tr><th style="width:34px"><input class="form-check-input" type="checkbox" onclick="document.querySelectorAll('#tuning-table .tg').forEach(c => { c.checked = this.checked; })" aria-label="Выбрать все"></th>
+            <th>Генератор</th><th>Профиль</th><th>Находки</th><th>Настройки</th><th>Применено</th><th></th></tr></thead>
+        <tbody>
+        <tr th:each="r : ${rows}">
+            <td><input class="form-check-input tg" type="checkbox" name="generatorIds" th:value="${r.generator.id}" th:disabled="${r.generator.sshCredentialId == null}"
+                       th:title="${r.generator.sshCredentialId == null} ? 'Не задана SSH-учётка' : null" th:aria-label="'Выбрать ' + ${r.generator.name}"></td>
+            <td><a class="fw-semibold" th:href="@{/generators/{id}(id=${r.generator.id})}" th:text="${r.generator.name}"></a>
+                <div class="small text-muted" th:text="${r.generator.host}"></div></td>
+            <td class="small">
+                <span th:if="${r.profile == null}" class="text-muted">не снимался</span>
+                <th:block th:if="${r.profile != null}">
+                    <span th:if="${r.profile.status == 'RUNNING'}" class="badge text-bg-primary"><span class="spinner-border spinner-border-sm me-1"></span>идёт измерение</span>
+                    <span th:if="${r.profile.status == 'DONE'}" class="badge text-bg-success">готов</span>
+                    <span th:if="${r.profile.status == 'FAILED'}" class="badge text-bg-danger" th:title="${r.profile.error}">ошибка</span>
+                    <div class="text-muted" th:text="${#temporals.format(r.profile.startedAt, 'dd.MM HH:mm')} + ', ' + ${r.profile.durationSec} + ' с'"></div>
+                    <div class="text-danger" th:if="${r.profile.status == 'FAILED'}" th:text="${r.profile.error}"></div>
+                </th:block></td>
+            <td>
+                <th:block th:if="${r.profile != null and r.profile.status == 'DONE'}">
+                    <span class="badge text-bg-danger" th:if="${r.crit > 0}" th:text="'критично: ' + ${r.crit}"></span>
+                    <span class="badge text-bg-warning" th:if="${r.warn > 0}" th:text="'замечаний: ' + ${r.warn}"></span>
+                    <span class="badge text-bg-success" th:if="${r.crit == 0 and r.warn == 0}">без замечаний</span></th:block></td>
+            <td class="small"><span th:if="${r.profile != null and r.profile.status == 'DONE'}" th:text="${r.settings > 0} ? ${r.settings} + ' можно применить' : 'нечего менять'"></span></td>
+            <td class="small">
+                <span th:if="${r.tuned}" class="badge text-bg-success">применено</span>
+                <span th:if="${r.tuned}" class="text-muted" th:text="${#temporals.format(r.tuning.appliedAt, 'dd.MM HH:mm')}"></span>
+                <span th:if="${!r.tuned and r.tuning != null}" class="text-muted" th:text="${r.tuning.status == 'ROLLED_BACK'} ? 'откачено' : (${r.tuning.status == 'FAILED'} ? 'не применилось' : '')"></span></td>
+            <td class="text-end"><a class="btn btn-sm btn-outline-secondary" th:if="${r.profile != null and r.profile.status == 'DONE'}" th:href="@{/tuning/profile/{id}(id=${r.profile.id})}">Подробнее</a></td>
+        </tr>
+        <tr th:if="${rows.isEmpty()}"><td colspan="7" class="text-muted">Нет генераторов.</td></tr>
+        </tbody></table></div></div>
+</div>
+</body>
+</html>

@@ -387,12 +387,20 @@ public final class K6ConfigGenerator {
             sc.set(e.getKey(), MAPPER.valueToTree(e.getValue()));
         }
         int gens = Math.max(1, in.generatorCount());
+        // preAllocatedVUs и maxVUs задаются на ОДИН генератор: k6 делит VU между генераторами по сегментам, поэтому в общий конфиг
+        // идёт значение, умноженное на число генераторов (так на каждом генераторе остаётся ровно заданный запас VU)
+        for (String k : List.of("preAllocatedVUs", "maxVUs")) {
+            if (params.get(k) instanceof Number n) {
+                long total = Math.max(1, Math.round(n.doubleValue())) * gens;
+                params.put(k, total);
+                sc.put(k, total);
+            }
+        }
         if (gens > 1) {
-            for (String k : List.of("vus", "preAllocatedVUs", "maxVUs")) {
-                if (params.get(k) instanceof Number n && n.longValue() < gens) {
-                    params.put(k, (long) gens);
-                    sc.put(k, (long) gens);
-                }
+            // vus - сама нагрузка (общая): меньше одного VU на генератор не делится, часть генераторов осталась бы без дела
+            if (params.get("vus") instanceof Number n && n.longValue() < gens) {
+                params.put("vus", (long) gens);
+                sc.put("vus", (long) gens);
             }
             if (params.get("maxVUs") instanceof Number mx && params.get("preAllocatedVUs") instanceof Number pr && mx.longValue() < pr.longValue()) {
                 params.put("maxVUs", pr.longValue());

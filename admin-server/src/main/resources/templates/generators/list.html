@@ -8,6 +8,7 @@
         <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-hdd-network"></i></span>Генераторы</h3>
         <div class="d-flex gap-2 flex-wrap">
             <a class="btn btn-outline-secondary" th:href="@{/deployments}"><i class="bi bi-tools me-1"></i>Операции</a>
+            <a class="btn btn-outline-secondary" sec:authorize="hasRole('ADMIN')" th:href="@{/tuning}" title="Узкие места хостов и тюнинг Linux под нагрузкой"><i class="bi bi-speedometer2 me-1"></i>Профилирование</a>
             <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/update-all}" method="post"
                   onsubmit="return confirm(this.dataset.confirm)"
                   th:data-confirm="${outdated > 0} ? 'Обновить агент и k6 на всех генераторах с устаревшей версией? Занятые будут пропущены.' : 'Версии агента на всех генераторах уже совпадают с версией по умолчанию в «Дистрибутивах». Всё равно обновить? Файлы с тем же sha256 не перезаливаются, агент перезапустится. Занятые будут пропущены.'">

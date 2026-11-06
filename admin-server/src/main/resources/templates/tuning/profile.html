@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Профиль хоста</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-speedometer2"></i></span>Профиль: <span th:text="${p.generatorName}"></span></h3>
+        <a class="btn btn-outline-secondary" th:href="@{/tuning}"><i class="bi bi-arrow-left me-1"></i>К списку</a>
+    </div>
+    <div class="text-muted small mb-3" th:text="'Снят ' + ${#temporals.format(p.startedAt, 'dd.MM.yyyy HH:mm:ss')} + ', окно измерения ' + ${p.durationSec} + ' с'"></div>
+
+    <div class="sect-title mt-0"><h5>Находки</h5></div>
+    <div class="list-group mb-4">
+        <div class="list-group-item" th:each="f : ${findings}">
+            <div class="d-flex align-items-start gap-2">
+                <span class="badge mt-1" th:classappend="${f.path('severity').asText() == 'CRIT'} ? 'text-bg-danger' : (${f.path('severity').asText() == 'WARN'} ? 'text-bg-warning' : 'text-bg-secondary')"
+                      th:text="${f.path('severity').asText() == 'CRIT'} ? 'критично' : (${f.path('severity').asText() == 'WARN'} ? 'внимание' : 'инфо')"></span>
+                <div>
+                    <div class="fw-semibold" th:text="${f.path('title').asText()}"></div>
+                    <div class="small text-muted" th:text="${f.path('detail').asText()}"></div>
+                    <div class="small mt-1" th:if="${!f.path('recommended').isNull() and !f.path('recommended').isMissingNode()}">
+                        <code th:text="${f.path('key').asText()}"></code>:
+                        <span class="text-muted" th:text="${f.path('current').asText('—')}"></span> →
+                        <strong th:text="${f.path('recommended').asText()}"></strong></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="sect-title"><h5>Показатели</h5></div>
+    <div class="card mb-4"><div class="table-responsive"><table class="table table-sm mb-0" th:if="${m != null}">
+        <tbody>
+        <tr><th>Ядро, процессоров, память</th><td th:text="${m.path('kernel').asText('—')} + ', ' + ${m.path('cpus').asText()} + ' CPU, ' + ${m.path('memTotalKb').asLong() / 1024} + ' МБ (доступно ' + ${m.path('memAvailKb').asLong() / 1024} + ' МБ)'"></td></tr>
+        <tr><th>CPU за окно</th><td th:text="'занят ' + ${m.path('cpuBusyPct').asText('—')} + '%: user ' + ${m.path('cpuUserPct').asText('—')} + '%, system ' + ${m.path('cpuSystemPct').asText('—')} + '%, softirq ' + ${m.path('cpuSoftirqPct').asText('—')} + '%, steal ' + ${m.path('cpuStealPct').asText('—')} + '%, iowait ' + ${m.path('cpuIowaitPct').asText('—')} + '%'"></td></tr>
+        <tr><th>Сеть</th><td th:text="${m.path('iface').asText('—')} + ': приём ' + ${m.path('rxMbit').asText('—')} + ' Мбит/с, передача ' + ${m.path('txMbit').asText('—')} + ' Мбит/с, скорость карты ' + ${m.path('speedMbit').asText('—')} + ' Мбит/с'"></td></tr>
+        <tr><th>Потери в сети</th><td th:text="'ошибок интерфейса ' + ${m.path('nicErrors').asText('0')} + ', отброшено ' + ${m.path('nicDrops').asText('0')} + ', отброшено ядром в очереди ' + ${m.path('softnetDropped').asText('0')}"></td></tr>
+        <tr><th>TCP</th><td th:text="'повторных передач ' + ${m.path('tcpRetransPct').asText('—')} + '%, соединений в работе ' + ${m.path('tcpInUse').asText('—')} + ', TIME_WAIT ' + ${m.path('tcpTimeWait').asText('—')} + ', переполнений очереди ' + ${m.path('listenOverflows').asText('0')}"></td></tr>
+        <tr th:if="${!m.path('k6').isEmpty()}"><th>Процессы k6</th><td>
+            <div th:each="k : ${m.path('k6')}" class="small" th:text="'pid ' + ${k.path('pid').asText()} + ': дескрипторов ' + ${k.path('fds').asText()} + ', лимит ' + (${k.path('soft').asLong() == 9223372036854775807L} ? 'без ограничения' : ${k.path('soft').asText()})"></div></td></tr>
+        <tr th:if="${!m.path('conntrackMax').isNull()}"><th>conntrack</th><td th:text="${m.path('conntrackCount').asText('—')} + ' из ' + ${m.path('conntrackMax').asText('—')}"></td></tr>
+        </tbody></table></div></div>
+
+    <div class="sect-title"><h5>Параметры ядра сейчас</h5></div>
+    <div class="card"><div class="table-responsive"><table class="table table-sm mb-0" th:if="${m != null}">
+        <tbody>
+        <tr th:each="e : ${m.path('sysctl').properties()}"><td><code th:text="${e.key}"></code></td><td th:text="${e.value.asText()}"></td></tr>
+        </tbody></table></div></div>
+</th:block>
+</body>
+</html>

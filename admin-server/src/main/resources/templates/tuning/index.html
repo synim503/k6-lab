@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Профилирование хостов</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-speedometer2"></i></span>Профилирование хостов</h3>
+        <a class="btn btn-outline-secondary" th:href="@{/generators}"><i class="bi bi-arrow-left me-1"></i>К генераторам</a>
+    </div>
+
+    <div class="alert alert-info py-2 small">
+        <i class="bi bi-info-circle me-1"></i>Запустите профилирование <strong>во время нагрузочного теста</strong>: админка по SSH только читает показатели хоста
+        (процессор, сеть, очереди ядра, порты, лимиты файлов, память) и ищет то, что ограничивает нагрузку. Затем рекомендованные настройки ядра можно применить
+        на выбранных хостах одним действием и откатить к исходным значениям. Настройки пишутся в <code th:text="${conf}"></code>.</div>
+
+    <form id="tf" th:action="@{/tuning/profile}" method="post">
+        <div class="card mb-3"><div class="card-body d-flex flex-wrap align-items-center gap-3">
+            <div class="input-group input-group-sm" style="width:260px"><span class="input-group-text">Длительность измерения</span>
+                <input class="form-control" type="number" name="seconds" value="30" th:min="${minSeconds}" th:max="${maxSeconds}" aria-label="Длительность измерения, секунд">
+                <span class="input-group-text">с</span></div>
+            <button class="btn btn-primary"><i class="bi bi-play-fill me-1"></i>Профилировать выбранные</button>
+            <button class="btn btn-warning" th:formaction="@{/tuning/apply}"
+                    onclick="return confirm('Применить рекомендованные настройки ядра на выбранных хостах? Исходные значения будут сохранены, откат возможен.')"><i class="bi bi-sliders me-1"></i>Применить рекомендации</button>
+            <button class="btn btn-outline-secondary" th:formaction="@{/tuning/rollback}"
+                    onclick="return confirm('Вернуть исходные значения настроек на выбранных хостах?')"><i class="bi bi-arrow-counterclockwise me-1"></i>Откатить</button>
+            <span class="small text-muted">Отметьте хосты в таблице. SSH-учётка генератора должна иметь root или sudo.</span>
+        </div></div>
+
+        <div th:replace="~{tuning/_table :: table}"></div>
+    </form>
+
+    <div class="sect-title"><h5>История применений</h5></div>
+    <div class="card"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+        <thead><tr><th>Когда</th><th>Хост</th><th>Кто</th><th>Состояние</th><th>Параметры</th></tr></thead>
+        <tbody>
+        <tr th:each="t : ${history}">
+            <td class="text-nowrap small" th:text="${#temporals.format(t.appliedAt, 'dd.MM.yyyy HH:mm')}"></td>
+            <td th:text="${t.generatorName}"></td>
+            <td class="small" th:text="${t.appliedBy}"></td>
+            <td><span class="badge" th:classappend="${t.status == 'APPLIED'} ? 'text-bg-success' : (${t.status == 'FAILED'} ? 'text-bg-danger' : 'text-bg-secondary')"
+                      th:text="${t.status == 'APPLIED'} ? 'применено' : (${t.status == 'ROLLED_BACK'} ? 'откачено' : (${t.status == 'REPLACED'} ? 'заменено новым' : 'не применилось'))"></span>
+                <span class="small text-muted" th:if="${t.rolledBackAt != null}" th:text="${#temporals.format(t.rolledBackAt, 'dd.MM HH:mm')}"></span></td>
+            <td class="small"><span th:each="c : ${t.changes}" class="me-2 text-nowrap"><code th:text="${c.path('key').asText()}"></code>
+                <span class="text-muted" th:text="${c.path('previous').asText()} + ' → ' + ${c.path('applied').asText()}"></span></span></td>
+        </tr>
+        <tr th:if="${history.isEmpty()}"><td colspan="5" class="text-muted">Настройки ещё не применялись.</td></tr>
+        </tbody></table></div></div>
+</th:block>
+</body>
+</html>

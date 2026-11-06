@@ -72,9 +72,16 @@ class WebSecurityIT extends AbstractIT {
     @WithMockUser(roles = "ADMIN")
     void adminPagesRender() throws Exception {
         for (String path : new String[]{"/", "/generators", "/generators/table", "/generators/new", "/generators/bulk",
-                "/deployments", "/distributions", "/ssh-credentials", "/ssh-credentials/new", "/users"}) {
+                "/deployments", "/distributions", "/ssh-credentials", "/ssh-credentials/new", "/users", "/tuning", "/tuning/table"}) {
             mvc.perform(get(path)).andExpect(status().isOk());
         }
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void tuningIsForbiddenForNonAdmins() throws Exception {
+        mvc.perform(get("/tuning")).andExpect(status().isForbidden());
+        mvc.perform(post("/tuning/apply").with(csrf()).param("generatorIds", "1")).andExpect(status().isForbidden());
     }
 
     @Test

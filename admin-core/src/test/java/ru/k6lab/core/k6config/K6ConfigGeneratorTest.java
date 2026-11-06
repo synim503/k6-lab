@@ -181,6 +181,24 @@ class K6ConfigGeneratorTest {
     }
 
     @Test
+    void preAllocatedAndMaxVusAreSetPerGeneratorAndMultipliedByGeneratorCount() {
+        var op = custom("car", "work", "constant-arrival-rate", Map.of("rate", 500, "timeUnit", "1s", "duration", "5m",
+                "preAllocatedVUs", 5, "maxVUs", 200));
+        JsonNode one = K6ConfigGenerator.generate(new ConfigInput(List.of(op), steps(100), 30, 30, 1, 1.5, 3, false)).config().path("scenarios").path("car");
+        JsonNode ten = K6ConfigGenerator.generate(new ConfigInput(List.of(op), steps(100), 30, 30, 10, 1.5, 3, false)).config().path("scenarios").path("car");
+        assertThat(one.path("preAllocatedVUs").asInt()).isEqualTo(5);
+        assertThat(one.path("maxVUs").asInt()).isEqualTo(200);
+        // k6 делит значения между генераторами: на каждом остаётся ровно заданный запас
+        assertThat(ten.path("preAllocatedVUs").asInt()).isEqualTo(50);
+        assertThat(ten.path("maxVUs").asInt()).isEqualTo(2000);
+        // сама нагрузка (rate, vus) на генераторы не умножается
+        assertThat(ten.path("rate").asInt()).isEqualTo(500);
+        var vus = custom("soak", "work", "constant-vus", Map.of("vus", 3, "duration", "1m"));
+        assertThat(K6ConfigGenerator.generate(new ConfigInput(List.of(vus), steps(100), 30, 30, 10, 1.5, 3, false))
+                .config().path("scenarios").path("soak").path("vus").asInt()).isEqualTo(10); // не меньше одного VU на генератор
+    }
+
+    @Test
     void warmupThresholdsWithoutHelperStayOnTheWholeScenario() {
         var ops = List.of(custom("soak", "work", "constant-vus", Map.of("vus", 3, "duration", "1m", "warmup", Map.of("duration", "20s"))));
         var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, false));
