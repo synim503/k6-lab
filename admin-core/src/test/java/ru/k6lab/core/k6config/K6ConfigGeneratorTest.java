@@ -155,6 +155,32 @@ class K6ConfigGeneratorTest {
     }
 
     @Test
+    void warmupAsFirstStagesOfRampingScenarioKeepsStagesAsTheyAreAndMarksTheWindow() {
+        var stages = List.of(Map.of("duration", "5m", "target", 125), Map.of("duration", "30s", "target", 250), Map.of("duration", "1h", "target", 250));
+        var rar = custom("rar", "work", "ramping-arrival-rate", Map.of("startRate", 0, "timeUnit", "1s", "preAllocatedVUs", 5, "maxVUs", 20,
+                "stages", stages, "warmup", Map.of("stages", 2), "startTime", "10s"));
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(rar), steps(100), 30, 30, 1, 1.5, 3, false));
+        JsonNode sc = cfg.config().path("scenarios").path("rar");
+        // стадии не переписываются, прогрев - первые две: 5m + 30s после старта сценария
+        assertThat(sc.path("stages").size()).isEqualTo(3);
+        assertThat(sc.has("warmup")).isFalse();
+        assertThat(K6ConfigGenerator.warmupEndSec(rar)).isEqualTo(10 + 300 + 30);
+        assertThat(sc.path("env").path(K6ConfigGenerator.WARMUP_END_ENV).asText()).isEqualTo("340000");
+        assertThat(K6ConfigGenerator.warmupRatePerSec(rar)).isEqualTo(125);
+        // число стадий прогрева - от 1 до числа стадий
+        for (int bad : new int[]{0, 4}) {
+            var op = custom("x", "work", "ramping-arrival-rate", Map.of("startRate", 0, "timeUnit", "1s", "preAllocatedVUs", 5, "maxVUs", 20,
+                    "stages", stages, "warmup", Map.of("stages", bad)));
+            assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(op), steps(100), 30, 30, 1, 1.5, 3, false)))
+                    .hasMessageContaining("первые стадии");
+        }
+        // у constant-* стадий нет
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("c", "work", "constant-vus",
+                Map.of("vus", 2, "duration", "1m", "warmup", Map.of("stages", 1)))), steps(100), 30, 30, 1, 1.5, 3, false)))
+                .hasMessageContaining("первые стадии");
+    }
+
+    @Test
     void warmupThresholdsWithoutHelperStayOnTheWholeScenario() {
         var ops = List.of(custom("soak", "work", "constant-vus", Map.of("vus", 3, "duration", "1m", "warmup", Map.of("duration", "20s"))));
         var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, false));

@@ -276,6 +276,15 @@ public final class K6ConfigGenerator {
         if (!(w instanceof Map<?, ?> m)) {
             throw new IllegalArgumentException("Операция «" + op.name() + "»: прогрев задаётся длительностью (у ramping-* ещё и интенсивностью)");
         }
+        if (m.get("stages") != null) {
+            // прогрев - первые N стадий сценария: исполнитель со стадиями, N не больше их числа
+            int total = op.scenario().get("stages") instanceof List<?> l ? l.size() : 0;
+            if (!ramping(op.executor()) || !(m.get("stages") instanceof Number n) || n.intValue() < 1 || n.intValue() > total) {
+                throw new IllegalArgumentException("Операция «" + op.name() + "»: прогрев - это первые стадии сценария ramping-*, "
+                        + "их число от 1 до " + total);
+            }
+            return;
+        }
         double sec = durationSec(String.valueOf(m.get("duration")));
         if (sec < WARMUP_MIN_SEC || sec > WARMUP_MAX_SEC) {
             throw new IllegalArgumentException("Операция «" + op.name() + "»: длительность прогрева от 5 секунд до 1 часа, например 2m или 90s");
@@ -303,13 +312,28 @@ public final class K6ConfigGenerator {
             return 0;
         }
         double start = ConfigDuration.parse(String.valueOf(op.scenario().getOrDefault("startTime", "0s")), 0);
+        if (w.get("stages") instanceof Number n && op.scenario().get("stages") instanceof List<?> stages) {
+            double sum = 0;
+            for (int i = 0; i < Math.min(n.intValue(), stages.size()); i++) {
+                sum += stages.get(i) instanceof Map<?, ?> st ? durationSec(String.valueOf(st.get("duration"))) : 0;
+            }
+            return (int) Math.round(start + sum);
+        }
         return (int) Math.round(start + durationSec(String.valueOf(w.get("duration"))));
     }
 
     /** Интенсивность прогрева в оп/с (только ramping-arrival-rate со своей интенсивностью прогрева); иначе плана по оп/с нет - 0. */
     public static double warmupRatePerSec(OperationSpec op) {
         Map<?, ?> w = warmOf(op);
-        if (w == null || !"ramping-arrival-rate".equals(op.executor()) || !(w.get("target") instanceof Number n)) {
+        if (w == null || !"ramping-arrival-rate".equals(op.executor())) {
+            return 0;
+        }
+        Object t = w.get("target");
+        if (w.get("stages") != null && op.scenario().get("stages") instanceof List<?> stages && !stages.isEmpty()
+                && stages.get(0) instanceof Map<?, ?> first) {
+            t = first.get("target"); // интенсивность первой стадии прогрева
+        }
+        if (!(t instanceof Number n)) {
             return 0;
         }
         double unit = durationSec(String.valueOf(op.scenario().getOrDefault("timeUnit", "1s")));
@@ -321,8 +345,8 @@ public final class K6ConfigGenerator {
      * сценария и его собственные стадии. Исполнитель остаётся прежним.
      */
     private static void applyWarmup(OperationSpec op, ObjectNode sc, Map<?, ?> warm, int gens) {
-        if (!ramping(op.executor()) || !(warm.get("target") instanceof Number num)) {
-            return; // без своей интенсивности прогрев - только отрезок времени
+        if (warm.get("stages") != null || !ramping(op.executor()) || !(warm.get("target") instanceof Number num)) {
+            return; // прогрев - первые стадии самого сценария либо только отрезок времени: стадии не меняются
         }
         long sec = Math.round(durationSec(String.valueOf(warm.get("duration"))));
         double wt = num.doubleValue();

@@ -350,3 +350,13 @@ html { scroll-behavior: smooth; scroll-padding-top: 72px; }
 .op-warm .op-warm-d { width: 90px; }
 .op-warm .op-warm-t { width: 90px; }
 .op-warm-help { flex: 1 1 100%; }
+/* стадии сценария: прогрев - первые жёлтые строки, кнопки вставки появляются при наведении */
+.stage-warm { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .5rem .75rem; margin-bottom: .5rem; border: 1px solid #f3dcae; background: #fffaf0; border-radius: .6rem; }
+.stage-warm.is-off { border-color: var(--k6-border); background: #fafbfe; }
+.stage-warm-n { width: auto; max-width: 260px; flex: none; }
+.stage-warm-n .op-swarm-n { max-width: 70px; }
+.op-stage.is-warm .input-group-text, .op-stage.is-warm .form-control { background: #fff4d6; border-color: #f0d9a0; }
+.op-stage.is-warm .stage-lbl { color: #8a5a00; font-weight: 600; }
+.op-stage .stage-tool { opacity: 0; transition: opacity .12s; }
+.op-stage:hover .stage-tool, .op-stage:focus-within .stage-tool { opacity: 1; }
+@media (hover: none) { .op-stage .stage-tool { opacity: 1; } }
