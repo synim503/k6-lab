@@ -25,6 +25,7 @@
 
     <ul class="nav nav-tabs mb-3">
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-metrics" type="button"><i class="bi bi-graph-up me-1"></i>Метрики</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-system" type="button"><i class="bi bi-cpu me-1"></i>Системные метрики</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-results" type="button" id="results-tab-btn"><i class="bi bi-clipboard-data me-1"></i>Результаты</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs" type="button"><i class="bi bi-terminal me-1"></i>Логи</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-snapshot" type="button"><i class="bi bi-camera me-1"></i>Параметры запуска</button></li>
@@ -39,6 +40,11 @@
                 <thead><tr><th>Операция</th><th>Интенсивность факт / план, оп/с</th><th>Время ответа / SLA</th><th>Ошибки / порог</th><th>Dropped</th><th>Нарушения</th></tr></thead>
                 <tbody id="metric-table"><tr><td colspan="6" class="text-muted">Нет данных</td></tr></tbody></table></div>
             <div class="row g-3" id="metric-charts"></div>
+        </div>
+        <div class="tab-pane fade" id="tab-system">
+            <div class="small text-muted mb-2">Состояние самого k6 по всем генераторам: сколько VU задействовано и сколько их доступно, сколько итераций k6 не успел запустить (dropped).
+                Рост dropped при упирающемся в максимум числе VU означает, что нагрузка не достигает заданной интенсивности.</div>
+            <div class="row g-3" id="system-charts"></div>
         </div>
         <div class="tab-pane fade" id="tab-results">
             <div id="results-box" th:attr="hx-get=@{/runs/{id}/results(id=${run.id})}" hx-trigger="load, click from:#results-tab-btn" hx-swap="innerHTML">

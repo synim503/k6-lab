@@ -142,6 +142,10 @@ public class RunMonitor {
         json.put("lagSec", lag);
         json.put("step", stepNo);
         json.put("phase", current == null ? "" : inWarmup(snap, current, now) ? "warmup" : hold ? "hold" : "ramp");
+        // системные метрики: VU задействованные и максимум по всем генераторам (вкладка «Системные метрики»)
+        PromQueries.Names n0 = names.names();
+        putD(json, "vus", scalar(prom.query(p, PromQueries.totalVus(n0, run.getId()), now)));
+        putD(json, "vusMax", scalar(prom.query(p, PromQueries.totalVusMax(n0, run.getId()), now)));
         json.put("elapsedSec", elapsed);
         json.put("windowSec", window);
         ArrayNode ra = json.putArray("rows");
@@ -301,6 +305,11 @@ public class RunMonitor {
             }
         }
         return m;
+    }
+
+    /** Значение запроса-агрегата sum(...): один сэмпл без меток либо null, если данных нет. */
+    private static Double scalar(List<PrometheusClient.Sample> samples) {
+        return samples.isEmpty() ? null : samples.get(0).value();
     }
 
     private static void putD(ObjectNode o, String k, Double v) {

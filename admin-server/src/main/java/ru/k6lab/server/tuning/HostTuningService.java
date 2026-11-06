@@ -7,6 +7,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import ru.k6lab.server.audit.AuditService;
+import ru.k6lab.server.deploy.DeployStore;
+import ru.k6lab.server.deploy.Deployment;
 import ru.k6lab.server.generator.Generator;
 import ru.k6lab.server.generator.GeneratorRepository;
 import ru.k6lab.server.ssh.SshConnection;
@@ -17,6 +19,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,7 +34,7 @@ import java.util.regex.Pattern;
 /**
  * Профилирование хостов-генераторов по SSH и применение рекомендованных настроек ядра с возможностью отката.
  * Профилирование только читает. Применение пишет файл {@value #CONF} и вызывает sysctl; исходные значения каждого параметра
- * сохраняются в БД, откат возвращает именно их (а не «значения по умолчанию») и удаляет файл.
+ * сохраняются в БД, откат возвращает именно их (а не «значения по умолчанию») и удаляет файл. Каждое действие попадает в журнал операций.
  */
 @Service
 public class HostTuningService {
@@ -52,6 +55,7 @@ public class HostTuningService {
     private final SshConnector connector;
     private final HostTuningStore store;
     private final AuditService audit;
+    private final DeployStore deployStore;
     private final String script;
     private final ExecutorService pool = Executors.newFixedThreadPool(8, r -> {
         Thread t = new Thread(r, "host-tuning");
@@ -60,12 +64,13 @@ public class HostTuningService {
     });
 
     public HostTuningService(GeneratorRepository generators, SshCredentialService credentials, SshConnector connector,
-                             HostTuningStore store, AuditService audit) {
+                             HostTuningStore store, AuditService audit, DeployStore deployStore) {
         this.generators = generators;
         this.credentials = credentials;
         this.connector = connector;
         this.store = store;
         this.audit = audit;
+        this.deployStore = deployStore;
         try (var in = new ClassPathResource("tuning/profile.sh").getInputStream()) {
             this.script = new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");
         } catch (IOException e) {
@@ -76,6 +81,42 @@ public class HostTuningService {
     @PostConstruct
     void init() {
         store.failStaleProfiles();
+    }
+
+    // ------------------------------------------------------------------ журнал операций
+
+    /** Запись в журнале «Операции»: что сделано на хосте, по шагам. */
+    private final class Op {
+        final long id;
+        private final List<Deployment.StepInfo> steps = new ArrayList<>();
+        private final StringBuilder text = new StringBuilder();
+
+        Op(Generator g, Deployment.Operation operation, String user, Map<String, Object> params) {
+            Deployment d = new Deployment();
+            d.setGeneratorId(g.getId());
+            d.setTargetHost(g.getHost());
+            d.setOperation(operation);
+            d.setStatus(Deployment.Status.RUNNING);
+            d.setStartedBy(user == null ? "system" : user);
+            d.setStartedAt(Instant.now());
+            d.setParams(new LinkedHashMap<>(params));
+            this.id = deployStore.create(d).getId();
+        }
+
+        void step(String name, String status, String message) {
+            Instant now = Instant.now();
+            steps.add(new Deployment.StepInfo(steps.size() + 1, name, status, message, now, now));
+            text.append("▶ Шаг ").append(steps.size()).append(": ").append(name);
+            if (message != null && !message.isBlank()) {
+                text.append(" — ").append(message);
+            }
+            text.append('\n');
+            deployStore.saveProgress(id, steps, text.toString());
+        }
+
+        void finish(boolean ok, String error) {
+            deployStore.finish(id, ok ? Deployment.Status.SUCCEEDED : Deployment.Status.FAILED, error, steps, text.toString());
+        }
     }
 
     // ------------------------------------------------------------------ профилирование
@@ -93,13 +134,15 @@ public class HostTuningService {
             }
             long profileId = store.createProfile(g.getId(), g.getName(), seconds);
             audit.record("host.profile", "generator", g.getId(), Map.of("seconds", seconds, "by", String.valueOf(user)));
-            pool.submit(() -> profile(g, profileId, seconds));
+            Op op = new Op(g, Deployment.Operation.PROFILE, user, Map.of("seconds", seconds));
+            pool.submit(() -> profile(g, profileId, seconds, op));
         }
         return problems;
     }
 
-    private void profile(Generator g, long profileId, int seconds) {
+    private void profile(Generator g, long profileId, int seconds, Op op) {
         try (SshConnection ssh = connect(g)) {
+            op.step("Подключение по SSH", "OK", g.getHost());
             String cmd = script.replace("@SECS@", String.valueOf(seconds)).replace("@KEYS@", String.join(" ", TuningAnalyzer.KEYS));
             var r = ssh.sudo(cmd, Duration.ofSeconds(seconds + 60L));
             boolean limited = false;
@@ -111,6 +154,7 @@ public class HostTuningService {
             if (r.stdout().isBlank()) {
                 throw new IllegalStateException("Скрипт не вернул данных" + (r.stderr().isBlank() ? "" : ": " + r.stderr().strip()));
             }
+            op.step("Снятие показателей за " + seconds + " с", "OK", limited ? "без прав root" : null);
             HostMetrics m = HostMetricsParser.parse(r.stdout(), seconds);
             TuningAnalyzer.Analysis a = TuningAnalyzer.analyze(m);
             List<TuningAnalyzer.Finding> findings = new ArrayList<>(a.findings());
@@ -119,33 +163,75 @@ public class HostTuningService {
                         "sudo для SSH-учётки не работает: часть показателей (например, дескрипторы процессов k6) могла быть недоступна.", null, null, null));
             }
             store.finishProfile(profileId, "DONE", null, m, findings);
+            long crit = findings.stream().filter(f -> f.severity() == TuningAnalyzer.Severity.CRIT).count();
+            long warn = findings.stream().filter(f -> f.severity() == TuningAnalyzer.Severity.WARN).count();
+            op.step("Анализ", "OK", "критично: " + crit + ", замечаний: " + warn + ", настроек для применения: " + a.recommended().size());
+            op.finish(true, null);
         } catch (RuntimeException e) {
             log.warn("Профилирование {} не удалось: {}", g.getName(), e.toString());
             store.finishProfile(profileId, "FAILED", message(e), null, null);
+            op.step("Профилирование", "FAILED", message(e));
+            op.finish(false, message(e));
         }
     }
 
     // ------------------------------------------------------------------ применение
 
-    /** Применяет рекомендации последнего профиля к выбранным генераторам. Возвращает по строке-результату на генератор. */
+    /** Применяет рекомендации последнего профиля каждого хоста к нему самому. */
     public List<String> apply(List<Long> generatorIds, String user) {
-        return runAll(load(generatorIds), g -> applyOne(g, user));
+        return runAll(load(generatorIds), g -> applyOne(g, user, null, null));
+    }
+
+    /**
+     * Раскатывает одинаковый набор настроек: берутся рекомендации профиля генератора {@code sourceId} (обычно с наибольшим числом
+     * изменений) и применяются на всех выбранных хостах; пустой список - на всех, где задана SSH-учётка.
+     */
+    public List<String> rollout(long sourceId, List<Long> targetIds, String user) {
+        HostTuningStore.Profile src = store.latestDone(sourceId).orElseThrow(
+                () -> new IllegalArgumentException("У эталонного хоста нет готового профиля"));
+        Map<String, String> wanted = recommended(src);
+        if (wanted.isEmpty()) {
+            throw new IllegalArgumentException("В профиле эталонного хоста нет настроек для применения");
+        }
+        List<Generator> targets = targetIds == null || targetIds.isEmpty()
+                ? generators.findAll().stream().filter(g -> g.getSshCredentialId() != null).toList()
+                : load(targetIds);
+        return runAll(targets, g -> applyOne(g, user, wanted, src.generatorName()));
     }
 
     public List<String> rollback(List<Long> generatorIds, String user) {
         return runAll(load(generatorIds), g -> rollbackOne(g, user));
     }
 
-    private String applyOne(Generator g, String user) {
-        HostTuningStore.Profile p = store.latestDone(g.getId()).orElse(null);
-        if (p == null) {
-            return "нет профиля: сначала запустите профилирование";
+    /** Возвращает в исходное состояние все хосты, на которых действует применённый тюнинг. */
+    public List<String> rollbackAll(String user) {
+        List<Long> ids = generators.findAll().stream().map(Generator::getId)
+                .filter(id -> !store.activeTunings(id).isEmpty()).toList();
+        if (ids.isEmpty()) {
+            throw new IllegalArgumentException("Нет хостов с применённым тюнингом");
         }
-        Map<String, String> wanted = recommended(p);
-        if (wanted.isEmpty()) {
-            return "рекомендаций по настройкам нет";
+        return rollback(ids, user);
+    }
+
+    private String applyOne(Generator g, String user, Map<String, String> forced, String sourceName) {
+        Map<String, String> wanted = forced;
+        if (wanted == null) {
+            HostTuningStore.Profile p = store.latestDone(g.getId()).orElse(null);
+            if (p == null) {
+                return "нет профиля: сначала запустите профилирование";
+            }
+            wanted = recommended(p);
+            if (wanted.isEmpty()) {
+                return "рекомендаций по настройкам нет";
+            }
         }
+        if (g.getSshCredentialId() == null) {
+            return "не задана SSH-учётка";
+        }
+        Op op = new Op(g, Deployment.Operation.TUNE_APPLY, user,
+                Map.of("settings", wanted.size(), "source", sourceName == null ? "собственный профиль" : sourceName));
         try (SshConnection ssh = connect(g)) {
+            op.step("Подключение по SSH", "OK", g.getHost());
             List<HostTuningStore.Tuning> active = store.activeTunings(g.getId());
             Map<String, String> original = new LinkedHashMap<>();   // исходное значение до первого применения
             Map<String, String> desired = new LinkedHashMap<>();    // что должно стоять (ранее применённое + новое)
@@ -158,6 +244,7 @@ public class HostTuningService {
             desired.putAll(wanted);
             Map<String, String> current = read(ssh, new ArrayList<>(desired.keySet()));
             desired.keySet().forEach(k -> original.putIfAbsent(k, current.getOrDefault(k, "")));
+            op.step("Сохранены исходные значения", "OK", original.size() + " параметров");
 
             StringBuilder conf = new StringBuilder("# Настройки ядра от k6-lab (профилирование хоста). Откат - в админке.\n");
             desired.forEach((k, v) -> conf.append(k).append(" = ").append(v).append('\n'));
@@ -178,19 +265,26 @@ public class HostTuningService {
                 c.put("applied", actual);
                 c.put("ok", ok);
                 changes.add(c);
+                op.step("Параметр " + e.getKey(), ok ? "OK" : "FAILED",
+                        original.getOrDefault(e.getKey(), "") + " → " + actual + (ok ? "" : " (запрошено " + e.getValue() + ")"));
             }
             String err = r.ok() ? null : (r.stderr().isBlank() ? "sysctl вернул код " + r.exitCode() : r.stderr().strip());
             if (okCount == 0) {
                 ssh.sudo("rm -f " + CONF, Duration.ofSeconds(20));
                 store.insertTuning(g.getId(), g.getName(), user, "FAILED", changes, err);
-                return "не применилось: " + (err == null ? "значения не изменились" : err) + " (в контейнерах и ограниченных окружениях это нормально)";
+                String msg = err == null ? "значения не изменились" : err;
+                op.finish(false, msg);
+                return "не применилось: " + msg + " (в контейнерах и ограниченных окружениях это нормально)";
             }
             // новая запись заменяет прежние: исходные значения перенесены в неё
             store.markReplaced(g.getId());
             store.insertTuning(g.getId(), g.getName(), user, "APPLIED", changes, err);
             audit.record("host.tuning.apply", "generator", g.getId(), Map.of("changes", changes.size(), "by", String.valueOf(user)));
+            op.finish(true, err);
             return "применено параметров: " + okCount + " из " + changes.size() + (err == null ? "" : " (" + err + ")");
         } catch (RuntimeException e) {
+            op.step("Применение", "FAILED", message(e));
+            op.finish(false, message(e));
             return "ошибка: " + message(e);
         }
     }
@@ -206,7 +300,9 @@ public class HostTuningService {
                 original.putIfAbsent(c.path("key").asText(), c.path("previous").asText());
             }
         }
+        Op op = new Op(g, Deployment.Operation.TUNE_ROLLBACK, user, Map.of("settings", original.size()));
         try (SshConnection ssh = connect(g)) {
+            op.step("Подключение по SSH", "OK", g.getHost());
             StringBuilder cmd = new StringBuilder("rm -f ").append(CONF).append("; rc=0; ");
             for (Map.Entry<String, String> e : original.entrySet()) {
                 String v = norm(e.getValue());
@@ -220,17 +316,25 @@ public class HostTuningService {
             Map<String, String> after = read(ssh, new ArrayList<>(original.keySet()));
             List<String> notRestored = new ArrayList<>();
             original.forEach((k, v) -> {
-                if (!norm(v).isEmpty() && !norm(after.getOrDefault(k, "")).equals(norm(v))) {
+                boolean ok = norm(v).isEmpty() || norm(after.getOrDefault(k, "")).equals(norm(v));
+                if (!ok) {
                     notRestored.add(k);
                 }
+                op.step("Параметр " + k, ok ? "OK" : "FAILED", after.getOrDefault(k, "") + (ok ? " (исходное)" : " (ожидалось " + norm(v) + ")"));
             });
+            op.step("Файл " + CONF + " удалён", "OK", null);
             store.markRolledBack(g.getId());
             audit.record("host.tuning.rollback", "generator", g.getId(), Map.of("by", String.valueOf(user)));
             if (!notRestored.isEmpty()) {
-                return "откат выполнен, но не вернулись: " + String.join(", ", notRestored) + (r.stderr().isBlank() ? "" : " (" + r.stderr().strip() + ")");
+                String msg = "не вернулись: " + String.join(", ", notRestored) + (r.stderr().isBlank() ? "" : " (" + r.stderr().strip() + ")");
+                op.finish(false, msg);
+                return "откат выполнен, но " + msg;
             }
+            op.finish(true, null);
             return "возвращено параметров: " + original.size() + ", файл настроек удалён";
         } catch (RuntimeException e) {
+            op.step("Откат", "FAILED", message(e));
+            op.finish(false, message(e));
             return "ошибка: " + message(e);
         }
     }

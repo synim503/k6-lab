@@ -15,6 +15,26 @@
         на выбранных хостах одним действием и откатить к исходным значениям. Настройки пишутся в <code th:text="${conf}"></code>.</div>
 
     <form id="tf" th:action="@{/tuning/profile}" method="post">
+        <div class="card mb-3" th:if="${standard != null}">
+            <div class="card-header d-flex flex-wrap align-items-center gap-3">
+                <strong>Эталонная настройка</strong>
+                <span class="small text-muted">Профиль с наибольшим числом изменений. Раскатите его на хосты, чтобы нагрузка шла на одинаково настроенных генераторах.</span></div>
+            <div class="card-body">
+                <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+                    <label class="small fw-semibold mb-0" for="std-src">Эталон</label>
+                    <select class="form-select form-select-sm" style="width:auto" id="std-src" name="sourceId" onchange="location.href='?std=' + this.value">
+                        <option th:each="c : ${candidates}" th:value="${c.generator.id}" th:selected="${c.generator.id == standard.generator.id}"
+                                th:text="${c.generator.name} + ' — изменений: ' + ${c.settings}"></option></select>
+                    <button class="btn btn-warning" th:formaction="@{/tuning/rollout}"
+                            onclick="return confirm('Применить набор настроек эталона на отмеченных хостах (если ничего не отмечено — на всех)? Исходные значения будут сохранены, вернуть их можно кнопкой «Вернуть всё в исходное».')"><i class="bi bi-rocket-takeoff me-1"></i>Раскатить на отмеченные / на все хосты</button></div>
+                <table class="table table-sm mb-0" style="max-width:760px"><thead><tr><th>Параметр</th><th>Сейчас на эталоне</th><th>Будет</th><th>Почему</th></tr></thead>
+                    <tbody><tr th:each="f : ${standardSettings}">
+                        <td><code th:text="${f.path('key').asText()}"></code></td>
+                        <td class="text-muted" th:text="${f.path('current').asText('—')}"></td>
+                        <td class="fw-semibold" th:text="${f.path('recommended').asText()}"></td>
+                        <td class="small text-muted" th:text="${f.path('title').asText()}"></td></tr></tbody></table>
+            </div></div>
+
         <div class="card mb-3"><div class="card-body d-flex flex-wrap align-items-center gap-3">
             <div class="input-group input-group-sm" style="width:260px"><span class="input-group-text">Длительность измерения</span>
                 <input class="form-control" type="number" name="seconds" value="30" th:min="${minSeconds}" th:max="${maxSeconds}" aria-label="Длительность измерения, секунд">
@@ -23,7 +43,10 @@
             <button class="btn btn-warning" th:formaction="@{/tuning/apply}"
                     onclick="return confirm('Применить рекомендованные настройки ядра на выбранных хостах? Исходные значения будут сохранены, откат возможен.')"><i class="bi bi-sliders me-1"></i>Применить рекомендации</button>
             <button class="btn btn-outline-secondary" th:formaction="@{/tuning/rollback}"
-                    onclick="return confirm('Вернуть исходные значения настроек на выбранных хостах?')"><i class="bi bi-arrow-counterclockwise me-1"></i>Откатить</button>
+                    onclick="return confirm('Вернуть исходные значения настроек на отмеченных хостах?')"><i class="bi bi-arrow-counterclockwise me-1"></i>Откатить отмеченные</button>
+            <button class="btn btn-danger" th:formaction="@{/tuning/rollback-all}" th:disabled="${tunedCount == 0}"
+                    onclick="return confirm('Вернуть в исходное состояние ВСЕ хосты с применённым тюнингом?')"><i class="bi bi-arrow-counterclockwise me-1"></i>Вернуть всё в исходное
+                <span class="badge text-bg-light ms-1" th:if="${tunedCount > 0}" th:text="${tunedCount}"></span></button>
             <span class="small text-muted">Отметьте хосты в таблице. SSH-учётка генератора должна иметь root или sudo.</span>
         </div></div>
 

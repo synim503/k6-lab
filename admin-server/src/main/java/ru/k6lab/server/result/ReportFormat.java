@@ -71,6 +71,9 @@ public class ReportFormat {
             case "RESTART" -> "Перезапуск агента";
             case "UNINSTALL" -> "Удаление агента";
             case "REDEPLOY" -> "Жёсткий редеплой";
+            case "PROFILE" -> "Профилирование хоста";
+            case "TUNE_APPLY" -> "Тюнинг ОС: применение";
+            case "TUNE_ROLLBACK" -> "Тюнинг ОС: возврат в исходное";
             default -> s;
         };
     }

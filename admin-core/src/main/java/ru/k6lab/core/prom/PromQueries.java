@@ -23,6 +23,11 @@ public final class PromQueries {
             this(opDuration, iterationDuration, iterations, dropped, opCount, opErrors, httpReqFailed, checks, vus, false);
         }
 
+        /** Максимум VU (vus_max): к имени метрики vus добавляется суффикс _max. */
+        public String vusMax() {
+            return vus + "_max";
+        }
+
         /** Время HTTP-запросов (http_req_duration): имя берётся из имени iteration_duration, чтобы совпадали суффиксы единиц и формат. */
         public String httpReqDuration() {
             return iterationDuration.contains("iteration_duration") ? iterationDuration.replace("iteration_duration", "http_req_duration")
@@ -108,6 +113,11 @@ public final class PromQueries {
     /** Суммарные VU run (метрика vus без разбивки по scenario). */
     public static String totalVus(Names n, long runId) {
         return "sum(" + selector(n.vus(), runId, null) + ")";
+    }
+
+    /** Суммарный максимум VU run (метрика vus_max без разбивки по scenario). */
+    public static String totalVusMax(Names n, long runId) {
+        return "sum(" + selector(n.vusMax(), runId, null) + ")";
     }
 
     /**

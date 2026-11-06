@@ -95,10 +95,22 @@
     var logEs = new EventSource(root.dataset.logStream);
     logEs.addEventListener('log', function (ev) { append(JSON.parse(ev.data)); });
 
+    // Блок статуса обновляется по событиям SSE и по таймеру. Запросы не должны перекрываться: при нескольких запросах в полёте ответ
+    // более раннего мог прийти позже и затереть свежие значения старыми, поэтому в полёте не больше одного, а пропущенное обновление повторяется после ответа.
+    var inflight = false, again = false;
     function refreshStatus() {
-        if (window.htmx) {
-            htmx.ajax('GET', root.dataset.statusUrl, {target: '#run-status', swap: 'outerHTML'});
-        }
+        if (!window.htmx) { return; }
+        if (inflight) { again = true; return; }
+        inflight = true;
+        var finish = function () { inflight = false; if (again) { again = false; refreshStatus(); } };
+        var p = htmx.ajax('GET', root.dataset.statusUrl, {target: '#run-status', swap: 'outerHTML'});
+        if (p && typeof p.then === 'function') { p.then(finish, finish); } else { setTimeout(finish, 1500); }
+        setTimeout(function () { if (inflight) { finish(); } }, 8000); // запрос завис: не блокируем обновления навсегда
+    }
+    // время последнего обновления в заголовке блока генераторов: сразу видно, живые ли цифры
+    function stampUpdated() {
+        var el = document.querySelector('#gens-box .gens-updated');
+        if (el) { el.textContent = 'обновлено ' + new Date().toTimeString().substring(0, 8); }
     }
     var statusEs = new EventSource(root.dataset.statusStream);
     var pending = null;
@@ -114,8 +126,9 @@
     document.addEventListener('toggle', function (e) {
         if (e.target && e.target.id === 'gens-box') { try { sessionStorage.setItem('run-gens-open', e.target.open ? '1' : '0'); } catch (x) { /* без сохранения */ } }
     }, true);
-    document.body.addEventListener('htmx:afterSwap', applyGens);
+    document.body.addEventListener('htmx:afterSwap', function () { applyGens(); stampUpdated(); });
     document.body.addEventListener('htmx:afterSettle', applyGens);
     applyGens();
+    stampUpdated();
     window.addEventListener('beforeunload', function () { logEs.close(); statusEs.close(); });
 })();

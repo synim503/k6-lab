@@ -254,7 +254,7 @@ public class RunOrchestrator implements AgentEventListener {
     public List<String> essentialMetrics() {
         ru.k6lab.core.prom.PromQueries.Names n = metricNames.names();
         return java.util.stream.Stream.of(n.opDuration(), n.iterationDuration(), n.httpReqDuration(), n.iterations(), n.dropped(), n.opCount(), n.opErrors(),
-                n.httpReqFailed(), n.checks(), n.vus()).distinct().toList();
+                n.httpReqFailed(), n.checks(), n.vus(), n.vusMax()).distinct().toList();
     }
 
     /**

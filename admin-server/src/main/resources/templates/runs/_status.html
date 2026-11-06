@@ -36,7 +36,8 @@
             <span class="badge text-bg-warning" th:if="${!v.generators.?[offline].isEmpty()}" th:text="'нет связи: ' + ${v.generators.?[offline].size()}"></span>
             <span class="badge text-bg-danger" th:if="${!v.generators.?[cpuHot].isEmpty()}" th:text="'CPU выше 80%: ' + ${v.generators.?[cpuHot].size()}"></span>
             <span class="badge text-bg-danger" th:if="${!v.generators.?[rg.status.name() == 'FAILED' or rg.status.name() == 'LOST'].isEmpty()}" th:text="'сбои: ' + ${v.generators.?[rg.status.name() == 'FAILED' or rg.status.name() == 'LOST'].size()}"></span>
-            <span class="ms-auto small text-muted gens-toggle"><span class="when-closed">Показать</span><span class="when-open">Скрыть</span></span>
+            <span class="ms-auto small text-muted gens-updated" title="Когда цифры в таблице обновлялись в последний раз"></span>
+            <span class="small text-muted gens-toggle"><span class="when-closed">Показать</span><span class="when-open">Скрыть</span></span>
         </summary>
         <div class="table-responsive"><table class="table table-hover align-middle mb-0 gen-table run-gens">
             <thead><tr><th>Генератор</th><th>Состояние</th><th>CPU</th><th>RAM</th><th class="text-end">VU</th><th class="text-end">Итерации</th><th class="text-end" title="Итерации, которые k6 не успел запустить">Пропущено</th>

@@ -50,6 +50,7 @@ class PromQueriesTest {
     void droppedAndVusAndWindowIsAtLeastOneSecond() {
         assertThat(PromQueries.dropped(n, 3, 0)).contains("k6_dropped_iterations_total").contains("[1s]");
         assertThat(PromQueries.totalVus(n, 3)).isEqualTo("sum(k6_vus{test_run_id=\"3\"})");
+        assertThat(PromQueries.totalVusMax(n, 3)).isEqualTo("sum(k6_vus_max{test_run_id=\"3\"})");
     }
 
     @Test

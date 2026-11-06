@@ -337,6 +337,9 @@ html { scroll-behavior: smooth; scroll-padding-top: 72px; }
 .run-gens th:nth-child(5) { width: 8%; } .run-gens th:nth-child(6) { width: 9%; } .run-gens th:nth-child(7) { width: 9%; }
 .run-gens th:nth-child(8) { width: 11%; } .run-gens th:nth-child(9) { width: 9%; }
 .run-gens td, .metric-table td { overflow: hidden; text-overflow: ellipsis; }
+/* на узком экране таблица прокручивается по горизонтали, а не сжимает колонки так, что заголовки рвутся по буквам */
+.run-gens { min-width: 860px; }
+.run-gens th { white-space: nowrap; }
 .metric-table th:nth-child(1) { width: 20%; } .metric-table th:nth-child(2) { width: 18%; } .metric-table th:nth-child(3) { width: 22%; }
 .metric-table th:nth-child(4) { width: 14%; } .metric-table th:nth-child(5) { width: 8%; }
 .metric-table td { font-variant-numeric: tabular-nums; }

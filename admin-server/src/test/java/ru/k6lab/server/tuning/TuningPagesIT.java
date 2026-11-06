@@ -53,6 +53,10 @@ class TuningPagesIT extends AbstractIT {
     HostTuningStore store;
     @Autowired
     ObjectMapper mapper;
+    @Autowired
+    ru.k6lab.server.ssh.SshCredentialService sshCredentials;
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     private Generator generator(String prefix) {
         Generator g = new Generator();
@@ -115,5 +119,60 @@ class TuningPagesIT extends AbstractIT {
         mvc.perform(post("/tuning/apply").with(csrf()).param("generatorIds", String.valueOf(g.getId())))
                 .andExpect(status().is3xxRedirection());
         assertThat(store.activeTunings(g.getId())).isEmpty();
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void referenceProfileWithMostChangesIsOfferedAndRolloutAndRollbackAllAreWired() throws Exception {
+        Generator small = generator("small"), big = generator("big");
+        // у «big» больше рекомендаций (порты, tw_reuse, swap), у «small» только порты
+        String bigOut = OUTPUT.replace("net.ipv4.tcp_tw_reuse=0", "net.ipv4.tcp_tw_reuse=0\nvm.swappiness=60")
+                .replace("mem_avail_kb 4000000", "mem_avail_kb 4000000\nswap_total_kb 2000000\nswap_free_kb 1500000");
+        String smallOut = OUTPUT.replace("net.ipv4.tcp_tw_reuse=0", "net.ipv4.tcp_tw_reuse=1").replace("tw 5000", "tw 10");
+        for (var e : java.util.Map.of(big, bigOut, small, smallOut).entrySet()) {
+            HostMetrics m = HostMetricsParser.parse(e.getValue(), 10);
+            long pid = store.createProfile(e.getKey().getId(), e.getKey().getName(), 10);
+            store.finishProfile(pid, "DONE", null, m, TuningAnalyzer.analyze(m).findings());
+        }
+        int bigCount = HostTuningService.recommended(store.latestDone(big.getId()).orElseThrow()).size();
+        int smallCount = HostTuningService.recommended(store.latestDone(small.getId()).orElseThrow()).size();
+        assertThat(bigCount).isGreaterThan(smallCount);
+        // по умолчанию эталон - хост с наибольшим числом изменений; параметры и кнопки раскатки/возврата на странице
+        var page = mvc.perform(get("/tuning")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("Эталонная настройка")))
+                .andExpect(content().string(containsString("Раскатить на отмеченные")))
+                .andExpect(content().string(containsString("Вернуть всё в исходное")))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(page).contains("value=\"" + big.getId() + "\" selected").contains(big.getName() + " — изменений: " + bigCount);
+        // другой эталон выбирается параметром
+        mvc.perform(get("/tuning").param("std", String.valueOf(small.getId())))
+                .andExpect(content().string(containsString("value=\"" + small.getId() + "\" selected")));
+        // раскатка и возврат без SSH-хостов не падают; возврат всего без применённого тюнинга сообщает об этом
+        mvc.perform(post("/tuning/rollout").with(csrf()).param("sourceId", String.valueOf(big.getId())))
+                .andExpect(status().is3xxRedirection()).andExpect(redirectedUrl("/tuning"));
+        mvc.perform(post("/tuning/rollout").with(csrf()).param("sourceId", "999999"))
+                .andExpect(status().is3xxRedirection()).andExpect(redirectedUrl("/tuning"));
+        mvc.perform(post("/tuning/rollback-all").with(csrf())).andExpect(status().is3xxRedirection()).andExpect(redirectedUrl("/tuning"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void profilingIsRecordedInTheOperationsJournal() throws Exception {
+        var cred = sshCredentials.save(new ru.k6lab.server.ssh.SshCredentialService.Form(null, "it-tune-" + UUID.randomUUID().toString().substring(0, 6),
+                "deploy", ru.k6lab.server.ssh.SshCredential.AuthType.PASSWORD, "pw", null, null, null, null, null, false, false));
+        Generator g = generator("journal");
+        g.setHost("127.0.0.1");
+        g.setSshPort(1); // порт закрыт: подключение сразу отказывает
+        g.setSshCredentialId(cred.getId());
+        g = generators.save(g);
+        mvc.perform(post("/tuning/profile").with(csrf()).param("generatorIds", String.valueOf(g.getId())).param("seconds", "10"))
+                .andExpect(status().is3xxRedirection());
+        long gid = g.getId();
+        org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(30)).until(() -> {
+            Integer n = jdbc.queryForObject("select count(*) from deployment where generator_id = ? and operation = 'PROFILE' and status = 'FAILED'", Integer.class, gid);
+            return n != null && n == 1;
+        });
+        mvc.perform(get("/deployments")).andExpect(status().isOk()).andExpect(content().string(containsString("Профилирование хоста")));
+        assertThat(store.latestProfiles().stream().filter(p -> p.generatorId() == gid).findFirst().orElseThrow().status()).isEqualTo("FAILED");
     }
 }

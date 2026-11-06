@@ -37,15 +37,18 @@
     }
     function fmt(v, d) { return v === undefined || v === null || !isFinite(v) ? '—' : Number(v).toFixed(d === undefined ? 1 : d); }
 
-    function ensure(key, title, unit, decimals) {
+    // opts: container - id блока для графика, label - заголовок первого столбца легенды, selectable=false - график не участвует в выборе операций
+    function ensure(key, title, unit, decimals, opts) {
         if (charts[key]) { return charts[key]; }
+        opts = opts || {};
+        var selectable = opts.selectable !== false;
         var box = document.createElement('div');
         box.className = 'col-12';
         box.innerHTML = '<div class="card"><div class="card-header small">' + title + '</div>'
             + '<div class="chart-wrap"><div class="chart-canvas"><canvas></canvas></div>'
-            + '<div class="chart-legend"><table class="legend-table"><thead><tr><th></th><th>Операция</th><th>Last</th><th>Mean</th><th>Max</th></tr></thead><tbody></tbody></table>'
-            + '<div class="legend-hint">Клик — только эта операция. Ctrl/Cmd+клик — добавить к выбору.</div></div></div></div>';
-        document.getElementById('metric-charts').appendChild(box);
+            + '<div class="chart-legend"><table class="legend-table"><thead><tr><th></th><th>' + (opts.label || 'Операция') + '</th><th>Last</th><th>Mean</th><th>Max</th></tr></thead><tbody></tbody></table>'
+            + (selectable ? '<div class="legend-hint">Клик — только эта операция. Ctrl/Cmd+клик — добавить к выбору.</div>' : '') + '</div></div></div>';
+        document.getElementById(opts.container || 'metric-charts').appendChild(box);
         var c = new Chart(box.querySelector('canvas'), {
             type: 'line',
             plugins: [warmPlugin],
@@ -60,26 +63,30 @@
         });
         c.$box = box;
         c.$warm = [];
+        c.$selectable = selectable;
         c.$decimals = decimals === undefined ? 1 : decimals;
-        box.querySelector('tbody').addEventListener('click', onLegendClick);
-        box.querySelector('tbody').addEventListener('keydown', function (e) {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onLegendClick(e); }
-        });
+        if (selectable) {
+            box.querySelector('tbody').addEventListener('click', onLegendClick);
+            box.querySelector('tbody').addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onLegendClick(e); }
+            });
+        }
         charts[key] = c;
         return c;
     }
-    function series(chart, op, label, color, dashed) {
+    // inLegend: показывать ли ряд в легенде (по умолчанию - только сплошные); у не выбираемых графиков ряды выбором операций не скрываются
+    function series(chart, op, label, color, dashed, inLegend) {
         var ds = chart.data.datasets.find(function (d) { return d.label === label; });
         if (!ds) {
             ds = { label: label, data: [], borderColor: color, backgroundColor: color, borderDash: dashed ? [6, 4] : [],
-                grp: op, main: !dashed, borderWidth: dashed ? 1.5 : 2 };
-            ds.hidden = !!selection && !selection.has(op);
+                grp: op, main: inLegend === undefined ? !dashed : inLegend, borderWidth: dashed ? 1.5 : 2 };
+            ds.hidden = chart.$selectable !== false && !!selection && !selection.has(op);
             chart.data.datasets.push(ds);
         }
         return ds;
     }
-    function push(chart, op, label, color, dashed, idx, value) {
-        var ds = series(chart, op, label, color, dashed);
+    function push(chart, op, label, color, dashed, idx, value, inLegend) {
+        var ds = series(chart, op, label, color, dashed, inLegend);
         while (ds.data.length < idx) { ds.data.push(null); }
         ds.data[idx] = value === undefined ? null : value;
     }
@@ -98,8 +105,10 @@
         var tb = c.$box.querySelector('tbody'), html = '';
         c.data.datasets.forEach(function (ds) {
             if (!ds.main) { return; }
-            var s = stats(ds), off = !!selection && !selection.has(ds.grp);
-            html += '<tr class="legend-row' + (off ? ' off' : '') + (selection && !off ? ' on' : '') + '" data-grp="' + esc(ds.grp) + '" tabindex="0" role="button" aria-pressed="' + (!off) + '" title="' + esc(ds.label) + '">'
+            var sel = c.$selectable !== false;
+            var s = stats(ds), off = sel && !!selection && !selection.has(ds.grp);
+            html += '<tr class="legend-row' + (off ? ' off' : '') + (sel && selection && !off ? ' on' : '') + '" data-grp="' + esc(ds.grp) + '"'
+                + (sel ? ' tabindex="0" role="button" aria-pressed="' + (!off) + '"' : '') + ' title="' + esc(ds.label) + '">'
                 + '<td><span class="legend-swatch" style="background:' + ds.borderColor + '"></span></td>'
                 + '<td class="legend-name">' + esc(ds.grp) + '</td>'
                 + '<td>' + fmt(s.last, c.$decimals) + '</td><td>' + fmt(s.mean, c.$decimals) + '</td><td>' + fmt(s.max, c.$decimals) + '</td></tr>';
@@ -109,6 +118,7 @@
     function applySelection() {
         Object.keys(charts).forEach(function (k) {
             var c = charts[k];
+            if (c.$selectable === false) { return; }
             c.data.datasets.forEach(function (ds) { ds.hidden = !!selection && !selection.has(ds.grp); });
             c.update('none');
             renderLegend(c);
@@ -138,6 +148,15 @@
         var t = new Date(m.dataTs || m.ts).toTimeString().substring(0, 8);
         var any = Object.keys(charts)[0];
         var idx = any ? charts[any].data.labels.length : 0;
+        // вкладка «Системные метрики»: VU по всем генераторам (задействованные и максимум) и dropped по операциям
+        var vusC = ensure('vus', 'Виртуальные пользователи (VU) по всем генераторам: задействованные и максимум', 'VU', 0,
+            { container: 'system-charts', label: 'Показатель', selectable: false });
+        push(vusC, 'Задействовано', 'Задействовано', '#4f46e5', false, idx, m.vus, true);
+        push(vusC, 'Максимум', 'Максимум', '#16a34a', true, idx, m.vusMax, true);
+        var dropC = ensure('drop', 'Dropped iterations: итерации, которые k6 не успел запустить, в секунду', 'ит/с', 2, { container: 'system-charts' });
+        (m.rows || []).forEach(function (r, i) {
+            push(dropC, r.op, r.op, palette[i % palette.length], false, idx, r.dropped === undefined || r.dropped === null ? null : r.dropped / (m.windowSec || 1));
+        });
         (m.rows || []).forEach(function (r, i) {
             var color = palette[i % palette.length];
             var rate = ensure('rate', 'Интенсивность, оп/с: факт (сплошная) и план (пунктир)', 'оп/с', 1);

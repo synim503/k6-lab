@@ -47,8 +47,17 @@ public class TuningController {
     }
 
     @GetMapping
-    public String index(Model model) {
+    public String index(@RequestParam(required = false) Long std, Model model) {
         List<Row> rows = rows();
+        // эталон: профиль с наибольшим числом изменений (можно выбрать другой)
+        List<Row> candidates = rows.stream().filter(r -> r.profile() != null && "DONE".equals(r.profile().status()) && r.settings() > 0)
+                .sorted(Comparator.comparingInt(Row::settings).reversed().thenComparing(r -> r.generator().getName())).toList();
+        Row standard = candidates.stream().filter(r -> std != null && r.generator().getId().equals(std)).findFirst()
+                .orElse(candidates.isEmpty() ? null : candidates.get(0));
+        model.addAttribute("candidates", candidates);
+        model.addAttribute("standard", standard);
+        model.addAttribute("standardSettings", standard == null ? List.of() : settingsOf(standard.profile()));
+        model.addAttribute("tunedCount", rows.stream().filter(Row::tuned).count());
         model.addAttribute("rows", rows);
         model.addAttribute("anyRunning", rows.stream().anyMatch(Row::running));
         model.addAttribute("minSeconds", HostTuningService.MIN_SECONDS);
@@ -99,6 +108,18 @@ public class TuningController {
     @PostMapping("/apply")
     public String apply(@RequestParam(required = false) List<Long> generatorIds, Principal user, RedirectAttributes ra) {
         return run(generatorIds, ra, ids -> service.apply(ids, user == null ? null : user.getName()), "Применение настроек");
+    }
+
+    /** Раскатывает набор настроек эталонного хоста на выбранные (или на все) хосты. */
+    @PostMapping("/rollout")
+    public String rollout(@RequestParam long sourceId, @RequestParam(required = false) List<Long> generatorIds, Principal user, RedirectAttributes ra) {
+        return run(generatorIds, ra, ids -> service.rollout(sourceId, ids, user == null ? null : user.getName()), "Раскатка эталона");
+    }
+
+    /** Возвращает в исходное состояние все хосты с применённым тюнингом. */
+    @PostMapping("/rollback-all")
+    public String rollbackAll(Principal user, RedirectAttributes ra) {
+        return run(null, ra, ids -> service.rollbackAll(user == null ? null : user.getName()), "Возврат в исходное");
     }
 
     @PostMapping("/rollback")
