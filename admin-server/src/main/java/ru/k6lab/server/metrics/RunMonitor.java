@@ -56,7 +56,7 @@ public class RunMonitor {
     /** Строка live-таблицы по операции. */
     public record LiveRow(String operation, double targetRatePerSec, Double actualRatePerSec, Double percentileMs,
                           int slaPercentile, double slaThresholdMs, Double errorPct, double maxErrorPct, Double dropped,
-                          boolean violation, List<String> reasons) {
+                          boolean violation, List<String> reasons, Double iterationPercentileMs) {
     }
 
     private final RunService runService;
@@ -151,6 +151,7 @@ public class RunMonitor {
             o.put("target", r.targetRatePerSec());
             putD(o, "actual", r.actualRatePerSec());
             putD(o, "pct", r.percentileMs());
+            putD(o, "iterPct", r.iterationPercentileMs()); // время метода целиком (итерации): здоровье генератора, не SLA
             o.put("pctN", r.slaPercentile());
             o.put("sla", r.slaThresholdMs());
             putD(o, "err", r.errorPct());
@@ -235,6 +236,10 @@ public class RunMonitor {
         for (int q : snap.operations().stream().filter(RunSnapshot.OpInfo::enabled).map(RunSnapshot.OpInfo::slaPercentile).distinct().toList()) {
             pct.put(q, byScenario(prom.query(p, PromQueries.percentileMs(n, helper, q, runId, windowSec), at)));
         }
+        Map<Integer, Map<String, Double>> iterPct = new HashMap<>();
+        for (int q : snap.operations().stream().filter(RunSnapshot.OpInfo::enabled).map(RunSnapshot.OpInfo::slaPercentile).distinct().toList()) {
+            iterPct.put(q, byScenario(prom.query(p, PromQueries.iterationPercentileMs(n, q, runId, windowSec), at)));
+        }
         Map<String, Double> rate = byScenario(prom.query(p, PromQueries.ratePerSec(n, runId, windowSec), at));
         Map<String, Double> dropped = byScenario(prom.query(p, PromQueries.dropped(n, runId, windowSec), at));
         Map<String, Double> errHelper = helper ? byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HELPER, runId, windowSec), at)) : Map.of();
@@ -282,7 +287,7 @@ public class RunMonitor {
                 }
             }
             rows.add(new LiveRow(o.name(), target, actual, p95, o.slaPercentile(), o.slaThresholdMs(), err, o.maxErrorPct(), drop,
-                    !reasons.isEmpty(), reasons));
+                    !reasons.isEmpty(), reasons, iterPct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name())));
         }
         return rows;
     }

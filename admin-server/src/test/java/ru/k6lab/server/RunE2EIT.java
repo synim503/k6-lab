@@ -57,6 +57,8 @@ class RunE2EIT extends AbstractIT {
     static Path goAgent;
     static Path k6;
     static final List<Process> processes = new ArrayList<>();
+    /** Цель HTTP-запросов сценариев: время ответа (SLA) считается по http_req_duration, поэтому запросы должны быть настоящими. */
+    static com.sun.net.httpserver.HttpServer httpTarget;
 
     @Autowired
     GeneratorRepository generators;
@@ -90,11 +92,26 @@ class RunE2EIT extends AbstractIT {
         Assumptions.assumeTrue(goAgent != null || Files.isRegularFile(agentJar), "Не собран агент: " + agentJar);
         k6 = findK6();
         Assumptions.assumeTrue(k6 != null, "k6 не найден в PATH");
+        try {
+            httpTarget = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            httpTarget.createContext("/", ex -> {
+                byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+                ex.sendResponseHeaders(200, body.length);
+                ex.getResponseBody().write(body);
+                ex.close();
+            });
+            httpTarget.start();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @AfterAll
     static void killAgents() {
         processes.forEach(Process::destroyForcibly);
+        if (httpTarget != null) {
+            httpTarget.stop(0);
+        }
     }
 
     /** Собирает агент на Go под текущую ОС (нужен Go в PATH); null, если Go нет или сборка не удалась. */
@@ -170,11 +187,11 @@ class RunE2EIT extends AbstractIT {
     }
 
     private static final String SCRIPT = """
+            import http from 'k6/http';
             import { sleep } from 'k6';
-            import { op } from './__admin/admin.js';
             const rows = open('./data/users.csv').split('\\n').filter((l) => l.length > 0);
             export function setup() { console.log('DATA-ROWS:' + rows.length + ' first=' + rows[0]); }
-            export function work() { op(() => { sleep(0.05); }); }
+            export function work() { http.get(__ENV.TARGET + '/'); sleep(0.05); }
             export default function () {}
             """;
 
@@ -206,7 +223,7 @@ class RunE2EIT extends AbstractIT {
         f.setLevelPct(100);
         f.setRampSec(0);
         f.setHoldMinutes(holdSec / 60.0);
-        f.setEnvText("BASE=http://localhost");
+        f.setEnvText("TARGET=http://127.0.0.1:" + httpTarget.getAddress().getPort());
         if (split) {
             LoadForm.DataForm d = new LoadForm.DataForm();
             d.setPath("data/users.csv");
@@ -368,10 +385,10 @@ class RunE2EIT extends AbstractIT {
         assertThat(finished.getStatus()).as(dump(run.getId())).isEqualTo(RunStatus.FINISHED);
         var g = runService.generatorsOf(run.getId()).get(0);
         assertThat(g.getExitCode()).isZero();
-        // все три сценария выполнились: по каждому есть свой подмножество метрик в итоговой сводке k6
+        // сценарии с запросами выполнились: по каждому есть своё подмножество http_req_duration в сводке k6 (once - setup без запросов)
         var metrics = g.getSummary().path("metrics");
-        for (String sc : new String[]{"work", "soak", "once"}) {
-            assertThat(metrics.has("op_duration{scenario:" + sc + "}"))
+        for (String sc : new String[]{"work", "soak"}) {
+            assertThat(metrics.has("http_req_duration{scenario:" + sc + "}"))
                     .as("сценарий " + sc + " в сводке: " + metrics.properties().stream().map(java.util.Map.Entry::getKey).toList()).isTrue();
         }
     }
@@ -405,8 +422,8 @@ class RunE2EIT extends AbstractIT {
         assertThat(java.time.Duration.between(step.getRampStartAt(), step.getHoldStartAt()).getSeconds()).isEqualTo(5);
         // нагрузка не менялась: ~10 оп/с * 10 с = ~100 итераций, прогрев - часть тех же 10 секунд
         assertThat(finalIterations(g)).isBetween(85L, 125L);
-        // пороги k6 - только по основной фазе: в сводке подмножество с тегом phase:main
-        assertThat(g.getSummary().path("metrics").has("op_duration{scenario:work,phase:main}")).isTrue();
+        // пороги k6 - по времени запросов (http_req_duration) сценария
+        assertThat(g.getSummary().path("metrics").has("http_req_duration{scenario:work}")).isTrue();
     }
     @Test
     @Order(2)

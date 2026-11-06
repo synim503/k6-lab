@@ -141,12 +141,14 @@
         (m.rows || []).forEach(function (r, i) {
             var color = palette[i % palette.length];
             var rate = ensure('rate', 'Интенсивность, оп/с: факт (сплошная) и план (пунктир)', 'оп/с', 1);
-            var pct = ensure('pct', 'Время ответа, мс: перцентиль SLA (сплошная) и порог (пунктир)', 'мс', 0);
+            var pct = ensure('pct', 'Время запросов (HTTP), мс: перцентиль SLA (сплошная) и порог (пунктир)', 'мс', 0);
+            var iter = ensure('iter', 'Время метода целиком (итерация: запросы, паузы, работа генератора), мс — перцентиль SLA', 'мс', 0);
             var err = ensure('err', 'Ошибки, %: факт (сплошная) и допустимый порог (пунктир)', '%', 2);
             push(rate, r.op, r.op + ' факт', color, false, idx, r.actual);
             push(rate, r.op, r.op + ' план', color, true, idx, r.target);
             push(pct, r.op, r.op + ' p' + r.pctN, color, false, idx, r.pct);
             push(pct, r.op, r.op + ' SLA', color, true, idx, r.sla);
+            push(iter, r.op, r.op + ' p' + r.pctN, color, false, idx, r.iterPct);
             push(err, r.op, r.op, color, false, idx, r.err);
             push(err, r.op, r.op + ' порог', color, true, idx, r.maxErr);
         });

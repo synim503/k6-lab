@@ -513,7 +513,8 @@ public final class K6ConfigGenerator {
             thresholds.putArray("op_duration" + sel).add(pct);
             thresholds.putArray("op_failed" + sel).add("rate<" + fmt(errFraction));
         } else {
-            thresholds.putArray("iteration_duration" + sel).add(pct);
+            // время запросов, а не итерации: итерация включает паузы и работу генератора
+            thresholds.putArray("http_req_duration" + sel).add(pct);
             if (op.failureSource() == OperationSpec.FailureSource.CHECKS) {
                 thresholds.putArray("checks" + sel).add("rate>" + fmt(1 - errFraction));
             } else {

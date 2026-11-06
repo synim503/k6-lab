@@ -387,9 +387,9 @@ class K6ConfigGeneratorTest {
         var checks = new OperationSpec("c", "c", Mode.OPEN, 1, 0.1, null, null, null, null, 99, 1200, 2.0,
                 FailureSource.CHECKS, Map.of(), Map.of(), true, null);
         JsonNode th = K6ConfigGenerator.generate(ConfigInput.of(List.of(http, checks), steps(100), false)).config().path("thresholds");
-        assertThat(th.path("iteration_duration{scenario:h}").get(0).asText()).isEqualTo("p(95)<800");
+        assertThat(th.path("http_req_duration{scenario:h}").get(0).asText()).isEqualTo("p(95)<800");
         assertThat(th.path("http_req_failed{scenario:h}").get(0).asText()).isEqualTo("rate<0.01");
-        assertThat(th.path("iteration_duration{scenario:c}").get(0).asText()).isEqualTo("p(99)<1200");
+        assertThat(th.path("http_req_duration{scenario:c}").get(0).asText()).isEqualTo("p(99)<1200");
         assertThat(th.path("checks{scenario:c}").get(0).asText()).isEqualTo("rate>0.98");
         assertThat(th.has("op_duration{scenario:h}")).isFalse();
     }

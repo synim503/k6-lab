@@ -164,7 +164,7 @@ public class RunService {
                         v.getSource().name(), v.getCommitHash(), v.getGitBranch()),
                 script.getEnv(), ops, steps, plan.gracefulStopSec(), plan.gracefulRampDownSec(), data,
                 LoadCriteria.stopToMap(LoadCriteria.stop(script.getStopCriteria())),
-                LoadCriteria.successToMap(LoadCriteria.success(script.getSuccessCriteria())), v.isUsesHelper(),
+                LoadCriteria.successToMap(LoadCriteria.success(script.getSuccessCriteria())), false,
                 List.of(), null, plan.warnings(),
                 plan.steps().isEmpty() || plan.steps().get(0).rampSec() <= 0 ? null
                         : new RunSnapshot.Warmup(plan.steps().get(0).rampSec(), 0));

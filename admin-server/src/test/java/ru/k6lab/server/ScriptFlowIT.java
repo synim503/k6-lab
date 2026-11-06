@@ -264,7 +264,7 @@ class ScriptFlowIT extends AbstractIT {
             assertThat(settingsService.allowMetrics()).containsExactly("k6_data_sent_total", "k6_http_reqs*");
             // агенту уходит белый список + метрики, на которых строятся SLA и графики (их добавлять вручную не нужно)
             assertThat(orchestrator.allowedMetrics()).contains("k6_data_sent_total", "k6_http_reqs*", "k6_iterations_total",
-                    "k6_iteration_duration_seconds", "k6_op_duration_seconds", "k6_dropped_iterations_total", "k6_vus");
+                    "k6_iteration_duration_seconds", "k6_http_req_duration_seconds", "k6_op_duration_seconds", "k6_dropped_iterations_total", "k6_vus");
 
             // некорректная маска отклоняется, список не меняется
             mvc.perform(post("/settings/allow-metrics").with(csrf()).param("allowMetrics", "k6 data!"))

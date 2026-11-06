@@ -31,7 +31,6 @@
                     <tr><th>Entrypoint</th><td><code th:text="${v.entrypoint}"></code></td></tr>
                     <tr><th>sha256</th><td><code class="small" th:text="${v.sha256}"></code></td></tr>
                     <tr><th>Размер</th><td th:text="${v.sizeBytes} + ' байт'"></td></tr>
-                    <tr><th>Использует admin.js</th><td th:text="${v.usesHelper} ? 'да' : 'нет'"></td></tr>
                     <tr><th>k6 inspect</th><td><span class="badge" th:text="${v.inspectStatus}"
                             th:classappend="${v.inspectStatus.name() == 'OK'} ? 'text-bg-success' : (${v.inspectStatus.name() == 'FAILED'} ? 'text-bg-danger' : 'text-bg-warning')"></span></td></tr>
                     <tr><th>Создана</th><td th:text="${#temporals.format(v.createdAt, 'dd.MM.yyyy HH:mm')} + ', ' + ${v.createdBy}"></td></tr>

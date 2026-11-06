@@ -94,7 +94,7 @@ public class RunPlanner {
             try {
                 List<OperationSpec> specs = ops.stream().map(LoadOperation::toSpec).toList();
                 gen = K6ConfigGenerator.generate(new ConfigInput(specs, steps, GRACEFUL_STOP_SEC, GRACEFUL_RAMP_DOWN_SEC,
-                        generatorCount, 1.5, 3, version.isUsesHelper()));
+                        generatorCount, 1.5, 3, false)); // время SLA - по http_req_duration, admin.js в расчётах не участвует
                 json = K6ConfigGenerator.toJson(gen);
                 // ручные правки конфига k6 (maxVUs и т.п.) накладываются поверх расчётного конфига
                 var applied = K6ConfigOverrides.apply(gen.config(), script.getK6Overrides());

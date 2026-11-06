@@ -23,6 +23,12 @@ public final class PromQueries {
             this(opDuration, iterationDuration, iterations, dropped, opCount, opErrors, httpReqFailed, checks, vus, false);
         }
 
+        /** Время HTTP-запросов (http_req_duration): имя берётся из имени iteration_duration, чтобы совпадали суффиксы единиц и формат. */
+        public String httpReqDuration() {
+            return iterationDuration.contains("iteration_duration") ? iterationDuration.replace("iteration_duration", "http_req_duration")
+                    : "k6_http_req_duration_seconds";
+        }
+
         public static Names defaults() {
             return new Names("k6_op_duration_seconds", "k6_iteration_duration_seconds", "k6_iterations_total",
                     "k6_dropped_iterations_total", "k6_op_count_total", "k6_op_errors_total", "k6_http_req_failed_rate",
@@ -54,10 +60,21 @@ public final class PromQueries {
         return Math.max(1, seconds) + "s";
     }
 
-    /** Перцентиль времени отклика, мс, по каждой операции (scenario) за окно. */
+    /**
+     * Перцентиль времени отклика, мс, по каждой операции (scenario) за окно: время HTTP-запросов (http_req_duration);
+     * при helper - время операции op() (op_duration, для старых запусков).
+     */
     public static String percentileMs(Names n, boolean helper, int percentile, long runId, long rangeSec) {
-        String metric = helper ? n.opDuration() : n.iterationDuration();
-        if (n.classic()) {
+        return quantile(helper ? n.opDuration() : n.httpReqDuration(), n.classic(), percentile, runId, rangeSec);
+    }
+
+    /** Перцентиль времени метода целиком (итерации: все запросы, паузы и работа генератора), мс, по сценариям. Показатель здоровья генератора, не SLA. */
+    public static String iterationPercentileMs(Names n, int percentile, long runId, long rangeSec) {
+        return quantile(n.iterationDuration(), n.classic(), percentile, runId, rangeSec);
+    }
+
+    private static String quantile(String metric, boolean classicHistogram, int percentile, long runId, long rangeSec) {
+        if (classicHistogram) {
             // классические корзины: суммируем по всем генераторам с сохранением le, затем квантиль
             return "histogram_quantile(" + (percentile / 100.0) + ", sum by (scenario, le) (increase(" + selector(metric + "_bucket", runId, null)
                     + "[" + range(rangeSec) + "]))) * 1000";
