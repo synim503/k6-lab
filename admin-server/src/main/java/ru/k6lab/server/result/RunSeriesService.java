@@ -38,7 +38,13 @@ public class RunSeriesService {
 
     /** Ряды одной операции: факт и план интенсивности, перцентиль SLA, ошибки + пороги из snapshot. */
     public record OpSeries(String op, int pctN, double slaMs, double maxErrPct, List<Pt> actual, List<Pt> plan, List<Pt> pct,
-                           List<Pt> err) {
+                           List<Pt> err, double warmupMin) {
+
+        /** Без прогрева. */
+        public OpSeries(String op, int pctN, double slaMs, double maxErrPct, List<Pt> actual, List<Pt> plan, List<Pt> pct, List<Pt> err) {
+            this(op, pctN, slaMs, maxErrPct, actual, plan, pct, err, 0);
+        }
+
         public boolean hasData() {
             return !actual.isEmpty() || !pct.isEmpty() || !err.isEmpty();
         }
@@ -112,7 +118,7 @@ public class RunSeriesService {
             var errSrc = helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp;
             // в первые секунды окно захватывает время до старта: интенсивность делим на реально прошедшее время
             List<Pt> actual = new ArrayList<>();
-            for (PrometheusClient.Point pt : rate.getOrDefault(o.name(), List.of())) {
+            for (PrometheusClient.Point pt : withWarmup(rate, o.name())) {
                 double elapsed = pt.ts() - t0;
                 if (elapsed <= 0) {
                     continue;
@@ -120,10 +126,30 @@ public class RunSeriesService {
                 actual.add(new Pt(elapsed / 60.0, elapsed < window ? pt.value() * window / elapsed : pt.value()));
             }
             out.add(new OpSeries(o.name(), o.slaPercentile(), o.slaThresholdMs(), o.maxErrorPct(), actual, planOf(snap, o),
-                    toPts(pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name()), t0),
-                    toPts(errSrc.get(o.name()), t0)));
+                    toPts(withWarmup(pct.getOrDefault(o.slaPercentile(), Map.of()), o.name()), t0),
+                    toPts(withWarmup(errSrc, o.name()), t0), warmupMin(snap)));
         }
         return out;
+    }
+
+    /** Минуты от начала теста, когда заканчивается прогрев; 0 - прогрева не было. */
+    static double warmupMin(RunSnapshot snap) {
+        return snap.warmup() == null ? 0 : snap.warmup().sec() / 60.0;
+    }
+
+    /** Точки основного сценария операции вместе с точками её спутника прогрева (он идёт раньше). */
+    private static List<PrometheusClient.Point> withWarmup(Map<String, List<PrometheusClient.Point>> byScenario, String op) {
+        List<PrometheusClient.Point> main = byScenario.get(op);
+        List<PrometheusClient.Point> warm = byScenario.get(op + ru.k6lab.core.k6config.K6ConfigGenerator.WARMUP_SUFFIX);
+        if (warm == null || warm.isEmpty()) {
+            return main == null ? List.of() : main;
+        }
+        List<PrometheusClient.Point> all = new ArrayList<>(warm);
+        if (main != null) {
+            all.addAll(main);
+        }
+        all.sort(java.util.Comparator.comparingDouble(PrometheusClient.Point::ts));
+        return all;
     }
 
     private static List<Pt> toPts(List<PrometheusClient.Point> src, long t0) {
@@ -149,7 +175,13 @@ public class RunSeriesService {
         plan.add(new Pt(0, 0));
         for (RunSnapshot.StepInfo s : snap.steps()) {
             double target = o.ratePerSec() * s.levelPct() / 100.0;
-            if (s.rampSec() > 0) {
+            if (s.rampSec() > 0 && snap.warmup() != null) {
+                double warm = target * snap.warmup().pct() / 100.0;
+                plan.set(0, new Pt(0, warm));
+                t += s.rampSec();
+                plan.add(new Pt(t / 60.0, warm));
+                plan.add(new Pt(t / 60.0, target));
+            } else if (s.rampSec() > 0) {
                 t += s.rampSec();
                 plan.add(new Pt(t / 60.0, target));
             } else {
@@ -201,7 +233,7 @@ public class RunSeriesService {
             if (o.enabled()) {
                 out.add(new OpSeries(o.name(), o.slaPercentile(), o.slaThresholdMs(), o.maxErrorPct(),
                         actual.getOrDefault(o.name(), List.of()), planOf(snap, o), pct.getOrDefault(o.name(), List.of()),
-                        err.getOrDefault(o.name(), List.of())));
+                        err.getOrDefault(o.name(), List.of()), warmupMin(snap)));
             }
         }
         return out;

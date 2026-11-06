@@ -12,6 +12,26 @@
     var palette = ['#4f46e5', '#16a34a', '#dc2626', '#ea580c', '#9333ea', '#0891b2', '#64748b', '#db2777'];
     var selection = null; // null - видны все операции; иначе Set имён операций
 
+    // прогрев: полоса на графике по точкам, у которых фаза «warmup» (ошибки и SLA в это время не оцениваются)
+    var warmPlugin = {
+        id: 'warmup',
+        beforeDatasetsDraw: function (chart) {
+            var w = chart.$warm || [], xs = chart.scales && chart.scales.x, area = chart.chartArea;
+            if (!xs || !area) { return; }
+            var first = -1, last = -1;
+            for (var i = 0; i < w.length; i++) { if (w[i]) { if (first < 0) { first = i; } last = i; } }
+            if (first < 0) { return; }
+            var x0 = xs.getPixelForValue(first), x1 = xs.getPixelForValue(Math.min(last + 1, Math.max(0, w.length - 1)));
+            var ctx = chart.ctx;
+            ctx.save();
+            ctx.fillStyle = 'rgba(245, 158, 11, .14)';
+            ctx.fillRect(x0, area.top, Math.max(2, x1 - x0), area.bottom - area.top);
+            ctx.fillStyle = '#b45309'; ctx.font = '600 11px sans-serif';
+            ctx.fillText('Прогрев', x0 + 6, area.top + 14);
+            ctx.restore();
+        }
+    };
+
     function esc(v) {
         return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     }
@@ -28,6 +48,7 @@
         document.getElementById('metric-charts').appendChild(box);
         var c = new Chart(box.querySelector('canvas'), {
             type: 'line',
+            plugins: [warmPlugin],
             data: { labels: [], datasets: [] },
             options: {
                 animation: false, responsive: true, maintainAspectRatio: false, spanGaps: true,
@@ -38,6 +59,7 @@
             }
         });
         c.$box = box;
+        c.$warm = [];
         c.$decimals = decimals === undefined ? 1 : decimals;
         box.querySelector('tbody').addEventListener('click', onLegendClick);
         box.querySelector('tbody').addEventListener('keydown', function (e) {
@@ -132,9 +154,11 @@
             var c = charts[k];
             while (c.data.labels.length < idx) { c.data.labels.push(''); }
             c.data.labels[idx] = t;
+            c.$warm[idx] = m.phase === 'warmup';
             c.data.datasets.forEach(function (d) { while (d.data.length <= idx) { d.data.push(null); } });
             if (c.data.labels.length > MAX_POINTS) {
                 c.data.labels.shift();
+                c.$warm.shift();
                 c.data.datasets.forEach(function (d) { d.data.shift(); });
             }
             if (!quiet) { c.update('none'); renderLegend(c); }
@@ -158,7 +182,8 @@
         var ph = document.getElementById('metric-phase');
         if (ph) {
             var lag = m.lagSec === undefined ? '' : '. Данные на ' + t + ', задержка метрик ' + m.lagSec + ' с';
-            ph.textContent = (m.phase ? 'Идёт нагрузка, окно расчёта ' + m.windowSec + ' с' : 'Ожидание данных') + lag;
+            ph.textContent = (m.phase === 'warmup' ? 'Идёт прогрев: ошибки и время ответа пока не оцениваются'
+                : m.phase ? 'Идёт нагрузка, окно расчёта ' + m.windowSec + ' с' : 'Ожидание данных') + lag;
         }
     }
 

@@ -95,6 +95,52 @@ class K6ConfigGeneratorTest {
     }
 
     @Test
+    void warmupAddsCompanionScenariosAndShiftsTheMainOnes() {
+        var ops = List.of(
+                custom("soak", "work", "constant-vus", Map.of("vus", 10, "duration", "5m")),
+                custom("car", "work", "constant-arrival-rate", Map.of("rate", 100, "timeUnit", "1s", "duration", "5m", "preAllocatedVUs", 20, "maxVUs", 60)),
+                custom("rv", "work", "ramping-vus", Map.of("startVUs", 0, "stages", List.of(Map.of("duration", "1m", "target", 40)))),
+                custom("once", "setup", "shared-iterations", Map.of("vus", 1, "iterations", 3, "maxDuration", "1m")));
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, true, 120, 25));
+        JsonNode sc = cfg.config().path("scenarios");
+        // спутники: доля нагрузки, длительность прогрева, тот же exec
+        assertThat(sc.path("soak__warmup").path("executor").asText()).isEqualTo("constant-vus");
+        assertThat(sc.path("soak__warmup").path("vus").asInt()).isEqualTo(3);
+        assertThat(sc.path("soak__warmup").path("duration").asText()).isEqualTo("120s");
+        assertThat(sc.path("soak__warmup").path("exec").asText()).isEqualTo("work");
+        assertThat(sc.path("car__warmup").path("executor").asText()).isEqualTo("constant-arrival-rate");
+        assertThat(sc.path("car__warmup").path("rate").asInt()).isEqualTo(25);
+        assertThat(sc.path("car__warmup").path("preAllocatedVUs").asInt()).isEqualTo(5);
+        assertThat(sc.path("car__warmup").path("maxVUs").asInt()).isEqualTo(15);
+        assertThat(sc.path("rv__warmup").path("vus").asInt()).isEqualTo(10);      // 25% от цели первой стадии (40)
+        // основные сценарии стартуют после прогрева, остальное не меняется
+        for (String name : new String[]{"soak", "car", "rv"}) {
+            assertThat(sc.path(name).path("startTime").asText()).as(name).isEqualTo("120s");
+        }
+        assertThat(sc.path("soak").path("vus").asInt()).isEqualTo(10);
+        // у исполнителей без прогрева спутника нет
+        assertThat(sc.has("once__warmup")).isFalse();
+        assertThat(sc.path("once").has("startTime")).isFalse();
+        // пороги k6 - только у основных сценариев: ошибки прогрева в них не попадают
+        assertThat(cfg.config().path("thresholds").toString()).doesNotContain("__warmup").contains("scenario:soak");
+        // общая длительность теста включает прогрев
+        assertThat(ConfigDuration.of(cfg.config()).totalSec()).isEqualTo(120 + 300);
+    }
+
+    @Test
+    void warmupKeepsVusAtLeastTheGeneratorCountAndHonoursStartTime() {
+        var ops = List.of(custom("soak", "work", "constant-vus", Map.of("vus", 10, "duration", "1m", "startTime", "30s")));
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 6, 1.5, 3, true, 60, 10));
+        JsonNode sc = cfg.config().path("scenarios");
+        assertThat(sc.path("soak__warmup").path("vus").asInt()).isGreaterThanOrEqualTo(6); // 10% от 10 VU, но не меньше числа генераторов
+        assertThat(sc.path("soak__warmup").path("startTime").asText()).isEqualTo("30s");   // прогрев - со своего startTime
+        assertThat(sc.path("soak").path("startTime").asText()).isEqualTo("90s");           // основной - после прогрева
+        // без прогрева (0 с) ничего не добавляется
+        var plain = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, true, 0, 30));
+        assertThat(plain.config().path("scenarios").has("soak__warmup")).isFalse();
+    }
+
+    @Test
     void defaultFunctionGetsNoExecField() {
         var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(openPerSec("default", 5, 0.2), openPerSec("pay", 2, 0.2)),
                 steps(100), 30, 30, 1, 1.5, 3, true));

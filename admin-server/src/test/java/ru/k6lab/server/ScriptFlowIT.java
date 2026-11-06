@@ -776,6 +776,57 @@ class ScriptFlowIT extends AbstractIT {
     }
 
     @Test
+    void warmupIsStoredAndAddedToEveryScenarioAndIsExcludedFromTheProfile() throws Exception {
+        long id = script("flow-warmup").getScriptId();
+        java.util.function.Function<String[], org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder> post = extra -> {
+            var b = post("/scripts/" + id + "/load").with(csrf())
+                    .param("ops[0].execFn", "login").param("ops[0].name", "login").param("ops[0].ratePerSec", "5").param("ops[0].executor", "ramping-arrival-rate")
+                    .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                    .param("ops[1].execFn", "pay").param("ops[1].name", "pay").param("ops[1].executor", "constant-vus")
+                    .param("ops[1].scenarioJson", "{\"vus\":4,\"duration\":\"90s\"}")
+                    .param("ops[1].slaPercentile", "95").param("ops[1].slaThresholdMs", "800").param("ops[1].maxErrorPct", "1")
+                    .param("holdMinutes", "5");
+            for (int i = 0; i + 1 < extra.length; i += 2) {
+                b = b.param(extra[i], extra[i + 1]);
+            }
+            return b;
+        };
+        mvc.perform(post.apply(new String[]{"warmup", "1m", "warmupPct", "20"})).andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(scripts.get(id).getWarmupSec()).isEqualTo(60);
+        assertThat(scripts.get(id).getWarmupPct()).isEqualTo(20);
+
+        var plan = runPlanner.plan(id, 1);
+        assertThat(plan.errors()).isEmpty();
+        var sc = plan.config().path("scenarios");
+        // каждому сценарию добавлен спутник прогрева, основные стартуют после него
+        assertThat(sc.path("login__warmup").path("executor").asText()).isEqualTo("constant-arrival-rate");
+        assertThat(sc.path("login__warmup").path("rate").asInt()).isEqualTo(1);           // 20% от 5 оп/с
+        assertThat(sc.path("pay__warmup").path("vus").asInt()).isEqualTo(1);              // 20% от 4 VU, не меньше 1
+        assertThat(sc.path("login").path("startTime").asText()).isEqualTo("60s");
+        assertThat(sc.path("pay").path("startTime").asText()).isEqualTo("60s");
+        // прогрев - фаза «разгона» единственной ступени: оценка и итоги начинаются после него
+        assertThat(plan.steps()).hasSize(1);
+        assertThat(plan.steps().get(0).rampSec()).isEqualTo(60);
+        assertThat(plan.steps().get(0).holdSec()).isEqualTo(300);                          // основная нагрузка 5 мин после прогрева
+        mvc.perform(get("/scripts/" + id + "/load")).andExpect(content().string(containsString("id=\"warm-on\"")))
+                .andExpect(content().string(containsString("value=\"1m\"")));
+
+        // некорректные значения отклоняются, прежние остаются
+        for (String[] bad : new String[][]{{"2x", "30", "Прогрев"}, {"3s", "30", "от 5 секунд"}, {"1m", "150", "от 1 до 100"}}) {
+            mvc.perform(post.apply(new String[]{"warmup", bad[0], "warmupPct", bad[1]}))
+                    .andExpect(status().isOk()).andExpect(content().string(containsString(bad[2])));
+        }
+        assertThat(scripts.get(id).getWarmupSec()).isEqualTo(60);
+
+        // без поля прогрев выключается, спутников нет
+        mvc.perform(post.apply(new String[]{})).andExpect(redirectedUrl("/scripts/" + id));
+        assertThat(scripts.get(id).getWarmupSec()).isZero();
+        var off = runPlanner.plan(id, 1);
+        assertThat(off.config().path("scenarios").has("login__warmup")).isFalse();
+        assertThat(off.steps().get(0).rampSec()).isZero();
+    }
+
+    @Test
     void loadWithoutIntensityIsRejectedWithMessage() throws Exception {
         long id = script("flow-empty").getScriptId();
         mvc.perform(post("/scripts/" + id + "/load").with(csrf())

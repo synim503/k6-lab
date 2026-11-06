@@ -71,7 +71,7 @@ public class RunViewService {
             for (RunStep s : steps) {
                 if (!now.isBefore(s.getRampStartAt()) && now.isBefore(s.getHoldEndAt())) {
                     current = s.getStepNo();
-                    phase = now.isBefore(s.getHoldStartAt()) ? "разгон" : "удержание";
+                    phase = now.isBefore(s.getHoldStartAt()) ? (snap.warmup() != null ? "прогрев" : "разгон") : "удержание";
                 }
             }
         } else if (run.getStartedAt() != null && run.getFinishedAt() != null) {

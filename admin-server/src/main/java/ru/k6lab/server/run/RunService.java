@@ -164,7 +164,9 @@ public class RunService {
                 script.getEnv(), ops, steps, plan.gracefulStopSec(), plan.gracefulRampDownSec(), data,
                 LoadCriteria.stopToMap(LoadCriteria.stop(script.getStopCriteria())),
                 LoadCriteria.successToMap(LoadCriteria.success(script.getSuccessCriteria())), v.isUsesHelper(),
-                List.of(), null, plan.warnings());
+                List.of(), null, plan.warnings(),
+                plan.steps().isEmpty() || plan.steps().get(0).rampSec() <= 0 ? null
+                        : new RunSnapshot.Warmup(plan.steps().get(0).rampSec(), script.getWarmupPct()));
     }
 
     // ------------------------------------------------------------------ чтение

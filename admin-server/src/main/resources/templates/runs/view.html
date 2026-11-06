@@ -35,7 +35,7 @@
                 <span class="small text-muted" id="metric-phase">Ожидание данных из Prometheus…</span>
                 <a class="btn btn-sm btn-outline-secondary" th:if="${grafanaUrl != null}" th:href="${grafanaUrl}" target="_blank">Открыть в Grafana</a>
             </div>
-            <div class="card mb-3"><table class="table table-sm mb-0">
+            <div class="card mb-3"><table class="table table-sm mb-0 metric-table">
                 <thead><tr><th>Операция</th><th>Интенсивность факт / план, оп/с</th><th>Время ответа / SLA</th><th>Ошибки / порог</th><th>Dropped</th><th>Нарушения</th></tr></thead>
                 <tbody id="metric-table"><tr><td colspan="6" class="text-muted">Нет данных</td></tr></tbody></table></div>
             <div class="row g-3" id="metric-charts"></div>

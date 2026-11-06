@@ -13,7 +13,7 @@ import java.util.Map;
 public record RunSnapshot(ScriptInfo script, Map<String, String> env, List<OpInfo> operations, List<StepInfo> steps,
                           int gracefulStopSec, int gracefulRampDownSec, List<DataFileInfo> dataFiles,
                           Map<String, Object> stopCriteria, Map<String, Object> successCriteria, boolean usesHelper,
-                          List<GeneratorInfo> generators, String segmentSequence, List<String> warnings) {
+                          List<GeneratorInfo> generators, String segmentSequence, List<String> warnings, Warmup warmup) {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ScriptInfo(Long id, String name, Long versionId, int versionNumber, String sha256, String entrypoint,
@@ -31,6 +31,11 @@ public record RunSnapshot(ScriptInfo script, Map<String, String> env, List<OpInf
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record DataFileInfo(String path, String mode, boolean hasHeader, boolean consumed) {
+    }
+
+    /** Прогрев в начале запуска: длительность и доля нагрузки; null - без прогрева. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Warmup(int sec, int pct) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

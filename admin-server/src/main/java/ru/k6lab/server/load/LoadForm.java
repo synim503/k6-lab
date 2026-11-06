@@ -25,6 +25,10 @@ public class LoadForm {
     private double holdMinutes = 5;
     /** Число генераторов, которое подставляется при запуске; null - не менять (форма нагрузки его не передаёт, задаётся на форме запуска). */
     private Integer generatorCount;
+    /** Прогрев перед основной нагрузкой для всех сценариев: длительность k6 («2m», «90s»); пусто - без прогрева. */
+    private String warmup;
+    /** Доля нагрузки на прогреве, % (по умолчанию 30). */
+    private Integer warmupPct;
     private String envText;
     private List<DataForm> dataFiles = new ArrayList<>();
 

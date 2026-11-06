@@ -4,20 +4,40 @@
 <head><title>Отладка скрипта</title></head>
 <body>
 <th:block layout:fragment="content">
-    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/scripts}">Скрипты</a><i class="bi bi-chevron-right"></i><span>Отладка</span></nav>
-    <div class="page-head">
-        <h3><span class="icon-tile"><i class="bi bi-bug"></i></span>Отладка скрипта</h3>
-        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/new}"><i class="bi bi-plus-lg me-1"></i>Новый скрипт</a>
+<div class="sb-app" id="sb-app">
+    <div class="sb-topbar">
+        <label class="visually-hidden" for="sb-script">Скрипт</label>
+        <select class="form-select form-select-sm" id="sb-script" style="width:280px" th:attr="data-pre=${preselect}">
+            <option value="">— новый скрипт —</option>
+            <option th:each="s : ${scriptList}" th:value="${s.id}" th:text="${s.name}"></option></select>
+        <span class="small text-muted sb-info" id="sb-script-info">Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.</span>
+        <span class="small text-danger" th:if="${k6Version == null}">k6 на сервере не найден: загрузите его в «Дистрибутивы» или задайте <code>K6LAB_K6_PATH</code></span>
+        <a class="btn btn-outline-secondary btn-sm ms-auto" th:href="@{/scripts}"><i class="bi bi-arrow-left me-1"></i>К скриптам</a>
     </div>
-    <div class="alert alert-warning py-2 small" th:if="${k6Version == null}">k6 на сервере админки не найден: загрузите k6 для архитектуры сервера в «Дистрибутивы» или задайте <code>K6LAB_K6_PATH</code>.</div>
 
-    <div class="card mb-3 sb-toolbar"><div class="card-body py-2">
-        <div class="d-flex flex-wrap align-items-center gap-2">
-            <label class="visually-hidden" for="sb-script">Скрипт</label>
-            <select class="form-select form-select-sm" id="sb-script" style="width:280px" th:attr="data-pre=${preselect}">
-                <option value="">— новый скрипт —</option>
-                <option th:each="s : ${scriptList}" th:value="${s.id}" th:text="${s.name}"></option></select>
-            <span class="vr d-none d-md-block"></span>
+    <div class="sb-main">
+        <aside class="sb-files" id="sb-drop">
+            <div class="sb-pane-head">Файлы
+                <span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-add" title="Новый файл" aria-label="Новый файл"><i class="bi bi-file-earmark-plus"></i></button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-pick" title="Выбрать файлы" aria-label="Выбрать файлы"><i class="bi bi-upload"></i></button>
+                </span></div>
+            <div class="list-group list-group-flush" id="sb-files"></div>
+            <div class="text-center text-muted small sb-hint p-3"><i class="bi bi-cloud-arrow-up fs-4 d-block"></i>Перетащите сюда файлы или папки:
+                модули, данные, сертификаты</div>
+            <div class="form-text px-3 pb-3"><i class="bi bi-star-fill text-warning"></i> — основной файл. Файлы читаются из скрипта по относительному пути: <code>open('./data/users.csv')</code>.</div>
+            <input type="file" id="sb-input" multiple hidden>
+        </aside>
+        <section class="sb-editor-wrap">
+            <div class="sb-pane-head"><code id="sb-cur">—</code><span class="small text-muted fw-normal">Ctrl+Enter — запустить</span></div>
+            <div id="sb-editor"></div>
+        </section>
+    </div>
+
+    <div class="sb-split" id="sb-split" role="separator" aria-orientation="horizontal" title="Потяните, чтобы изменить высоту нижней панели"></div>
+
+    <div class="sb-bottom" id="sb-bottom">
+        <div class="sb-actions">
             <button type="button" class="btn btn-success btn-sm" id="sb-run" title="Ctrl+Enter"><i class="bi bi-play-fill me-1"></i>Запустить</button>
             <button type="button" class="btn btn-outline-danger btn-sm" id="sb-stop" disabled><i class="bi bi-stop-fill me-1"></i>Остановить</button>
             <span class="badge text-bg-secondary" id="sb-status">не запущено</span>
@@ -25,48 +45,21 @@
                 <input class="form-control form-control-sm" id="sb-name" placeholder="имя нового скрипта" aria-label="Имя скрипта" style="width:200px">
                 <input class="form-control form-control-sm d-none" id="sb-comment" placeholder="что изменилось" aria-label="Комментарий к версии" style="width:200px">
                 <button type="button" class="btn btn-primary btn-sm" id="sb-save"><i class="bi bi-check-lg me-1"></i>Сохранить как скрипт</button></span>
+            <div class="alert alert-danger py-2 mb-0 w-100 d-none" id="sb-err"></div>
         </div>
-        <div class="alert alert-danger py-2 mt-2 mb-0 d-none" id="sb-err"></div>
-    </div></div>
-    <div class="small text-muted mb-3" id="sb-script-info">Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.</div>
-
-    <div class="row g-3">
-        <div class="col-lg-3 col-xl-2">
-            <div class="card" id="sb-drop">
-                <div class="card-header d-flex justify-content-between align-items-center">Файлы
-                    <span>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-add" title="Новый файл" aria-label="Новый файл"><i class="bi bi-file-earmark-plus"></i></button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="sb-pick" title="Выбрать файлы" aria-label="Выбрать файлы"><i class="bi bi-upload"></i></button>
-                    </span></div>
-                <div class="list-group list-group-flush" id="sb-files"></div>
-                <div class="card-body text-center text-muted small sb-hint"><i class="bi bi-cloud-arrow-up fs-4 d-block"></i>Перетащите сюда файлы или папки:
-                    модули, данные, сертификаты</div>
-                <input type="file" id="sb-input" multiple hidden>
-            </div>
-            <div class="form-text mt-2"><i class="bi bi-star-fill text-warning"></i> — основной файл. Файлы читаются из скрипта по относительному пути: <code>open('./data/users.csv')</code>.</div>
-        </div>
-        <div class="col-lg-9 col-xl-10">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center"><code id="sb-cur">—</code>
-                    <span class="small text-muted">Ctrl+Enter — запустить</span></div>
-                <div id="sb-editor" style="height: 68vh; min-height: 520px"></div>
-            </div>
-        </div>
-    </div>
-
-    <div class="row g-3 mt-0">
-        <div class="col-lg-4">
-            <div class="card card-body">
-                <h6 class="fw-semibold mb-2">Параметры запуска</h6>
+        <div class="sb-bottom-body">
+            <div class="sb-params">
+                <div class="fw-semibold mb-2">Параметры запуска</div>
                 <div class="row g-2">
-                    <div class="col-12"><label class="form-label mb-1" for="sb-exec">Какую функцию запустить <span class="text-muted small">(список строится по основному файлу)</span></label>
-                        <select class="form-select form-select-sm" id="sb-exec"><option value="default">default (основная функция)</option></select></div>
-                    <div class="col-4"><label class="form-label mb-1">VU</label><input class="form-control form-control-sm" id="sb-vus" type="number" min="1" max="50" value="1"></div>
-                    <div class="col-4"><label class="form-label mb-1">Итераций на VU</label><input class="form-control form-control-sm" id="sb-iter" type="number" min="1" max="1000" value="1"></div>
-                    <div class="col-4"><label class="form-label mb-1">Лимит, с</label><input class="form-control form-control-sm" id="sb-max" type="number" min="10" max="3600" value="300"></div>
-                    <div class="col-12"><label class="form-label mb-1">Переменные окружения</label>
+                    <div class="col-12"><label class="form-label mb-1" for="sb-exec">Какую функцию запустить</label>
+                        <select class="form-select form-select-sm" id="sb-exec"><option value="default">default (основная функция)</option></select>
+                        <div class="form-text mt-0">Список строится по основному файлу.</div></div>
+                    <div class="col-4"><label class="form-label mb-1" for="sb-vus">VU</label><input class="form-control form-control-sm" id="sb-vus" type="number" min="1" max="50" value="1"></div>
+                    <div class="col-4"><label class="form-label mb-1" for="sb-iter" title="Итераций на VU">Итераций</label><input class="form-control form-control-sm" id="sb-iter" type="number" min="1" max="1000" value="1"></div>
+                    <div class="col-4"><label class="form-label mb-1" for="sb-max">Лимит, с</label><input class="form-control form-control-sm" id="sb-max" type="number" min="10" max="3600" value="300"></div>
+                    <div class="col-12"><label class="form-label mb-1" for="sb-env">Переменные окружения</label>
                         <textarea class="form-control form-control-sm font-monospace" id="sb-env" rows="3" placeholder="BASE_URL=http://stand.example"></textarea>
-                        <div class="form-text">KEY=VALUE по строкам. Секреты здесь не подставляются: впишите тестовое значение.</div></div>
+                        <div class="form-text mt-0">KEY=VALUE по строкам. Секреты здесь не подставляются.</div></div>
                 </div>
                 <details class="mt-3">
                     <summary class="text-muted">Флаги k6</summary>
@@ -77,7 +70,7 @@
                             <option value="HTTP_DEBUG">заголовки запросов и ответов (--http-debug)</option>
                             <option value="HTTP_DEBUG_FULL">заголовки и тела (--http-debug=full)</option>
                         </select>
-                        <div class="form-text mb-3">Каждый запрос и ответ попадает в лог ниже. В телах могут быть секреты.</div>
+                        <div class="form-text mb-3">Каждый запрос и ответ попадает в лог. В телах могут быть секреты.</div>
                         <div class="form-check mb-2" th:each="f : ${k6Flags}" th:unless="${f.httpDebug}">
                             <input class="form-check-input sb-flag" type="checkbox" th:id="'sf-' + ${f.name()}" th:value="${f.name()}">
                             <label class="form-check-label" th:for="'sf-' + ${f.name()}">
@@ -85,16 +78,47 @@
                                 <span class="d-block form-text mt-0" th:text="${f.description}"></span></label></div>
                     </div>
                 </details>
+                <div class="form-text mt-3">Выполняется на сервере админки (<span th:text="${k6Version ?: 'k6 не найден'}"></span>): адреса могут быть доступны иначе, чем с генераторов.
+                    Окружение процесса пустое, переменные и секреты админки скрипту не видны.</div>
             </div>
-        </div>
-        <div class="col-lg-8">
-            <div class="sect-title mt-0 mb-2"><h5>Лог запуска</h5><span class="hint">выполняется на сервере админки</span></div>
-            <pre id="sb-log" class="log-view mb-0" style="min-height:280px;max-height:50vh">Лог появится после запуска.</pre>
+            <pre id="sb-log" class="log-view">Лог появится после запуска.</pre>
         </div>
     </div>
+</div>
 </th:block>
 <th:block layout:fragment="scripts">
     <style>
+        /* окно отладчика на весь экран: файлы | редактор сверху, действия, параметры и лог снизу */
+        main.container-fluid { max-width: none !important; padding: 0 !important; }
+        .app-nav { margin-bottom: 0 !important; }
+        .app-footer { display: none; }
+        body { overflow: hidden; }
+        .sb-app { height: calc(100vh - var(--nav-h, 58px)); display: flex; flex-direction: column; background: var(--k6-bg); }
+        .sb-topbar { display: flex; align-items: center; gap: .75rem; padding: .5rem .9rem; background: #fff; border-bottom: 1px solid var(--k6-border); flex-wrap: wrap; }
+        .sb-main { flex: 1 1 auto; min-height: 0; display: flex; background: #fff; }
+        .sb-files { width: 250px; flex: none; overflow: auto; border-right: 1px solid var(--k6-border); background: #fff; }
+        .sb-editor-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+        .sb-pane-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .45rem .8rem; font-weight: 600; border-bottom: 1px solid var(--k6-border); background: #fafbfe; font-size: .9rem; }
+        #sb-editor { flex: 1 1 auto; min-height: 0; }
+        .sb-split { flex: none; height: 7px; cursor: row-resize; background: var(--k6-border); border-top: 1px solid #d7dbea; }
+        .sb-split:hover, .sb-split.drag { background: var(--k6-primary); }
+        .sb-bottom { flex: 0 0 var(--sb-bottom, 320px); min-height: 150px; display: flex; flex-direction: column; background: #fff; }
+        .sb-actions { display: flex; align-items: center; gap: .5rem; padding: .5rem .9rem; border-bottom: 1px solid var(--k6-border); flex-wrap: wrap; }
+        .sb-bottom-body { flex: 1 1 auto; min-height: 0; display: flex; }
+        .sb-params { width: 330px; flex: none; overflow: auto; padding: .75rem .9rem; border-right: 1px solid var(--k6-border); }
+        #sb-log { flex: 1 1 auto; margin: 0; max-height: none; min-height: 0; height: 100%; border-radius: 0; border: 0; }
+        @media (max-width: 991px) {
+            body { overflow: auto; }
+            .sb-app { height: auto; }
+            .sb-main { flex-direction: column; }
+            .sb-files { width: auto; max-height: 220px; border-right: 0; border-bottom: 1px solid var(--k6-border); }
+            #sb-editor { flex: none; height: 55vh; }
+            .sb-split { display: none; }
+            .sb-bottom { flex: none; }
+            .sb-bottom-body { flex-direction: column; }
+            .sb-params { width: auto; border-right: 0; border-bottom: 1px solid var(--k6-border); }
+            #sb-log { min-height: 260px; }
+        }
         #sb-drop.sb-over { outline: 2px dashed var(--k6-primary); outline-offset: 2px; background: #eef0fb; }
         #sb-files .list-group-item { display: flex; align-items: center; gap: .4rem; padding: .35rem .6rem; cursor: pointer; font-size: .88rem; }
         #sb-files .list-group-item.active { background: #eef0fb; color: var(--k6-primary); border-color: #eef0fb; font-weight: 600; }
@@ -102,7 +126,7 @@
         #sb-files .sb-act { border: 0; background: none; padding: 0 .15rem; color: #9aa0b8; }
         #sb-files .sb-act:hover { color: var(--k6-primary); }
         #sb-files .sb-entry.on { color: #f59e0b; }
-        #sb-files:not(:empty) + .sb-hint { display: none; }
+        #sb-files:not(:empty) ~ .sb-hint { display: none; }
     </style>
     <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script>
@@ -134,6 +158,29 @@
             function lang(p) { return /\.json$/i.test(p) ? 'json' : /\.(js|mjs|cjs)$/i.test(p) ? 'javascript' : 'plaintext'; }
             function isJs(p) { return /\.(js|mjs|cjs)$/i.test(p); }
             function showErr(m) { var e = $('sb-err'); e.textContent = m || ''; e.classList.toggle('d-none', !m); }
+
+            // ---------- окно на весь экран: высота шапки сайта и перетаскиваемая граница нижней панели
+            (function () {
+                var nav = document.querySelector('.app-nav');
+                function navH() { document.documentElement.style.setProperty('--nav-h', (nav ? nav.offsetHeight : 58) + 'px'); }
+                navH(); window.addEventListener('resize', navH);
+                var app = document.getElementById('sb-app'), split = document.getElementById('sb-split');
+                try { var saved = parseInt(localStorage.getItem('sb-bottom-h'), 10); if (saved > 150) { app.style.setProperty('--sb-bottom', saved + 'px'); } } catch (e) { /* без сохранения */ }
+                var dragging = false;
+                split.addEventListener('pointerdown', function (e) { dragging = true; split.classList.add('drag'); split.setPointerCapture(e.pointerId); e.preventDefault(); });
+                split.addEventListener('pointermove', function (e) {
+                    if (!dragging) { return; }
+                    var r = app.getBoundingClientRect();
+                    var h = Math.max(150, Math.min(r.bottom - e.clientY, r.height - 260));
+                    app.style.setProperty('--sb-bottom', h + 'px');
+                });
+                function end() {
+                    if (!dragging) { return; }
+                    dragging = false; split.classList.remove('drag');
+                    try { localStorage.setItem('sb-bottom-h', parseInt(getComputedStyle(app).getPropertyValue('--sb-bottom'), 10)); } catch (e) { /* без сохранения */ }
+                }
+                split.addEventListener('pointerup', end); split.addEventListener('pointercancel', end);
+            })();
 
             // ---------- список файлов
             function renderFiles() {

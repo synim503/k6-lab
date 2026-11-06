@@ -146,7 +146,9 @@ public final class ChartRenderer {
                 timeLine(rate, s.op() + " план", s.plan(), col, true);
             }
         }
+        double warm = ops.get(0).warmupMin();
         if (!rate.getSeriesMap().isEmpty()) {
+            markWarmup(rate, warm);
             out.add(img(rate.getTitle(), rate));
         }
         for (RunSeriesService.OpSeries s : ops) {
@@ -158,6 +160,7 @@ public final class ChartRenderer {
             double last = s.pct().get(s.pct().size() - 1).min();
             timeLine(c, "SLA", List.of(new RunSeriesService.Pt(s.pct().get(0).min(), s.slaMs()), new RunSeriesService.Pt(last, s.slaMs())),
                     COLORS[2], true);
+            markWarmup(c, warm);
             out.add(img(c.getTitle(), c));
         }
         XYChart err = chart("Ошибки", "%", "Минуты от начала теста");
@@ -174,9 +177,28 @@ public final class ChartRenderer {
                     col, true);
         }
         if (!err.getSeriesMap().isEmpty()) {
+            markWarmup(err, warm);
             out.add(img(err.getTitle(), err));
         }
         return out;
+    }
+
+    /** Граница прогрева: вертикальная пунктирная линия на уровне максимума графика; всё левее - прогрев, он не оценивается. */
+    private static void markWarmup(XYChart c, double warmupMin) {
+        if (warmupMin <= 0 || c.getSeriesMap().isEmpty()) {
+            return;
+        }
+        double max = 0;
+        for (var s : c.getSeriesMap().values()) {
+            for (double v : s.getYData()) {
+                if (Double.isFinite(v)) {
+                    max = Math.max(max, v);
+                }
+            }
+        }
+        timeLine(c, String.format(java.util.Locale.ROOT, "Прогрев до %.1f мин", warmupMin),
+                List.of(new RunSeriesService.Pt(warmupMin, 0), new RunSeriesService.Pt(warmupMin, max <= 0 ? 1 : max * 1.05)),
+                new Color(245, 158, 11), true);
     }
 
     private static void timeLine(XYChart c, String name, List<RunSeriesService.Pt> pts, Color color, boolean dashed) {

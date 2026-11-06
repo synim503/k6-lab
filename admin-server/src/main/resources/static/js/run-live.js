@@ -114,6 +114,7 @@
     document.addEventListener('toggle', function (e) {
         if (e.target && e.target.id === 'gens-box') { try { sessionStorage.setItem('run-gens-open', e.target.open ? '1' : '0'); } catch (x) { /* без сохранения */ } }
     }, true);
+    document.body.addEventListener('htmx:afterSwap', applyGens);
     document.body.addEventListener('htmx:afterSettle', applyGens);
     applyGens();
     window.addEventListener('beforeunload', function () { logEs.close(); statusEs.close(); });

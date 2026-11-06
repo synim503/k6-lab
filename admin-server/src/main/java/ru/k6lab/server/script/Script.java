@@ -74,4 +74,12 @@ public class Script extends Auditable {
     /** Сколько генераторов брать при запуске (подставляется на странице запуска). */
     @Column(name = "generator_count", nullable = false)
     private int generatorCount = 1;
+
+    /** Длительность прогрева перед основной нагрузкой, секунд; 0 - без прогрева. */
+    @Column(name = "warmup_sec", nullable = false)
+    private int warmupSec = 0;
+
+    /** Доля нагрузки на прогреве, % от целевой. */
+    @Column(name = "warmup_pct", nullable = false)
+    private int warmupPct = 30;
 }

@@ -292,6 +292,9 @@ public final class K6ConfigGenerator {
             ObjectNode t = sc.putObject("tags");
             tagMap.forEach(t::put);
         }
+        if (in.warmupSec() > 0 && in.warmupPct() > 0) {
+            addWarmup(op, in, scenarios, sc);
+        }
         long vus = Math.max(number(params.get("vus")), Math.max(number(params.get("preAllocatedVUs")), number(params.get("maxVUs"))));
         long pre = Math.max(number(params.get("vus")), number(params.get("preAllocatedVUs")));
         double peakRate = 0;
@@ -304,6 +307,72 @@ public final class K6ConfigGenerator {
         java.util.Arrays.fill(ratesPerStep, peakRate); // план по оп/с есть только у constant-arrival-rate
         return new OpPlan(op.name(), op.executor().contains("arrival") ? Mode.OPEN : Mode.CLOSED, 1, new long[0], ratesPerStep,
                 new long[n], pre, vus, peakRate);
+    }
+
+    /**
+     * Прогрев: сценарию добавляется спутник «имя__warmup» с долей нагрузки и заданной длительностью, а основной сценарий стартует после него.
+     * Спутник живёт под своим именем scenario, поэтому его ошибки и время ответа не попадают в пороги k6, SLA и итоги.
+     * Поддержаны constant-vus, ramping-vus, constant-arrival-rate и ramping-arrival-rate; у остальных исполнителей прогрева нет.
+     */
+    private static void addWarmup(OperationSpec op, ConfigInput in, ObjectNode scenarios, ObjectNode main) {
+        double pct = in.warmupPct() / 100.0;
+        int gens = Math.max(1, in.generatorCount());
+        ObjectNode w = MAPPER.createObjectNode();
+        switch (op.executor()) {
+            case "constant-vus" -> {
+                w.put("executor", "constant-vus");
+                w.put("vus", scaled(main.path("vus").asLong(1), pct, gens));
+            }
+            case "ramping-vus" -> {
+                w.put("executor", "constant-vus");
+                w.put("vus", scaled(firstTarget(main, "startVUs"), pct, gens));
+            }
+            case "constant-arrival-rate", "ramping-arrival-rate" -> {
+                long rate = "constant-arrival-rate".equals(op.executor()) ? main.path("rate").asLong(1) : firstTarget(main, "startRate");
+                w.put("executor", "constant-arrival-rate");
+                w.put("rate", Math.max(1, Math.round(rate * pct)));
+                w.put("timeUnit", main.path("timeUnit").asText("1s"));
+                long pre = scaled(main.path("preAllocatedVUs").asLong(1), pct, gens);
+                w.put("preAllocatedVUs", pre);
+                w.put("maxVUs", Math.max(pre, scaled(main.path("maxVUs").asLong(pre), pct, gens)));
+            }
+            default -> {
+                return;
+            }
+        }
+        w.put("duration", in.warmupSec() + "s");
+        w.put("gracefulStop", "5s");
+        if (main.has("exec")) {
+            w.set("exec", main.get("exec"));
+        }
+        if (main.has("env")) {
+            w.set("env", main.get("env").deepCopy());
+        }
+        if (main.has("tags")) {
+            w.set("tags", main.get("tags").deepCopy());
+        }
+        double start = ConfigDuration.parse(main.path("startTime").asText(""), 0);
+        if (start > 0) {
+            w.put("startTime", main.path("startTime").asText());
+        }
+        main.put("startTime", Math.round(start + in.warmupSec()) + "s");
+        scenarios.set(op.name() + WARMUP_SUFFIX, w);
+    }
+
+    /** Суффикс имени сценария-спутника прогрева. */
+    public static final String WARMUP_SUFFIX = "__warmup";
+
+    private static long scaled(long value, double pct, int gens) {
+        return Math.max(gens, Math.max(1, Math.round(value * pct)));
+    }
+
+    /** Цель первой стадии (или начальное значение, если стадий нет). */
+    private static long firstTarget(ObjectNode sc, String startField) {
+        var stages = sc.path("stages");
+        if (stages.isArray() && stages.size() > 0 && stages.get(0).path("target").asLong(0) > 0) {
+            return stages.get(0).path("target").asLong();
+        }
+        return Math.max(1, sc.path(startField).asLong(1));
     }
 
     private static Map<String, String> stringMap(Object o) {

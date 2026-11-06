@@ -14,6 +14,19 @@
 
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post">
 
+        <div class="card warm-card mb-3"><div class="card-body d-flex flex-wrap align-items-center gap-3">
+            <div class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="warm-on" th:checked="${form.warmup != null}">
+                <label class="form-check-label fw-semibold" for="warm-on">Прогрев</label></div>
+            <div class="input-group input-group-sm warm-field" style="width:215px"><span class="input-group-text">Длительность</span>
+                <input class="form-control" id="warm-dur" name="warmup" th:value="${form.warmup}" placeholder="2m" aria-label="Длительность прогрева"></div>
+            <div class="input-group input-group-sm warm-field" style="width:185px"><span class="input-group-text">Нагрузка</span>
+                <input class="form-control" id="warm-pct" type="number" min="1" max="100" name="warmupPct" th:value="${form.warmupPct}" aria-label="Доля нагрузки на прогреве">
+                <span class="input-group-text">%</span></div>
+            <span class="small text-muted warm-help">Перед основной нагрузкой каждый сценарий отрабатывает прогрев на этой доле нагрузки. Ошибки и время ответа прогрева
+                не попадают в SLA, пороги k6 и итоги, на графиках он выделен. Работает для constant-vus, ramping-vus, constant-arrival-rate и ramping-arrival-rate.</span>
+        </div></div>
+
         <div class="sect-title mt-0"><h5>Операции</h5>
             <span class="hint">каждая функция скрипта — отдельная операция; для одной функции можно добавить несколько сценариев</span></div>
         <div class="op-list" id="ops-body">
@@ -364,6 +377,20 @@
         const row = e.target.closest('.op-row');
         if (row && e.target.closest('.op-detail')) sync(row);
     });
+
+    // ---- прогрев: выключатель отключает поля, и они не отправляются
+    (function () {
+        const on = document.getElementById('warm-on'), dur = document.getElementById('warm-dur'), pct = document.getElementById('warm-pct');
+        if (!on) return;
+        function sync() {
+            dur.disabled = !on.checked; pct.disabled = !on.checked;
+            document.querySelector('.warm-card').classList.toggle('is-off', !on.checked);
+            if (on.checked && !dur.value.trim()) dur.value = '2m';
+            if (on.checked && !pct.value) pct.value = 30;
+        }
+        on.addEventListener('change', sync);
+        sync();
+    })();
 
     // ---- несохранённые изменения: пометка и предупреждение при уходе со страницы
     const form = body.closest('form');

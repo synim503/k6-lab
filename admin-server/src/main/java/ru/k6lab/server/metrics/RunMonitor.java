@@ -141,7 +141,7 @@ public class RunMonitor {
         json.put("dataTs", now.toEpochMilli());
         json.put("lagSec", lag);
         json.put("step", stepNo);
-        json.put("phase", current == null ? "" : hold ? "hold" : "ramp");
+        json.put("phase", current == null ? "" : hold ? "hold" : (snap.warmup() != null ? "warmup" : "ramp"));
         json.put("elapsedSec", elapsed);
         json.put("windowSec", window);
         ArrayNode ra = json.putArray("rows");
@@ -239,34 +239,44 @@ public class RunMonitor {
             errChecks = byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.CHECKS, runId, windowSec), at));
         }
 
+        // прогрев: пока он идёт, показываем факт со сценария-спутника, цель - доля нагрузки, нарушения не отмечаем
+        boolean warm = snap.warmup() != null && step != null && at.isBefore(step.getHoldStartAt());
         List<LiveRow> rows = new ArrayList<>();
         for (RunSnapshot.OpInfo o : snap.operations()) {
             if (!o.enabled()) {
                 continue;
             }
             double level = levelOrNull != null ? levelOrNull : step == null ? 0 : step.getLevelPct();
-            double target = o.ratePerSec() * level / 100.0 * (levelOrNull != null ? 1 : rampFraction(step, at));
-            Double actual = rate.get(o.name());
-            Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
-            Double err = helper ? errHelper.get(o.name()) : o.failureSource().equals("CHECKS") ? errChecks.get(o.name()) : errHttp.get(o.name());
-            Double drop = dropped.get(o.name());
+            double target = o.ratePerSec() * level / 100.0 * (levelOrNull != null ? 1 : warm ? snap.warmup().pct() / 100.0 : rampFraction(step, at));
+            Double actual = pick(rate, o.name());
+            Double p95 = pick(pct.getOrDefault(o.slaPercentile(), Map.of()), o.name());
+            Double err = pick(helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp, o.name());
+            Double drop = pick(dropped, o.name());
             List<String> reasons = new ArrayList<>();
-            if (p95 != null && p95 > o.slaThresholdMs()) {
-                reasons.add("p" + o.slaPercentile() + " > SLA");
-            }
-            if (err != null && err > o.maxErrorPct()) {
-                reasons.add("ошибки > порога");
-            }
-            if (actual != null && target > 0 && levelOrNull != null && actual < target * 0.95) {
-                reasons.add("интенсивность < 95% цели");
-            }
-            if (drop != null && drop > 0) {
-                reasons.add("dropped_iterations");
+            if (!warm) {
+                if (p95 != null && p95 > o.slaThresholdMs()) {
+                    reasons.add("p" + o.slaPercentile() + " > SLA");
+                }
+                if (err != null && err > o.maxErrorPct()) {
+                    reasons.add("ошибки > порога");
+                }
+                if (actual != null && target > 0 && levelOrNull != null && actual < target * 0.95) {
+                    reasons.add("интенсивность < 95% цели");
+                }
+                if (drop != null && drop > 0) {
+                    reasons.add("dropped_iterations");
+                }
             }
             rows.add(new LiveRow(o.name(), target, actual, p95, o.slaPercentile(), o.slaThresholdMs(), err, o.maxErrorPct(), drop,
                     !reasons.isEmpty(), reasons));
         }
         return rows;
+    }
+
+    /** Значение операции: основной сценарий, а пока он не стартовал (прогрев) - его спутник «имя__warmup». */
+    private static Double pick(Map<String, Double> m, String name) {
+        Double v = m.get(name);
+        return v != null ? v : m.get(name + ru.k6lab.core.k6config.K6ConfigGenerator.WARMUP_SUFFIX);
     }
 
     private static Map<String, Double> byScenario(List<PrometheusClient.Sample> samples) {
