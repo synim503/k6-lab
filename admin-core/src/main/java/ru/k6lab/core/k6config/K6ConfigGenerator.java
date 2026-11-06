@@ -202,10 +202,10 @@ public final class K6ConfigGenerator {
 
     /** Поля исполнителей k6 (без общих); для ramping-arrival-rate - только то, что можно менять поверх расчёта по профилю. */
     private static final Map<String, java.util.Set<String>> EXECUTOR_KEYS = Map.of(
-            "constant-vus", java.util.Set.of("vus", "duration"),
-            "ramping-vus", java.util.Set.of("startVUs", "stages", "gracefulRampDown"),
-            "constant-arrival-rate", java.util.Set.of("rate", "timeUnit", "duration", "preAllocatedVUs", "maxVUs"),
-            "ramping-arrival-rate", java.util.Set.of("startRate", "timeUnit", "stages", "preAllocatedVUs", "maxVUs"),
+            "constant-vus", java.util.Set.of("vus", "duration", "warmup"),
+            "ramping-vus", java.util.Set.of("startVUs", "stages", "gracefulRampDown", "warmup"),
+            "constant-arrival-rate", java.util.Set.of("rate", "timeUnit", "duration", "preAllocatedVUs", "maxVUs", "warmup"),
+            "ramping-arrival-rate", java.util.Set.of("startRate", "timeUnit", "stages", "preAllocatedVUs", "maxVUs", "warmup"),
             "per-vu-iterations", java.util.Set.of("vus", "iterations", "maxDuration"),
             "shared-iterations", java.util.Set.of("vus", "iterations", "maxDuration"),
             "externally-controlled", java.util.Set.of("vus", "maxVUs", "duration"));
@@ -250,8 +250,103 @@ public final class K6ConfigGenerator {
                         + op.executor() + ". Допустимые: " + String.join(", ", keys));
             }
         }
+        if (op.scenario().containsKey("warmup")) {
+            validateWarmup(op);
+        }
     }
 
+    // ------------------------------------------------------------------ прогрев
+
+    /**
+     * Прогрев сценария - начальный отрезок времени: его длительность и (только у ramping-*) своя интенсивность первой стадией.
+     * Исполнитель не меняется. Метрики прогрева помечаются тегом phase=warmup (helper admin.js, по переменной
+     * {@link #WARMUP_END_ENV}), в итоги, SLA и пороги k6 они не попадают.
+     */
+    public static final int WARMUP_MIN_SEC = 5;
+    public static final int WARMUP_MAX_SEC = 3600;
+    /** Переменная окружения сценария: секунда теста (в мс), до которой идёт прогрев. */
+    public static final String WARMUP_END_ENV = "K6LAB_WARMUP_END_MS";
+
+    private static boolean ramping(String executor) {
+        return executor.startsWith("ramping-");
+    }
+
+    private static void validateWarmup(OperationSpec op) {
+        Object w = op.scenario().get("warmup");
+        if (!(w instanceof Map<?, ?> m)) {
+            throw new IllegalArgumentException("Операция «" + op.name() + "»: прогрев задаётся длительностью (у ramping-* ещё и интенсивностью)");
+        }
+        double sec = durationSec(String.valueOf(m.get("duration")));
+        if (sec < WARMUP_MIN_SEC || sec > WARMUP_MAX_SEC) {
+            throw new IllegalArgumentException("Операция «" + op.name() + "»: длительность прогрева от 5 секунд до 1 часа, например 2m или 90s");
+        }
+        Object t = m.get("target");
+        if (t != null && !ramping(op.executor())) {
+            throw new IllegalArgumentException("Операция «" + op.name() + "»: интенсивность прогрева задаётся только у ramping-* "
+                    + "(у " + op.executor() + " прогрев - первые " + String.valueOf(m.get("duration")) + " сценария на заданной нагрузке)");
+        }
+        if (t != null && (!(t instanceof Number n) || n.doubleValue() <= 0)) {
+            throw new IllegalArgumentException("Операция «" + op.name() + "»: интенсивность прогрева должна быть больше 0 ("
+                    + (op.executor().contains("arrival") ? "итераций за интервал" : "VU") + ")");
+        }
+    }
+
+    /** Параметры прогрева операции или null, если его нет. */
+    private static Map<?, ?> warmOf(OperationSpec op) {
+        return op.scenario().get("warmup") instanceof Map<?, ?> m && !op.profileDriven() ? m : null;
+    }
+
+    /** Секунда теста, когда у операции заканчивается прогрев (старт сценария + длительность прогрева); 0 - прогрева нет. */
+    public static int warmupEndSec(OperationSpec op) {
+        Map<?, ?> w = warmOf(op);
+        if (w == null) {
+            return 0;
+        }
+        double start = ConfigDuration.parse(String.valueOf(op.scenario().getOrDefault("startTime", "0s")), 0);
+        return (int) Math.round(start + durationSec(String.valueOf(w.get("duration"))));
+    }
+
+    /** Интенсивность прогрева в оп/с (только ramping-arrival-rate со своей интенсивностью прогрева); иначе плана по оп/с нет - 0. */
+    public static double warmupRatePerSec(OperationSpec op) {
+        Map<?, ?> w = warmOf(op);
+        if (w == null || !"ramping-arrival-rate".equals(op.executor()) || !(w.get("target") instanceof Number n)) {
+            return 0;
+        }
+        double unit = durationSec(String.valueOf(op.scenario().getOrDefault("timeUnit", "1s")));
+        return unit > 0 ? n.doubleValue() / unit : 0;
+    }
+
+    /**
+     * Своя интенсивность прогрева у ramping-*: первая стадия держит заданное значение, затем секундный переход к прежнему началу
+     * сценария и его собственные стадии. Исполнитель остаётся прежним.
+     */
+    private static void applyWarmup(OperationSpec op, ObjectNode sc, Map<?, ?> warm, int gens) {
+        if (!ramping(op.executor()) || !(warm.get("target") instanceof Number num)) {
+            return; // без своей интенсивности прогрев - только отрезок времени
+        }
+        long sec = Math.round(durationSec(String.valueOf(warm.get("duration"))));
+        double wt = num.doubleValue();
+        boolean vu = op.executor().endsWith("vus");
+        Number target;
+        if (vu) {
+            target = Math.max(gens, Math.max(1, Math.round(wt)));
+        } else if (wt == Math.rint(wt)) {
+            target = (long) wt;
+        } else {
+            target = wt;
+        }
+        String startField = vu ? "startVUs" : "startRate";
+        ArrayNode stages = MAPPER.createArrayNode();
+        stages.addObject().put("duration", sec + "s").set("target", MAPPER.valueToTree(target));
+        var start = sc.has(startField) ? sc.get(startField).deepCopy() : MAPPER.getNodeFactory().numberNode(0);
+        stages.addObject().put("duration", "1s").set("target", start);
+        sc.path("stages").forEach(stages::add);
+        if (!vu && !sc.has("timeUnit")) {
+            sc.put("timeUnit", "1s");
+        }
+        sc.set("stages", stages);
+        sc.set(startField, MAPPER.valueToTree(target));
+    }
     /**
      * Сценарий целиком из параметров операции (executor и поля как в options.scenarios): без ступеней профиля.
      * Всё, что задал пользователь, попадает в конфиг как есть - проверку значений делает k6.
@@ -262,6 +357,8 @@ public final class K6ConfigGenerator {
         Map<String, Object> params = new LinkedHashMap<>(op.scenario());
         Object env = params.remove("env");
         Object tags = params.remove("tags");
+        Map<?, ?> warm = warmOf(op);
+        params.remove("warmup"); // не поле k6: становится первой стадией сценария
         for (Map.Entry<String, Object> e : params.entrySet()) {
             sc.set(e.getKey(), MAPPER.valueToTree(e.getValue()));
         }
@@ -281,6 +378,9 @@ public final class K6ConfigGenerator {
         putExec(sc, op);
         Map<String, String> envMap = new java.util.TreeMap<>(op.env());
         envMap.putAll(stringMap(env));
+        if (warm != null) {
+            envMap.put(WARMUP_END_ENV, String.valueOf(warmupEndSec(op) * 1000L)); // helper по ней ставит тег phase=warmup
+        }
         if (!envMap.isEmpty()) {
             ObjectNode e = sc.putObject("env");
             envMap.forEach(e::put);
@@ -292,8 +392,8 @@ public final class K6ConfigGenerator {
             ObjectNode t = sc.putObject("tags");
             tagMap.forEach(t::put);
         }
-        if (in.warmupSec() > 0 && in.warmupPct() > 0) {
-            addWarmup(op, in, scenarios, sc);
+        if (warm != null) {
+            applyWarmup(op, sc, warm, gens);
         }
         long vus = Math.max(number(params.get("vus")), Math.max(number(params.get("preAllocatedVUs")), number(params.get("maxVUs"))));
         long pre = Math.max(number(params.get("vus")), number(params.get("preAllocatedVUs")));
@@ -307,72 +407,6 @@ public final class K6ConfigGenerator {
         java.util.Arrays.fill(ratesPerStep, peakRate); // план по оп/с есть только у constant-arrival-rate
         return new OpPlan(op.name(), op.executor().contains("arrival") ? Mode.OPEN : Mode.CLOSED, 1, new long[0], ratesPerStep,
                 new long[n], pre, vus, peakRate);
-    }
-
-    /**
-     * Прогрев: сценарию добавляется спутник «имя__warmup» с долей нагрузки и заданной длительностью, а основной сценарий стартует после него.
-     * Спутник живёт под своим именем scenario, поэтому его ошибки и время ответа не попадают в пороги k6, SLA и итоги.
-     * Поддержаны constant-vus, ramping-vus, constant-arrival-rate и ramping-arrival-rate; у остальных исполнителей прогрева нет.
-     */
-    private static void addWarmup(OperationSpec op, ConfigInput in, ObjectNode scenarios, ObjectNode main) {
-        double pct = in.warmupPct() / 100.0;
-        int gens = Math.max(1, in.generatorCount());
-        ObjectNode w = MAPPER.createObjectNode();
-        switch (op.executor()) {
-            case "constant-vus" -> {
-                w.put("executor", "constant-vus");
-                w.put("vus", scaled(main.path("vus").asLong(1), pct, gens));
-            }
-            case "ramping-vus" -> {
-                w.put("executor", "constant-vus");
-                w.put("vus", scaled(firstTarget(main, "startVUs"), pct, gens));
-            }
-            case "constant-arrival-rate", "ramping-arrival-rate" -> {
-                long rate = "constant-arrival-rate".equals(op.executor()) ? main.path("rate").asLong(1) : firstTarget(main, "startRate");
-                w.put("executor", "constant-arrival-rate");
-                w.put("rate", Math.max(1, Math.round(rate * pct)));
-                w.put("timeUnit", main.path("timeUnit").asText("1s"));
-                long pre = scaled(main.path("preAllocatedVUs").asLong(1), pct, gens);
-                w.put("preAllocatedVUs", pre);
-                w.put("maxVUs", Math.max(pre, scaled(main.path("maxVUs").asLong(pre), pct, gens)));
-            }
-            default -> {
-                return;
-            }
-        }
-        w.put("duration", in.warmupSec() + "s");
-        w.put("gracefulStop", "5s");
-        if (main.has("exec")) {
-            w.set("exec", main.get("exec"));
-        }
-        if (main.has("env")) {
-            w.set("env", main.get("env").deepCopy());
-        }
-        if (main.has("tags")) {
-            w.set("tags", main.get("tags").deepCopy());
-        }
-        double start = ConfigDuration.parse(main.path("startTime").asText(""), 0);
-        if (start > 0) {
-            w.put("startTime", main.path("startTime").asText());
-        }
-        main.put("startTime", Math.round(start + in.warmupSec()) + "s");
-        scenarios.set(op.name() + WARMUP_SUFFIX, w);
-    }
-
-    /** Суффикс имени сценария-спутника прогрева. */
-    public static final String WARMUP_SUFFIX = "__warmup";
-
-    private static long scaled(long value, double pct, int gens) {
-        return Math.max(gens, Math.max(1, Math.round(value * pct)));
-    }
-
-    /** Цель первой стадии (или начальное значение, если стадий нет). */
-    private static long firstTarget(ObjectNode sc, String startField) {
-        var stages = sc.path("stages");
-        if (stages.isArray() && stages.size() > 0 && stages.get(0).path("target").asLong(0) > 0) {
-            return stages.get(0).path("target").asLong();
-        }
-        return Math.max(1, sc.path(startField).asLong(1));
     }
 
     private static Map<String, String> stringMap(Object o) {
@@ -471,7 +505,8 @@ public final class K6ConfigGenerator {
     // ------------------------------------------------------------------ thresholds
 
     private static void addThresholds(OperationSpec op, boolean helper, ObjectNode thresholds) {
-        String sel = "{scenario:" + op.name() + "}";
+        // с helper метрики операций несут тег phase: пороги k6 считаются только по основной части, ошибки прогрева в них не попадают
+        String sel = helper && warmupEndSec(op) > 0 ? "{scenario:" + op.name() + ",phase:main}" : "{scenario:" + op.name() + "}";
         String pct = "p(" + op.slaPercentile() + ")<" + fmt(op.slaThresholdMs());
         double errFraction = op.maxErrorPct() / 100.0;
         if (helper) {

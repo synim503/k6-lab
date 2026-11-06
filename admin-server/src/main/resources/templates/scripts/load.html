@@ -14,19 +14,6 @@
 
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post">
 
-        <div class="card warm-card mb-3"><div class="card-body d-flex flex-wrap align-items-center gap-3">
-            <div class="form-check form-switch m-0">
-                <input class="form-check-input" type="checkbox" role="switch" id="warm-on" th:checked="${form.warmup != null}">
-                <label class="form-check-label fw-semibold" for="warm-on">Прогрев</label></div>
-            <div class="input-group input-group-sm warm-field" style="width:215px"><span class="input-group-text">Длительность</span>
-                <input class="form-control" id="warm-dur" name="warmup" th:value="${form.warmup}" placeholder="2m" aria-label="Длительность прогрева"></div>
-            <div class="input-group input-group-sm warm-field" style="width:185px"><span class="input-group-text">Нагрузка</span>
-                <input class="form-control" id="warm-pct" type="number" min="1" max="100" name="warmupPct" th:value="${form.warmupPct}" aria-label="Доля нагрузки на прогреве">
-                <span class="input-group-text">%</span></div>
-            <span class="small text-muted warm-help">Перед основной нагрузкой каждый сценарий отрабатывает прогрев на этой доле нагрузки. Ошибки и время ответа прогрева
-                не попадают в SLA, пороги k6 и итоги, на графиках он выделен. Работает для constant-vus, ramping-vus, constant-arrival-rate и ramping-arrival-rate.</span>
-        </div></div>
-
         <div class="sect-title mt-0"><h5>Операции</h5>
             <span class="hint">каждая функция скрипта — отдельная операция; для одной функции можно добавить несколько сценариев</span></div>
         <div class="op-list" id="ops-body">
@@ -128,6 +115,7 @@
         startTime: {label: 'Старт через', type: 'dur', ph: '0s', hint: 'Задержка старта сценария относительно начала теста'},
         gracefulStop: {label: 'Ждать завершения итераций', type: 'dur', ph: '30s', hint: 'Сколько ждать, пока текущие итерации закончатся после остановки'},
         stages: {label: 'Стадии', type: 'stages'},
+        warmup: {label: 'Прогрев', type: 'warmup'},
         env: {label: 'Переменные окружения сценария', type: 'kv', ph: ['ИМЯ', 'значение']},
         tags: {label: 'Теги метрик сценария', type: 'kv', ph: ['тег', 'значение']}
     };
@@ -136,24 +124,24 @@
         'constant-vus': {
             real: 'constant-vus', title: 'constant-vus — постоянное число VU',
             desc: 'Фиксированное число VU работает заданное время, каждый VU повторяет итерации без пауз.',
-            fields: ['vus', 'duration'].concat(TAIL), def: {vus: 10, duration: '5m'}
+            fields: ['warmup', 'vus', 'duration'].concat(TAIL), def: {vus: 10, duration: '5m'}
         },
         'ramping-vus': {
             real: 'ramping-vus', title: 'ramping-vus — число VU по стадиям',
             desc: 'Число VU меняется по стадиям: на каждой стадии задаётся длительность и целевое число VU.',
-            fields: ['startVUs', 'stages', 'gracefulRampDown'].concat(TAIL),
+            fields: ['warmup', 'startVUs', 'stages', 'gracefulRampDown'].concat(TAIL),
             def: {startVUs: 0, stages: [{duration: '1m', target: 20}, {duration: '5m', target: 20}]}
         },
         'constant-arrival-rate': {
             real: 'constant-arrival-rate', title: 'constant-arrival-rate — постоянная интенсивность',
             desc: 'k6 запускает фиксированное число итераций за интервал независимо от времени ответа.',
-            fields: ['rate', 'timeUnit', 'duration', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
+            fields: ['warmup', 'rate', 'timeUnit', 'duration', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
             def: {rate: 50, timeUnit: '1s', duration: '5m', preAllocatedVUs: 20, maxVUs: 100}
         },
         'ramping-arrival-rate': {
             real: 'ramping-arrival-rate', title: 'ramping-arrival-rate — интенсивность по стадиям',
             desc: 'Интенсивность меняется по своим стадиям (профиль нагрузки из формы не применяется).',
-            fields: ['startRate', 'timeUnit', 'stages', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
+            fields: ['warmup', 'startRate', 'timeUnit', 'stages', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
             def: {startRate: 0, timeUnit: '1s', preAllocatedVUs: 20, maxVUs: 100, stages: [{duration: '1m', target: 50}, {duration: '5m', target: 50}]}
         },
         'per-vu-iterations': {
@@ -198,7 +186,23 @@
     // ---- отрисовка панели параметров сценария
     function fieldHtml(key, val, exKey) {
         const f = F[key];
-        if (f.type === 'stages') {
+        if (f.type === 'warmup') {
+            const on = !!(val && val.duration);
+            const ramp = exKey.indexOf('ramping') === 0;
+            const unit = exKey.indexOf('arrival') >= 0 ? 'Итераций за интервал' : 'VU';
+            const dis = on ? '' : ' disabled';
+            const help = ramp
+                ? 'Первые минуты сценария считаются прогревом. Если указать интенсивность, прогрев идёт отдельной первой стадией на ней, затем основная нагрузка; пусто — прогрев остаётся частью ваших стадий.'
+                : 'Первые минуты сценария считаются прогревом, нагрузка остаётся той, что задана ниже.';
+            return '<div class="col-12"><div class="op-warm' + (on ? '' : ' is-off') + '">'
+                + '<div class="form-check form-switch m-0"><input class="form-check-input op-warm-on" type="checkbox" role="switch"' + (on ? ' checked' : '') + ' aria-label="Прогрев сценария">'
+                + '<label class="form-check-label fw-semibold">Прогрев</label></div>'
+                + '<div class="input-group input-group-sm op-warm-field"><span class="input-group-text">Длительность</span>'
+                + '<input class="form-control op-warm-d" placeholder="2m" value="' + esc(on ? val.duration : '') + '" aria-label="Длительность прогрева"' + dis + '></div>'
+                + (ramp ? '<div class="input-group input-group-sm op-warm-field"><span class="input-group-text">' + esc(unit) + '</span>'
+                    + '<input class="form-control op-warm-t" type="number" step="any" min="0" placeholder="как в стадиях" value="' + esc(on && val.target ? val.target : '') + '" aria-label="Интенсивность прогрева"' + dis + '></div>' : '')
+                + '<span class="small text-muted op-warm-help">' + help + ' Ошибки, dropped и время ответа прогрева не попадают в итоги и SLA, на графиках он виден и выделен.</span></div></div>';
+        }        if (f.type === 'stages') {
             const unit = exKey.indexOf('arrival') >= 0 ? 'Итераций за интервал' : 'VU';
             const rows = (val || []).map(s => stageRow(s.duration, s.target, unit)).join('');
             return '<div class="col-12"><div class="small fw-semibold mb-1">' + f.label + '</div>'
@@ -255,6 +259,12 @@
         });
         const st = panel.querySelector('.op-stages');
         if (st) { o.stages = readStages(st); }
+        const wOn = panel.querySelector('.op-warm-on');
+        if (wOn && wOn.checked) {
+            const wd = panel.querySelector('.op-warm-d').value.trim(), wtEl = panel.querySelector('.op-warm-t');
+            o.warmup = {duration: wd};
+            if (wtEl && wtEl.value !== '') o.warmup.target = Number(wtEl.value);
+        }
         panel.querySelectorAll('.op-kv').forEach(c => {
             const m = {};
             c.querySelectorAll('.op-kvrow').forEach(r => {
@@ -364,6 +374,17 @@
         const row = e.target.closest('.op-row');
         if (!row) return;
         if (e.target.classList.contains('op-on')) { refreshRow(row); return; }
+        if (e.target.classList.contains('op-warm-on')) {
+            const box = e.target.closest('.op-warm'), on = e.target.checked;
+            box.classList.toggle('is-off', !on);
+            box.querySelectorAll('.op-warm-d, .op-warm-t').forEach(i => { i.disabled = !on; });
+            if (on) {
+                const d = box.querySelector('.op-warm-d');
+                if (!d.value.trim()) d.value = '2m';
+            }
+            sync(row);
+            return;
+        }
         if (e.target.classList.contains('op-exec')) {
             const exKey = e.target.value, old = collect(row), ex = EX[exKey];
             // переносим то, что есть и у нового исполнителя; остальное - значения по умолчанию
@@ -377,20 +398,6 @@
         const row = e.target.closest('.op-row');
         if (row && e.target.closest('.op-detail')) sync(row);
     });
-
-    // ---- прогрев: выключатель отключает поля, и они не отправляются
-    (function () {
-        const on = document.getElementById('warm-on'), dur = document.getElementById('warm-dur'), pct = document.getElementById('warm-pct');
-        if (!on) return;
-        function sync() {
-            dur.disabled = !on.checked; pct.disabled = !on.checked;
-            document.querySelector('.warm-card').classList.toggle('is-off', !on.checked);
-            if (on.checked && !dur.value.trim()) dur.value = '2m';
-            if (on.checked && !pct.value) pct.value = 30;
-        }
-        on.addEventListener('change', sync);
-        sync();
-    })();
 
     // ---- несохранённые изменения: пометка и предупреждение при уходе со страницы
     const form = body.closest('form');

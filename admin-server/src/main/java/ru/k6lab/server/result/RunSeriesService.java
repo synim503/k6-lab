@@ -137,19 +137,9 @@ public class RunSeriesService {
         return snap.warmup() == null ? 0 : snap.warmup().sec() / 60.0;
     }
 
-    /** Точки основного сценария операции вместе с точками её спутника прогрева (он идёт раньше). */
     private static List<PrometheusClient.Point> withWarmup(Map<String, List<PrometheusClient.Point>> byScenario, String op) {
-        List<PrometheusClient.Point> main = byScenario.get(op);
-        List<PrometheusClient.Point> warm = byScenario.get(op + ru.k6lab.core.k6config.K6ConfigGenerator.WARMUP_SUFFIX);
-        if (warm == null || warm.isEmpty()) {
-            return main == null ? List.of() : main;
-        }
-        List<PrometheusClient.Point> all = new ArrayList<>(warm);
-        if (main != null) {
-            all.addAll(main);
-        }
-        all.sort(java.util.Comparator.comparingDouble(PrometheusClient.Point::ts));
-        return all;
+        List<PrometheusClient.Point> pts = byScenario.get(op);
+        return pts == null ? List.of() : pts;
     }
 
     private static List<Pt> toPts(List<PrometheusClient.Point> src, long t0) {
@@ -176,7 +166,8 @@ public class RunSeriesService {
         for (RunSnapshot.StepInfo s : snap.steps()) {
             double target = o.ratePerSec() * s.levelPct() / 100.0;
             if (s.rampSec() > 0 && snap.warmup() != null) {
-                double warm = target * snap.warmup().pct() / 100.0;
+                // прогрев без своей интенсивности идёт на плане основной нагрузки
+                double warm = o.warmRatePerSec() > 0 ? o.warmRatePerSec() : target;
                 plan.set(0, new Pt(0, warm));
                 t += s.rampSec();
                 plan.add(new Pt(t / 60.0, warm));

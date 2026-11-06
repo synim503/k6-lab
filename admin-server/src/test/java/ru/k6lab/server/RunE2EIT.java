@@ -378,21 +378,23 @@ class RunE2EIT extends AbstractIT {
 
     @Test
     @Order(12)
-    void warmupRunsBeforeTheMainLoadInRealK6AndIsNotPartOfTheMainScenario() throws Exception {
+    void warmupIsATimeWindowWithPhaseTagAndExcludedFromTheMainThresholdsInRealK6() throws Exception {
         Agent a = startAgent("e2ewarm", 1);
         Script s = scriptWithLoad("warmup", 10, false, "work");
         LoadForm f = load.toForm(s.getId());
-        f.setWarmup("5s");
-        f.setWarmupPct(50);
+        var sc = f.getOps().get(0).getScenario();
+        sc.put("warmup", java.util.Map.of("duration", "5s"));
+        f.getOps().get(0).setScenario(sc);
         load.save(s.getId(), f);
         Run run = startRun(scripts.get(s.getId()), Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1));
         var scenarios = run.getK6Config().path("scenarios");
-        assertThat(scenarios.has("work__warmup")).isTrue();
-        assertThat(scenarios.path("work").path("startTime").asText()).isEqualTo("5s");
+        // исполнитель прежний, прогрев - первые 5 секунд сценария с меткой фазы
+        assertThat(scenarios.size()).isEqualTo(1);
+        assertThat(scenarios.path("work").path("executor").asText()).isEqualTo("constant-arrival-rate");
+        assertThat(scenarios.path("work").path("env").path("K6LAB_WARMUP_END_MS").asText()).isEqualTo("5000");
         var warm = runService.snapshot(run).warmup();
         assertThat(warm).isNotNull();
         assertThat(warm.sec()).isEqualTo(5);
-        assertThat(warm.pct()).isEqualTo(50);
 
         Run finished = awaitStatus(run.getId(), Duration.ofSeconds(120), RunStatus.FINISHED, RunStatus.FAILED);
         assertThat(finished.getStatus()).as(dump(run.getId())).isEqualTo(RunStatus.FINISHED);
@@ -401,13 +403,11 @@ class RunE2EIT extends AbstractIT {
         // прогрев - «разгон» ступени: оценка начинается после него
         var step = runService.stepsOf(run.getId()).get(0);
         assertThat(java.time.Duration.between(step.getRampStartAt(), step.getHoldStartAt()).getSeconds()).isEqualTo(5);
-        // 10 оп/с * 10 с основной нагрузки + 5 оп/с * 5 с прогрева = ~125 итераций (без прогрева было бы ~100)
-        assertThat(finalIterations(g)).isBetween(105L, 150L);
-        // пороги k6 и сводка - только по основному сценарию: у спутника прогрева своих порогов нет
-        assertThat(g.getSummary().path("metrics").has("op_duration{scenario:work}")).isTrue();
-        assertThat(g.getSummary().path("metrics").has("op_duration{scenario:work__warmup}")).isFalse();
+        // нагрузка не менялась: ~10 оп/с * 10 с = ~100 итераций, прогрев - часть тех же 10 секунд
+        assertThat(finalIterations(g)).isBetween(85L, 125L);
+        // пороги k6 - только по основной фазе: в сводке подмножество с тегом phase:main
+        assertThat(g.getSummary().path("metrics").has("op_duration{scenario:work,phase:main}")).isTrue();
     }
-
     @Test
     @Order(2)
     void twoGeneratorsShareLoadByWeightsAndSplitData() throws Exception {

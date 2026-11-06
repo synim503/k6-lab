@@ -240,11 +240,12 @@ public class GeneratorController {
     /** Обновляет агент (и k6) на всех генераторах, версия которых отличается от актуальной; занятые пропускаются. */
     @PostMapping("/update-all")
     @PreAuthorize("hasRole('ADMIN')")
-    public String updateAll(RedirectAttributes ra) {
+    public String updateAll(@RequestParam(defaultValue = "false") boolean force, RedirectAttributes ra) {
         int started = 0;
         List<String> skipped = new ArrayList<>();
         for (GeneratorView v : views.all()) {
-            if (!v.hasDrift()) {
+            // force: версии совпадают, но обновление запрошено явно (например, дистрибутив пересобран с той же версией)
+            if (!force && !v.hasDrift()) {
                 continue;
             }
             try {

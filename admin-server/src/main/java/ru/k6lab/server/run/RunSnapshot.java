@@ -22,7 +22,7 @@ public record RunSnapshot(ScriptInfo script, Map<String, String> env, List<OpInf
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record OpInfo(String name, String execFn, double ratePerSec, double expectedDurationSec, int slaPercentile,
-                         double slaThresholdMs, double maxErrorPct, String failureSource, boolean enabled) {
+                         double slaThresholdMs, double maxErrorPct, String failureSource, boolean enabled, double warmRatePerSec) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -33,7 +33,7 @@ public record RunSnapshot(ScriptInfo script, Map<String, String> env, List<OpInf
     public record DataFileInfo(String path, String mode, boolean hasHeader, boolean consumed) {
     }
 
-    /** Прогрев в начале запуска: длительность и доля нагрузки; null - без прогрева. */
+    /** Прогрев в начале запуска: длительность (pct - только у старых запусков, где прогрев был долей нагрузки); null - без прогрева. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Warmup(int sec, int pct) {
     }

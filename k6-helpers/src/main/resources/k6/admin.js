@@ -12,6 +12,7 @@
 //   * если задан __ENV.PACING_MS, досыпает до конца периода (если fn уже дольше pacing - ничего не делает).
 import { Trend, Rate, Counter } from 'k6/metrics';
 import { sleep, check as k6check } from 'k6';
+import exec from 'k6/execution';
 
 export const opDuration = new Trend('op_duration', true);
 export const opFailed = new Rate('op_failed');
@@ -41,6 +42,15 @@ function pacingMs() {
     return isNaN(v) || v < 0 ? 0 : v;
 }
 
+const warmEndMs = (function () {
+    const v = parseInt(__ENV.K6LAB_WARMUP_END_MS, 10);
+    return isNaN(v) || v <= 0 ? 0 : v;
+})();
+
+function phase() {
+    return warmEndMs > 0 && exec.instance.currentTestRunDuration < warmEndMs ? 'warmup' : 'main';
+}
+
 export function op(fn) {
     const pacing = pacingMs();
     const checksBefore = failedChecks;
@@ -58,11 +68,14 @@ export function op(fn) {
         failed = true;
     }
 
-    opDuration.add(elapsed);
-    opFailed.add(failed);
-    opCount.add(1);
+    // фаза: до конца прогрева (K6LAB_WARMUP_END_MS - мс от старта теста, задаёт админка) метрики помечаются phase=warmup,
+    // дальше phase=main. В итоги, SLA и пороги k6 идёт только main; на графиках видно всё.
+    const tags = { phase: phase() };
+    opDuration.add(elapsed, tags);
+    opFailed.add(failed, tags);
+    opCount.add(1, tags);
     if (failed) {
-        opErrors.add(1);
+        opErrors.add(1, tags);
     }
 
     if (pacing > 0 && elapsed < pacing) {

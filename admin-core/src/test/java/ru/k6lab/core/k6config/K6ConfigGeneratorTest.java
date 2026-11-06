@@ -94,52 +94,101 @@ class K6ConfigGeneratorTest {
         assertThat(K6ConfigGenerator.executors()).startsWith("ramping-arrival-rate").contains("constant-vus", "externally-controlled");
     }
 
+    private static Map<String, Object> warm(String dur, Number target) {
+        return Map.of("duration", dur, "target", target);
+    }
+
     @Test
-    void warmupAddsCompanionScenariosAndShiftsTheMainOnes() {
+    void warmupKeepsExecutorsAndOnlyRampingScenariosGetOwnWarmupStage() {
         var ops = List.of(
-                custom("soak", "work", "constant-vus", Map.of("vus", 10, "duration", "5m")),
-                custom("car", "work", "constant-arrival-rate", Map.of("rate", 100, "timeUnit", "1s", "duration", "5m", "preAllocatedVUs", 20, "maxVUs", 60)),
-                custom("rv", "work", "ramping-vus", Map.of("startVUs", 0, "stages", List.of(Map.of("duration", "1m", "target", 40)))),
+                custom("soak", "work", "constant-vus", Map.of("vus", 10, "duration", "5m", "warmup", Map.of("duration", "2m"))),
+                custom("car", "work", "constant-arrival-rate", Map.of("rate", 100, "timeUnit", "1s", "duration", "5m",
+                        "preAllocatedVUs", 20, "maxVUs", 60, "warmup", Map.of("duration", "90s"))),
+                custom("rv", "work", "ramping-vus", Map.of("startVUs", 5, "stages", List.of(Map.of("duration", "1m", "target", 40)),
+                        "warmup", warm("30s", 10))),
+                custom("rar", "work", "ramping-arrival-rate", Map.of("startRate", 0, "timeUnit", "1s", "preAllocatedVUs", 5, "maxVUs", 20,
+                        "stages", List.of(Map.of("duration", "1m", "target", 50)), "warmup", warm("45s", 4))),
+                custom("rarPlain", "work", "ramping-arrival-rate", Map.of("startRate", 1, "timeUnit", "1s", "preAllocatedVUs", 5, "maxVUs", 20,
+                        "stages", List.of(Map.of("duration", "1m", "target", 50)), "warmup", Map.of("duration", "20s"))),
                 custom("once", "setup", "shared-iterations", Map.of("vus", 1, "iterations", 3, "maxDuration", "1m")));
-        var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, true, 120, 25));
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, true));
         JsonNode sc = cfg.config().path("scenarios");
-        // спутники: доля нагрузки, длительность прогрева, тот же exec
-        assertThat(sc.path("soak__warmup").path("executor").asText()).isEqualTo("constant-vus");
-        assertThat(sc.path("soak__warmup").path("vus").asInt()).isEqualTo(3);
-        assertThat(sc.path("soak__warmup").path("duration").asText()).isEqualTo("120s");
-        assertThat(sc.path("soak__warmup").path("exec").asText()).isEqualTo("work");
-        assertThat(sc.path("car__warmup").path("executor").asText()).isEqualTo("constant-arrival-rate");
-        assertThat(sc.path("car__warmup").path("rate").asInt()).isEqualTo(25);
-        assertThat(sc.path("car__warmup").path("preAllocatedVUs").asInt()).isEqualTo(5);
-        assertThat(sc.path("car__warmup").path("maxVUs").asInt()).isEqualTo(15);
-        assertThat(sc.path("rv__warmup").path("vus").asInt()).isEqualTo(10);      // 25% от цели первой стадии (40)
-        // основные сценарии стартуют после прогрева, остальное не меняется
-        for (String name : new String[]{"soak", "car", "rv"}) {
-            assertThat(sc.path(name).path("startTime").asText()).as(name).isEqualTo("120s");
-        }
-        assertThat(sc.path("soak").path("vus").asInt()).isEqualTo(10);
-        // у исполнителей без прогрева спутника нет
-        assertThat(sc.has("once__warmup")).isFalse();
-        assertThat(sc.path("once").has("startTime")).isFalse();
-        // пороги k6 - только у основных сценариев: ошибки прогрева в них не попадают
-        assertThat(cfg.config().path("thresholds").toString()).doesNotContain("__warmup").contains("scenario:soak");
-        // общая длительность теста включает прогрев
-        assertThat(ConfigDuration.of(cfg.config()).totalSec()).isEqualTo(120 + 300);
+        assertThat(sc.size()).isEqualTo(6);
+        // constant-*: исполнитель и параметры прежние, прогрев - только отрезок времени (метка фазы в метриках)
+        JsonNode soak = sc.path("soak");
+        assertThat(soak.path("executor").asText()).isEqualTo("constant-vus");
+        assertThat(soak.path("vus").asInt()).isEqualTo(10);
+        assertThat(soak.path("duration").asText()).isEqualTo("5m");
+        assertThat(soak.has("stages")).isFalse();
+        assertThat(soak.has("warmup")).isFalse();
+        assertThat(soak.path("env").path(K6ConfigGenerator.WARMUP_END_ENV).asText()).isEqualTo("120000");
+        assertThat(sc.path("car").path("executor").asText()).isEqualTo("constant-arrival-rate");
+        assertThat(sc.path("car").path("env").path(K6ConfigGenerator.WARMUP_END_ENV).asText()).isEqualTo("90000");
+        // ramping-* со своей интенсивностью: первая стадия, секундный переход к прежнему началу, свои стадии; исполнитель прежний
+        JsonNode rvStages = sc.path("rv").path("stages");
+        assertThat(sc.path("rv").path("executor").asText()).isEqualTo("ramping-vus");
+        assertThat(sc.path("rv").path("startVUs").asInt()).isEqualTo(10);
+        assertThat(rvStages.size()).isEqualTo(3);
+        assertThat(rvStages.get(0).path("duration").asText()).isEqualTo("30s");
+        assertThat(rvStages.get(0).path("target").asInt()).isEqualTo(10);
+        assertThat(rvStages.get(1).path("duration").asText()).isEqualTo("1s");
+        assertThat(rvStages.get(1).path("target").asInt()).isEqualTo(5);
+        assertThat(rvStages.get(2).path("target").asInt()).isEqualTo(40);
+        assertThat(sc.path("rar").path("executor").asText()).isEqualTo("ramping-arrival-rate");
+        assertThat(sc.path("rar").path("stages").get(0).path("target").asInt()).isEqualTo(4);
+        assertThat(sc.path("rar").path("stages").get(1).path("target").asInt()).isEqualTo(0);
+        // ramping-* без своей интенсивности: стадии не меняются, прогрев - отрезок времени
+        assertThat(sc.path("rarPlain").path("stages").size()).isEqualTo(1);
+        assertThat(sc.path("rarPlain").path("startRate").asInt()).isEqualTo(1);
+        // исполнители без прогрева не меняются и тега фазы не получают
+        assertThat(sc.path("once").has("env")).isFalse();
+        // длительность теста: constant-* - как была, ramping-* с прогревом - плюс прогрев и секундный переход
+        assertThat(ConfigDuration.of(cfg.config()).totalSec()).isEqualTo(300);
+        // пороги k6 с helper - только по основной фазе; без прогрева - как раньше
+        String th = cfg.config().path("thresholds").toString();
+        assertThat(th).contains("op_duration{scenario:soak,phase:main}").contains("op_failed{scenario:rar,phase:main}")
+                .contains("op_duration{scenario:once}").doesNotContain("scenario:once,phase");
+        // границы и интенсивность прогрева для планирования запуска
+        assertThat(K6ConfigGenerator.warmupEndSec(ops.get(0))).isEqualTo(120);
+        assertThat(K6ConfigGenerator.warmupRatePerSec(ops.get(3))).isEqualTo(4);
+        assertThat(K6ConfigGenerator.warmupRatePerSec(ops.get(1))).isZero();
+    }
+
+    @Test
+    void warmupThresholdsWithoutHelperStayOnTheWholeScenario() {
+        var ops = List.of(custom("soak", "work", "constant-vus", Map.of("vus", 3, "duration", "1m", "warmup", Map.of("duration", "20s"))));
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, false));
+        // без helper метрик с тегом фазы нет: пороги прежние (прогрев в итоги исключается по времени на стороне админки)
+        assertThat(cfg.config().path("thresholds").toString()).contains("scenario:soak}").doesNotContain("phase");
     }
 
     @Test
     void warmupKeepsVusAtLeastTheGeneratorCountAndHonoursStartTime() {
-        var ops = List.of(custom("soak", "work", "constant-vus", Map.of("vus", 10, "duration", "1m", "startTime", "30s")));
-        var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 6, 1.5, 3, true, 60, 10));
-        JsonNode sc = cfg.config().path("scenarios");
-        assertThat(sc.path("soak__warmup").path("vus").asInt()).isGreaterThanOrEqualTo(6); // 10% от 10 VU, но не меньше числа генераторов
-        assertThat(sc.path("soak__warmup").path("startTime").asText()).isEqualTo("30s");   // прогрев - со своего startTime
-        assertThat(sc.path("soak").path("startTime").asText()).isEqualTo("90s");           // основной - после прогрева
-        // без прогрева (0 с) ничего не добавляется
-        var plain = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, true, 0, 30));
-        assertThat(plain.config().path("scenarios").has("soak__warmup")).isFalse();
+        var ops = List.of(custom("rv", "work", "ramping-vus", Map.of("startVUs", 1, "stages", List.of(Map.of("duration", "1m", "target", 10)),
+                "startTime", "30s", "warmup", warm("1m", 2))));
+        var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 6, 1.5, 3, true));
+        JsonNode rv = cfg.config().path("scenarios").path("rv");
+        assertThat(rv.path("startVUs").asInt()).isGreaterThanOrEqualTo(6);   // 2 VU на 6 генераторов не делятся: минимум по VU на генератор
+        assertThat(rv.path("startTime").asText()).isEqualTo("30s");          // прогрев идёт со старта сценария
+        assertThat(K6ConfigGenerator.warmupEndSec(ops.get(0))).isEqualTo(90);
+        assertThat(rv.path("env").path(K6ConfigGenerator.WARMUP_END_ENV).asText()).isEqualTo("90000");
     }
 
+    @Test
+    void invalidWarmupIsRejected() {
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("x", "x", "constant-vus",
+                Map.of("vus", 5, "duration", "1m", "warmup", Map.of("duration", "1s")))), steps(100), 30, 30, 1, 1.5, 3, true)))
+                .hasMessageContaining("прогрева");
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("x", "x", "ramping-vus",
+                Map.of("startVUs", 1, "stages", List.of(Map.of("duration", "1m", "target", 5)), "warmup", warm("1m", 0)))), steps(100), 30, 30, 1, 1.5, 3, true)))
+                .hasMessageContaining("интенсивность прогрева");
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("x", "x", "constant-vus",
+                Map.of("vus", 5, "duration", "1m", "warmup", warm("1m", 3)))), steps(100), 30, 30, 1, 1.5, 3, true)))
+                .hasMessageContaining("только у ramping-*");
+        assertThatThrownBy(() -> K6ConfigGenerator.generate(new ConfigInput(List.of(custom("x", "x", "shared-iterations",
+                Map.of("vus", 1, "iterations", 3, "warmup", Map.of("duration", "1m")))), steps(100), 30, 30, 1, 1.5, 3, true)))
+                .hasMessageContaining("не поддерживается");
+    }
     @Test
     void defaultFunctionGetsNoExecField() {
         var cfg = K6ConfigGenerator.generate(new ConfigInput(List.of(openPerSec("default", 5, 0.2), openPerSec("pay", 2, 0.2)),

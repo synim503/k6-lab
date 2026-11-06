@@ -94,7 +94,7 @@ public class RunPlanner {
             try {
                 List<OperationSpec> specs = ops.stream().map(LoadOperation::toSpec).toList();
                 gen = K6ConfigGenerator.generate(new ConfigInput(specs, steps, GRACEFUL_STOP_SEC, GRACEFUL_RAMP_DOWN_SEC,
-                        generatorCount, 1.5, 3, version.isUsesHelper(), script.getWarmupSec(), script.getWarmupPct()));
+                        generatorCount, 1.5, 3, version.isUsesHelper()));
                 json = K6ConfigGenerator.toJson(gen);
                 // ручные правки конфига k6 (maxVUs и т.п.) накладываются поверх расчётного конфига
                 var applied = K6ConfigOverrides.apply(gen.config(), script.getK6Overrides());
@@ -103,10 +103,10 @@ public class RunPlanner {
                 // Планы по оп/с (constant-arrival-rate) уже учитывают всё нужное, профиль нагрузки больше не задаётся отдельно.
                 long spanSec = ru.k6lab.core.k6config.ConfigDuration.of(finalConfig).totalSec();
                 if (spanSec > 0) {
-                    // прогрев - фаза «разгона» ступени: оценка, SLA и окна итогов начинаются после неё
-                    boolean warm = finalConfig.path("scenarios").properties().stream()
-                            .anyMatch(e -> e.getKey().endsWith(ru.k6lab.core.k6config.K6ConfigGenerator.WARMUP_SUFFIX));
-                    int ramp = warm ? (int) Math.min(script.getWarmupSec(), Math.max(0, spanSec - 1)) : 0;
+                    // прогрев - фаза «разгона» ступени: оценка, SLA и окна итогов начинаются после неё. Граница - самый поздний
+                    // конец прогрева среди сценариев (у сценариев без прогрева эти минуты тоже не оцениваются)
+                    int warmEnd = specs.stream().mapToInt(K6ConfigGenerator::warmupEndSec).max().orElse(0);
+                    int ramp = (int) Math.min(warmEnd, Math.max(0, spanSec - 1));
                     steps = List.of(new StepPlan(1, 100, ramp, (int) Math.max(1, Math.min(Integer.MAX_VALUE, spanSec - ramp)), "100%"));
                 }
                 overridePaths = K6ConfigOverrides.paths(script.getK6Overrides());

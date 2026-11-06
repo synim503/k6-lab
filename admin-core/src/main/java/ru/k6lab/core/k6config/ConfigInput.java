@@ -14,9 +14,7 @@ public record ConfigInput(
         int generatorCount,
         double preAllocFactor,
         double maxVusFactor,
-        boolean usesHelper,
-        int warmupSec,
-        int warmupPct) {
+        boolean usesHelper) {
 
     public static final List<String> SYSTEM_TAGS = List.of("scenario", "status", "method", "name", "group", "check",
             "error_code", "expected_response");
@@ -32,14 +30,6 @@ public record ConfigInput(
         if (maxVusFactor < 1) {
             maxVusFactor = 3;
         }
-        warmupSec = Math.max(0, warmupSec);
-        warmupPct = Math.max(0, Math.min(100, warmupPct));
-    }
-
-    /** Без прогрева. */
-    public ConfigInput(List<OperationSpec> operations, List<StepPlan> steps, int gracefulStopSec, int gracefulRampDownSec,
-                       int generatorCount, double preAllocFactor, double maxVusFactor, boolean usesHelper) {
-        this(operations, steps, gracefulStopSec, gracefulRampDownSec, generatorCount, preAllocFactor, maxVusFactor, usesHelper, 0, 0);
     }
 
     public static ConfigInput of(List<OperationSpec> ops, List<StepPlan> steps, boolean usesHelper) {

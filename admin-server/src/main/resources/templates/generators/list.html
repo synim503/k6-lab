@@ -9,7 +9,9 @@
         <div class="d-flex gap-2 flex-wrap">
             <a class="btn btn-outline-secondary" th:href="@{/deployments}"><i class="bi bi-tools me-1"></i>Операции</a>
             <form sec:authorize="hasRole('ADMIN')" th:action="@{/generators/update-all}" method="post"
-                  onsubmit="return confirm('Обновить агент и k6 на всех генераторах с устаревшей версией? Занятые будут пропущены.')">
+                  onsubmit="return confirm(this.dataset.confirm)"
+                  th:data-confirm="${outdated > 0} ? 'Обновить агент и k6 на всех генераторах с устаревшей версией? Занятые будут пропущены.' : 'Версии агента на всех генераторах уже совпадают с версией по умолчанию в «Дистрибутивах». Всё равно обновить? Файлы с тем же sha256 не перезаливаются, агент перезапустится. Занятые будут пропущены.'">
+                <input type="hidden" name="force" th:value="${outdated == 0}">
                 <button class="btn" th:classappend="${outdated > 0} ? 'btn-outline-warning' : 'btn-outline-secondary'">
                     <i class="bi bi-arrow-repeat me-1"></i>Обновить агент на всех
                     <span class="badge text-bg-warning ms-1" th:if="${outdated > 0}" th:text="${outdated}"></span></button></form>

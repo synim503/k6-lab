@@ -141,7 +141,7 @@ public class RunMonitor {
         json.put("dataTs", now.toEpochMilli());
         json.put("lagSec", lag);
         json.put("step", stepNo);
-        json.put("phase", current == null ? "" : hold ? "hold" : (snap.warmup() != null ? "warmup" : "ramp"));
+        json.put("phase", current == null ? "" : inWarmup(snap, current, now) ? "warmup" : hold ? "hold" : "ramp");
         json.put("elapsedSec", elapsed);
         json.put("windowSec", window);
         ArrayNode ra = json.putArray("rows");
@@ -217,6 +217,16 @@ public class RunMonitor {
     }
 
     /** Значения по операциям за окно, заканчивающееся at. Перцентили - histogram_quantile по native histograms. */
+    /**
+     * Прогрев для графиков и оценки нарушений: сам прогрев плюс окно расчёта после него. Значения считаются rate/quantile
+     * по скользящему окну (до минуты), поэтому ещё столько же после конца прогрева на графике видны его данные; без этого
+     * полоса «Прогрев» заканчивалась раньше, чем менялась линия.
+     */
+    boolean inWarmup(RunSnapshot snap, RunStep step, Instant at) {
+        return snap.warmup() != null && step != null
+                && at.isBefore(step.getHoldStartAt().plusSeconds(Math.max(60, minWindowSec())));
+    }
+
     List<LiveRow> liveRows(RunSnapshot snap, RunStep step, Double levelOrNull, long runId, long windowSec, Instant at,
                            SettingsService.Prometheus p) throws IOException {
         PromQueries.Names n = names.names();
@@ -239,19 +249,23 @@ public class RunMonitor {
             errChecks = byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.CHECKS, runId, windowSec), at));
         }
 
-        // прогрев: пока он идёт, показываем факт со сценария-спутника, цель - доля нагрузки, нарушения не отмечаем
-        boolean warm = snap.warmup() != null && step != null && at.isBefore(step.getHoldStartAt());
+        // прогрев: пока он идёт, цель - заданная интенсивность прогрева (оп/с), нарушения не отмечаем
+        boolean warm = inWarmup(snap, step, at);
+        boolean warmNow = warm && at.isBefore(step.getHoldStartAt());
         List<LiveRow> rows = new ArrayList<>();
         for (RunSnapshot.OpInfo o : snap.operations()) {
             if (!o.enabled()) {
                 continue;
             }
             double level = levelOrNull != null ? levelOrNull : step == null ? 0 : step.getLevelPct();
-            double target = o.ratePerSec() * level / 100.0 * (levelOrNull != null ? 1 : warm ? snap.warmup().pct() / 100.0 : rampFraction(step, at));
-            Double actual = pick(rate, o.name());
-            Double p95 = pick(pct.getOrDefault(o.slaPercentile(), Map.of()), o.name());
-            Double err = pick(helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp, o.name());
-            Double drop = pick(dropped, o.name());
+            // у прогрева без своей интенсивности план тот же, что и у основной нагрузки (это только отрезок времени)
+            double target = warmNow && levelOrNull == null
+                    ? (o.warmRatePerSec() > 0 ? o.warmRatePerSec() : o.ratePerSec() * level / 100.0)
+                    : o.ratePerSec() * level / 100.0 * (levelOrNull != null ? 1 : rampFraction(step, at));
+            Double actual = rate.get(o.name());
+            Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
+            Double err = (helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp).get(o.name());
+            Double drop = dropped.get(o.name());
             List<String> reasons = new ArrayList<>();
             if (!warm) {
                 if (p95 != null && p95 > o.slaThresholdMs()) {
@@ -271,12 +285,6 @@ public class RunMonitor {
                     !reasons.isEmpty(), reasons));
         }
         return rows;
-    }
-
-    /** Значение операции: основной сценарий, а пока он не стартовал (прогрев) - его спутник «имя__warmup». */
-    private static Double pick(Map<String, Double> m, String name) {
-        Double v = m.get(name);
-        return v != null ? v : m.get(name + ru.k6lab.core.k6config.K6ConfigGenerator.WARMUP_SUFFIX);
     }
 
     private static Map<String, Double> byScenario(List<PrometheusClient.Sample> samples) {

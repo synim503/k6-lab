@@ -88,8 +88,6 @@ public class LoadService {
         f.setRampSec(0); // разгона нет: нагрузка стартует сразу на целевой интенсивности
         f.setHoldMinutes(script.getHoldSec() / 60.0);
         f.setGeneratorCount(script.getGeneratorCount());
-        f.setWarmup(script.getWarmupSec() > 0 ? formatSec(script.getWarmupSec()) : null);
-        f.setWarmupPct(script.getWarmupPct());
         f.setEnvText(LoadForm.formatKv(script.getEnv()));
         List<LoadOperation> saved = activeOperations(scriptId);
         for (LoadOperation o : saved) {
@@ -230,21 +228,6 @@ public class LoadService {
             }
             script.setGeneratorCount(f.getGeneratorCount());
         }
-        // прогрев: общий для всех сценариев
-        int warmSec = 0;
-        if (f.getWarmup() != null && !f.getWarmup().isBlank()) {
-            double v = ru.k6lab.core.k6config.ConfigDuration.parse(f.getWarmup().trim(), -1);
-            if (v < 5 || v > 3600) {
-                throw new IllegalArgumentException("Прогрев: длительность от 5 секунд до 1 часа, например 2m или 90s");
-            }
-            warmSec = (int) Math.round(v);
-        }
-        int warmPct = f.getWarmupPct() == null ? script.getWarmupPct() : f.getWarmupPct();
-        if (warmPct < 1 || warmPct > 100) {
-            throw new IllegalArgumentException("Прогрев: доля нагрузки от 1 до 100%");
-        }
-        script.setWarmupSec(warmSec);
-        script.setWarmupPct(warmPct);
         script.setEnv(env);
         scriptRepo.save(script);
 
@@ -266,11 +249,6 @@ public class LoadService {
             dataFiles.save(df);
         }
         audit.record("script.load", "script", scriptId, Map.of("operations", built.size()));
-    }
-
-    /** Секунды -> «2m» или «90s» (как вводит пользователь). */
-    static String formatSec(int sec) {
-        return sec % 60 == 0 ? (sec / 60) + "m" : sec + "s";
     }
 
     /** Интенсивность в оп/с для constant-arrival-rate (rate за timeUnit); для остальных исполнителей плана по оп/с нет. */

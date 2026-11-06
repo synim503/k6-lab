@@ -152,7 +152,8 @@ public class RunService {
         List<RunSnapshot.OpInfo> ops = new ArrayList<>();
         for (LoadOperation o : plan.operations()) {
             ops.add(new RunSnapshot.OpInfo(o.getName(), o.getExecFn(), o.getRatePerSec(), o.getExpectedDurationSec(),
-                    o.getSlaPercentile(), o.getSlaThresholdMs(), o.getMaxErrorPct(), o.getFailureSource().name(), o.isEnabled()));
+                    o.getSlaPercentile(), o.getSlaThresholdMs(), o.getMaxErrorPct(), o.getFailureSource().name(), o.isEnabled(),
+                    ru.k6lab.core.k6config.K6ConfigGenerator.warmupRatePerSec(o.toSpec())));
         }
         List<RunSnapshot.StepInfo> steps = plan.steps().stream()
                 .map(st -> new RunSnapshot.StepInfo(st.no(), st.label(), st.levelPct(), st.rampSec(), st.holdSec())).toList();
@@ -166,7 +167,7 @@ public class RunService {
                 LoadCriteria.successToMap(LoadCriteria.success(script.getSuccessCriteria())), v.isUsesHelper(),
                 List.of(), null, plan.warnings(),
                 plan.steps().isEmpty() || plan.steps().get(0).rampSec() <= 0 ? null
-                        : new RunSnapshot.Warmup(plan.steps().get(0).rampSec(), script.getWarmupPct()));
+                        : new RunSnapshot.Warmup(plan.steps().get(0).rampSec(), 0));
     }
 
     // ------------------------------------------------------------------ чтение

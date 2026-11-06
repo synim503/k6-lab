@@ -343,5 +343,10 @@ html { scroll-behavior: smooth; scroll-padding-top: 72px; }
 #run-status { min-height: 120px; }
 
 /* ---------- прогрев ---------- */
-.warm-card.is-off .warm-help { opacity: .7; }
-.warm-card .warm-field { flex: none; }
+.op-warm { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; padding: .55rem .75rem; border: 1px solid #f3dcae; background: #fffaf0; border-radius: .6rem; }
+.op-warm.is-off { border-color: var(--k6-border); background: #fafbfe; }
+.op-warm.is-off .op-warm-help { opacity: .7; }
+.op-warm .op-warm-field { flex: none; width: auto; max-width: 260px; }
+.op-warm .op-warm-d { width: 90px; }
+.op-warm .op-warm-t { width: 90px; }
+.op-warm-help { flex: 1 1 100%; }
