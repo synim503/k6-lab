@@ -28,6 +28,14 @@
         </div>
     </div>
 
+    <form class="card mb-4" th:if="${!settings.isEmpty()}" th:action="@{/tuning/profiles}" method="post">
+        <div class="card-body d-flex flex-wrap align-items-center gap-2">
+            <input type="hidden" name="fromHost" th:value="${p.generatorId}">
+            <strong class="me-2">Сохранить рекомендации как профиль оптимизации</strong>
+            <input class="form-control form-control-sm" style="width:260px" name="name" maxlength="100" required placeholder="Название профиля" aria-label="Название профиля оптимизации">
+            <button class="btn btn-primary btn-sm"><i class="bi bi-bookmark-plus me-1"></i>Сохранить (<span th:text="${settings.size()}"></span> настроек)</button>
+            <span class="small text-muted">Потом его можно отредактировать и раскатывать на любые хосты.</span></div></form>
+
     <div class="sect-title"><h5>Показатели</h5></div>
     <div class="card mb-4"><div class="table-responsive"><table class="table table-sm mb-0" th:if="${m != null}">
         <tbody>

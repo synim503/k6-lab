@@ -29,7 +29,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.regex.Pattern;
 
 /**
  * Профилирование хостов-генераторов по SSH и применение рекомендованных настроек ядра с возможностью отката.
@@ -44,8 +43,13 @@ public class HostTuningService {
     /** Отдельный файл: загружается после установочного 99-k6.conf и перекрывает его. */
     public static final String CONF = "/etc/sysctl.d/99-k6lab-tuning.conf";
     private static final String TMP = "/tmp/k6lab-tuning.conf";
-    /** Значения параметров: одно-три числа через пробел (диапазон портов, буферы TCP). */
-    private static final Pattern VALUE = Pattern.compile("^[0-9]+( [0-9]+){0,2}$");
+    /** Настройки из /sys переживают перезагрузку через systemd-tmpfiles. */
+    public static final String TMPFILES = "/etc/tmpfiles.d/k6lab-tuning.conf";
+    private static final String TMPFILES_TMP = "/tmp/k6lab-tmpfiles.conf";
+    /** sysctl лежит в sbin, которого может не быть в PATH не-интерактивной SSH-сессии. */
+    private static final String PATH_FIX = "PATH=$PATH:/usr/sbin:/sbin:/usr/local/sbin; export PATH; ";
+    private static final String THP_FILE = "/sys/kernel/mm/transparent_hugepage/enabled";
+    private static final String GOV_GLOB = "/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor";
     private static final Duration CONNECT = Duration.ofSeconds(20);
     public static final int MIN_SECONDS = 10;
     public static final int MAX_SECONDS = 300;
@@ -56,6 +60,7 @@ public class HostTuningService {
     private final HostTuningStore store;
     private final AuditService audit;
     private final DeployStore deployStore;
+    private final TuningProfileStore profiles;
     private final String script;
     private final ExecutorService pool = Executors.newFixedThreadPool(8, r -> {
         Thread t = new Thread(r, "host-tuning");
@@ -64,13 +69,15 @@ public class HostTuningService {
     });
 
     public HostTuningService(GeneratorRepository generators, SshCredentialService credentials, SshConnector connector,
-                             HostTuningStore store, AuditService audit, DeployStore deployStore) {
+                             HostTuningStore store, AuditService audit, DeployStore deployStore,
+                             TuningProfileStore profiles) {
         this.generators = generators;
         this.credentials = credentials;
         this.connector = connector;
         this.store = store;
         this.audit = audit;
         this.deployStore = deployStore;
+        this.profiles = profiles;
         try (var in = new ClassPathResource("tuning/profile.sh").getInputStream()) {
             this.script = new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");
         } catch (IOException e) {
@@ -199,6 +206,24 @@ public class HostTuningService {
         return runAll(targets, g -> applyOne(g, user, wanted, src.generatorName()));
     }
 
+    /** Раскатывает сохранённый профиль оптимизации на выбранные хосты (пустой список - на все, где задана SSH-учётка). */
+    public List<String> applyProfile(long profileId, List<Long> targetIds, String user) {
+        TuningProfileStore.OptProfile p = profiles.find(profileId).orElseThrow(() -> new IllegalArgumentException("Профиль оптимизации не найден"));
+        Map<String, String> wanted = new LinkedHashMap<>();
+        p.settings().forEach((k, v) -> {
+            if (TuningAnalyzer.valid(k, v)) {
+                wanted.put(k, norm(v));
+            }
+        });
+        if (wanted.isEmpty()) {
+            throw new IllegalArgumentException("В профиле «" + p.name() + "» нет настроек для применения");
+        }
+        List<Generator> targets = targetIds == null || targetIds.isEmpty()
+                ? generators.findAll().stream().filter(g -> g.getSshCredentialId() != null).toList()
+                : load(targetIds);
+        return runAll(targets, g -> applyOne(g, user, wanted, "профиль «" + p.name() + "»"));
+    }
+
     public List<String> rollback(List<Long> generatorIds, String user) {
         return runAll(load(generatorIds), g -> rollbackOne(g, user));
     }
@@ -246,10 +271,36 @@ public class HostTuningService {
             desired.keySet().forEach(k -> original.putIfAbsent(k, current.getOrDefault(k, "")));
             op.step("Сохранены исходные значения", "OK", original.size() + " параметров");
 
+            // sysctl: отдельный файл настроек; /sys (THP, режим частоты): запись сейчас и файл systemd-tmpfiles для перезагрузки
             StringBuilder conf = new StringBuilder("# Настройки ядра от k6-lab (профилирование хоста). Откат - в админке.\n");
-            desired.forEach((k, v) -> conf.append(k).append(" = ").append(v).append('\n'));
-            ssh.uploadText(conf.toString(), TMP);
-            var r = ssh.sudo("install -m 644 " + TMP + " " + CONF + " && rm -f " + TMP + " && sysctl -p " + CONF, Duration.ofSeconds(40));
+            StringBuilder tmpfiles = new StringBuilder("# Настройки /sys от k6-lab. Откат - в админке.\n");
+            StringBuilder cmd = new StringBuilder(PATH_FIX).append("rc=0; ");
+            int sysctlCount = 0;
+            for (Map.Entry<String, String> e : desired.entrySet()) {
+                if (TuningAnalyzer.SYS_KEYS.contains(e.getKey())) {
+                    cmd.append(writeCmd(e.getKey(), e.getValue()));
+                    tmpfiles.append("w ").append(e.getKey().equals(TuningAnalyzer.THP) ? THP_FILE : GOV_GLOB).append(" - - - - ").append(e.getValue()).append('\n');
+                } else {
+                    conf.append(e.getKey()).append(" = ").append(e.getValue()).append('\n');
+                    sysctlCount++;
+                }
+            }
+            boolean hasSys = desired.keySet().stream().anyMatch(TuningAnalyzer.SYS_KEYS::contains);
+            if (sysctlCount > 0) {
+                ssh.uploadText(conf.toString(), TMP);
+                cmd.append("install -m 644 ").append(TMP).append(' ').append(CONF).append(" && rm -f ").append(TMP)
+                        .append(" && sysctl -p ").append(CONF).append(" >/dev/null || rc=1; ");
+            } else {
+                cmd.append("rm -f ").append(CONF).append("; ");
+            }
+            if (hasSys) {
+                ssh.uploadText(tmpfiles.toString(), TMPFILES_TMP);
+                cmd.append("install -m 644 ").append(TMPFILES_TMP).append(' ').append(TMPFILES).append(" && rm -f ").append(TMPFILES_TMP).append("; ");
+            } else {
+                cmd.append("rm -f ").append(TMPFILES).append("; ");
+            }
+            cmd.append("exit $rc");
+            var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(60));
             Map<String, String> after = read(ssh, new ArrayList<>(desired.keySet()));
 
             List<Map<String, Object>> changes = new ArrayList<>();
@@ -268,9 +319,9 @@ public class HostTuningService {
                 op.step("Параметр " + e.getKey(), ok ? "OK" : "FAILED",
                         original.getOrDefault(e.getKey(), "") + " → " + actual + (ok ? "" : " (запрошено " + e.getValue() + ")"));
             }
-            String err = r.ok() ? null : (r.stderr().isBlank() ? "sysctl вернул код " + r.exitCode() : r.stderr().strip());
+            String err = r.ok() ? null : (r.stderr().isBlank() ? "команда вернула код " + r.exitCode() : r.stderr().strip());
             if (okCount == 0) {
-                ssh.sudo("rm -f " + CONF, Duration.ofSeconds(20));
+                ssh.sudo(PATH_FIX + "rm -f " + CONF + " " + TMPFILES, Duration.ofSeconds(20));
                 store.insertTuning(g.getId(), g.getName(), user, "FAILED", changes, err);
                 String msg = err == null ? "значения не изменились" : err;
                 op.finish(false, msg);
@@ -303,16 +354,16 @@ public class HostTuningService {
         Op op = new Op(g, Deployment.Operation.TUNE_ROLLBACK, user, Map.of("settings", original.size()));
         try (SshConnection ssh = connect(g)) {
             op.step("Подключение по SSH", "OK", g.getHost());
-            StringBuilder cmd = new StringBuilder("rm -f ").append(CONF).append("; rc=0; ");
+            StringBuilder cmd = new StringBuilder(PATH_FIX).append("rm -f ").append(CONF).append(' ').append(TMPFILES).append("; rc=0; ");
             for (Map.Entry<String, String> e : original.entrySet()) {
                 String v = norm(e.getValue());
-                if (!TuningAnalyzer.KEYS.contains(e.getKey()) || !VALUE.matcher(v).matches()) {
+                if (!TuningAnalyzer.valid(e.getKey(), v)) {
                     continue; // исходное значение не прочитано: параметр не трогаем
                 }
-                cmd.append("sysctl -w ").append(e.getKey()).append("=\"").append(v).append("\" >/dev/null || rc=1; ");
+                cmd.append(writeCmd(e.getKey(), v));
             }
             cmd.append("exit $rc");
-            var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(40));
+            var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(60));
             Map<String, String> after = read(ssh, new ArrayList<>(original.keySet()));
             List<String> notRestored = new ArrayList<>();
             original.forEach((k, v) -> {
@@ -322,7 +373,7 @@ public class HostTuningService {
                 }
                 op.step("Параметр " + k, ok ? "OK" : "FAILED", after.getOrDefault(k, "") + (ok ? " (исходное)" : " (ожидалось " + norm(v) + ")"));
             });
-            op.step("Файл " + CONF + " удалён", "OK", null);
+            op.step("Файлы настроек удалены", "OK", CONF);
             store.markRolledBack(g.getId());
             audit.record("host.tuning.rollback", "generator", g.getId(), Map.of("by", String.valueOf(user)));
             if (!notRestored.isEmpty()) {
@@ -331,7 +382,7 @@ public class HostTuningService {
                 return "откат выполнен, но " + msg;
             }
             op.finish(true, null);
-            return "возвращено параметров: " + original.size() + ", файл настроек удалён";
+            return "возвращено параметров: " + original.size() + ", файлы настроек удалены";
         } catch (RuntimeException e) {
             op.step("Откат", "FAILED", message(e));
             op.finish(false, message(e));
@@ -339,6 +390,23 @@ public class HostTuningService {
         }
     }
 
+    /** Команда записи значения параметра на хосте (значение уже проверено {@link TuningAnalyzer#valid}). */
+    private static String writeCmd(String key, String v) {
+        return switch (key) {
+            case TuningAnalyzer.THP -> "echo " + v + " > " + THP_FILE + " || rc=1; ";
+            case TuningAnalyzer.GOVERNOR -> "for f in " + GOV_GLOB + "; do echo " + v + " > \"$f\" || rc=1; done; ";
+            default -> "sysctl -w " + key + "=\"" + v + "\" >/dev/null || rc=1; ";
+        };
+    }
+
+    /** Команда чтения текущего значения параметра. */
+    private static String readCmd(String key) {
+        return switch (key) {
+            case TuningAnalyzer.THP -> "echo \"" + key + "=$(sed -n 's/.*\\[\\(.*\\)\\].*/\\1/p' " + THP_FILE + " 2>/dev/null)\"; ";
+            case TuningAnalyzer.GOVERNOR -> "echo \"" + key + "=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)\"; ";
+            default -> "echo \"" + key + "=$(sysctl -n " + key + " 2>/dev/null | tr '\\t' ' ')\"; ";
+        };
+    }
     // ------------------------------------------------------------------ вспомогательное
 
     /** Рекомендованные настройки из находок профиля; только известные параметры и безопасные значения. */
@@ -349,7 +417,7 @@ public class HostTuningService {
         }
         for (JsonNode f : p.findings()) {
             String key = f.path("key").asText(null), rec = f.path("recommended").asText(null);
-            if (key != null && rec != null && TuningAnalyzer.KEYS.contains(key) && VALUE.matcher(norm(rec)).matches()) {
+            if (key != null && rec != null && TuningAnalyzer.valid(key, rec)) {
                 out.put(key, norm(rec));
             }
         }
@@ -357,14 +425,16 @@ public class HostTuningService {
     }
 
     private Map<String, String> read(SshConnection ssh, List<String> keys) {
-        StringBuilder cmd = new StringBuilder();
+        StringBuilder cmd = new StringBuilder(PATH_FIX);
+        int n = 0;
         for (String k : keys) {
-            if (TuningAnalyzer.KEYS.contains(k)) {
-                cmd.append("echo \"").append(k).append("=$(sysctl -n ").append(k).append(" 2>/dev/null | tr '\\t' ' ')\"; ");
+            if (TuningAnalyzer.allKeys().contains(k)) {
+                cmd.append(readCmd(k));
+                n++;
             }
         }
         Map<String, String> out = new LinkedHashMap<>();
-        if (cmd.isEmpty()) {
+        if (n == 0) {
             return out;
         }
         var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(30));
@@ -376,7 +446,6 @@ public class HostTuningService {
         }
         return out;
     }
-
     private SshConnection connect(Generator g) {
         if (g.getSshCredentialId() == null) {
             throw new IllegalStateException("У генератора не задана SSH-учётка");

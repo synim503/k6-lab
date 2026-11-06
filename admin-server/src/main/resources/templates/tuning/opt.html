@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Профиль оптимизации</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="page-head">
+        <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-sliders"></i></span>Профиль оптимизации: <span th:text="${p.name}"></span></h3>
+        <a class="btn btn-outline-secondary" th:href="@{/tuning}"><i class="bi bi-arrow-left me-1"></i>К профилированию</a>
+    </div>
+
+    <form th:action="@{/tuning/profiles/{id}(id=${p.id})}" method="post">
+        <div class="card mb-3"><div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-5"><label class="form-label small fw-semibold" for="p-name">Название</label>
+                    <input class="form-control" id="p-name" name="name" th:value="${p.name}" maxlength="100" required></div>
+                <div class="col-md-7"><label class="form-label small fw-semibold" for="p-desc">Описание</label>
+                    <input class="form-control" id="p-desc" name="description" th:value="${p.description}" placeholder="Для чего этот набор: например, «генераторы для записи логов, 10 Гбит»"></div>
+            </div></div></div>
+
+        <div class="card mb-3"><div class="table-responsive"><table class="table align-middle mb-0">
+            <thead><tr><th>Параметр</th><th style="width:260px">Значение</th><th>Что это</th><th class="text-end" style="width:90px">Убрать</th></tr></thead>
+            <tbody>
+            <tr th:each="e : ${p.settings}">
+                <td><code th:text="${e.key}"></code><input type="hidden" name="key" th:value="${e.key}"></td>
+                <td><input class="form-control form-control-sm" name="value" th:value="${e.value}" th:aria-label="'Значение ' + ${e.key}"></td>
+                <td class="small text-muted" th:text="${describe.apply(e.key)}"></td>
+                <td class="text-end"><input class="form-check-input" type="checkbox" name="remove" th:value="${e.key}" th:aria-label="'Убрать ' + ${e.key}"></td>
+            </tr>
+            <tr class="table-light" th:if="${!freeKeys.isEmpty()}">
+                <td><select class="form-select form-select-sm" name="newKey" aria-label="Добавить параметр">
+                    <option value="">+ добавить параметр…</option>
+                    <option th:each="k : ${freeKeys}" th:value="${k}" th:text="${k}"></option></select></td>
+                <td><input class="form-control form-control-sm" name="newValue" placeholder="значение" aria-label="Значение нового параметра"></td>
+                <td class="small text-muted" colspan="2">Допустимы только параметры из списка; значение проверяется при сохранении.</td></tr>
+            </tbody></table></div></div>
+
+        <div class="d-flex gap-2 flex-wrap align-items-center">
+            <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить</button>
+            <a class="btn btn-link" th:href="@{/tuning}">Отмена</a>
+        </div>
+    </form>
+
+    <div class="card mt-4"><div class="card-body d-flex flex-wrap gap-2 align-items-center">
+        <form th:action="@{/tuning/profiles/{id}/apply(id=${p.id})}" method="post" class="m-0"
+              onsubmit="return confirm('Раскатить профиль на все хосты с SSH-учёткой? Чтобы выбрать хосты, раскатывайте со страницы профилирования (отметьте хосты). Исходные значения сохраняются, вернуть их можно в любой момент.')">
+            <button class="btn btn-warning"><i class="bi bi-rocket-takeoff me-1"></i>Раскатить на все хосты</button></form>
+        <form th:action="@{/tuning/profiles/{id}/delete(id=${p.id})}" method="post" class="m-0 ms-auto"
+              onsubmit="return confirm('Удалить профиль оптимизации? Настройки, уже применённые на хостах, не изменятся.')">
+            <button class="btn btn-outline-danger"><i class="bi bi-trash me-1"></i>Удалить профиль</button></form>
+        <span class="small text-muted w-100">Создан <span th:text="${#temporals.format(p.createdAt, 'dd.MM.yyyy HH:mm')}"></span>
+            <span th:if="${p.createdBy != null}" th:text="'(' + ${p.createdBy} + ')'"></span>, изменён <span th:text="${#temporals.format(p.updatedAt, 'dd.MM.yyyy HH:mm')}"></span>.</span>
+    </div></div>
+</th:block>
+</body>
+</html>

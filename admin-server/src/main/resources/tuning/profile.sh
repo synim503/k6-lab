@@ -3,6 +3,9 @@
 # и два снимка счётчиков @@s1 / @@s2 с паузой между ними; разницу считает админка.
 # Подстановки: @SECS@ - пауза между снимками, @KEYS@ - список sysctl-параметров.
 SECS=@SECS@
+# sysctl, ip, ethtool лежат в sbin, которого может не быть в PATH не-интерактивной SSH-сессии
+PATH=$PATH:/usr/sbin:/sbin:/usr/local/sbin
+export PATH
 IF=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 
 echo "@@meta"

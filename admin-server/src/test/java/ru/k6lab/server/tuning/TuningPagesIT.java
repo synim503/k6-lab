@@ -52,6 +52,8 @@ class TuningPagesIT extends AbstractIT {
     @Autowired
     HostTuningStore store;
     @Autowired
+    TuningProfileStore profiles;
+    @Autowired
     ObjectMapper mapper;
     @Autowired
     ru.k6lab.server.ssh.SshCredentialService sshCredentials;
@@ -174,5 +176,50 @@ class TuningPagesIT extends AbstractIT {
         });
         mvc.perform(get("/deployments")).andExpect(status().isOk()).andExpect(content().string(containsString("Профилирование хоста")));
         assertThat(store.latestProfiles().stream().filter(p -> p.generatorId() == gid).findFirst().orElseThrow().status()).isEqualTo("FAILED");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void optimizationProfileIsSavedEditedAndAppliedFromTheSavedSet() throws Exception {
+        Generator g = generator("opt");
+        HostMetrics m = HostMetricsParser.parse(OUTPUT, 10);
+        long pid = store.createProfile(g.getId(), g.getName(), 10);
+        store.finishProfile(pid, "DONE", null, m, TuningAnalyzer.analyze(m).findings());
+        String name = "prof-" + UUID.randomUUID().toString().substring(0, 6);
+        // сохранение рекомендаций профиля хоста как профиля оптимизации
+        var res = mvc.perform(post("/tuning/profiles").with(csrf()).param("name", name).param("fromHost", String.valueOf(g.getId())))
+                .andExpect(status().is3xxRedirection()).andReturn();
+        String loc = res.getResponse().getRedirectedUrl();
+        assertThat(loc).startsWith("/tuning/profiles/");
+        long id = Long.parseLong(loc.substring(loc.lastIndexOf('/') + 1));
+        var saved = profiles.find(id).orElseThrow();
+        assertThat(saved.name()).isEqualTo(name);
+        assertThat(saved.settings()).containsEntry("net.ipv4.ip_local_port_range", "1024 65535");
+        // повторное имя отклоняется
+        mvc.perform(post("/tuning/profiles").with(csrf()).param("name", name).param("fromHost", String.valueOf(g.getId())))
+                .andExpect(redirectedUrl("/tuning"));
+        // страницы: список и редактор
+        mvc.perform(get("/tuning")).andExpect(status().isOk()).andExpect(content().string(containsString(name)))
+                .andExpect(content().string(containsString("Профили оптимизации")));
+        mvc.perform(get("/tuning/profiles/" + id)).andExpect(status().isOk())
+                .andExpect(content().string(containsString("net.ipv4.ip_local_port_range"))).andExpect(content().string(containsString("добавить параметр")));
+        // редактирование: меняем значение, добавляем параметр и убираем другой
+        mvc.perform(post("/tuning/profiles/" + id).with(csrf()).param("name", name + "-v2").param("description", "для логов")
+                        .param("key", "net.ipv4.ip_local_port_range").param("value", "10240 65535")
+                        .param("key", "net.ipv4.tcp_tw_reuse").param("value", "1").param("remove", "net.ipv4.tcp_tw_reuse")
+                        .param("newKey", "vm.swappiness").param("newValue", "10"))
+                .andExpect(redirectedUrl("/tuning/profiles/" + id));
+        var edited = profiles.find(id).orElseThrow();
+        assertThat(edited.name()).isEqualTo(name + "-v2");
+        assertThat(edited.settings()).containsEntry("net.ipv4.ip_local_port_range", "10240 65535").containsEntry("vm.swappiness", "10")
+                .doesNotContainKey("net.ipv4.tcp_tw_reuse");
+        // недопустимое значение не сохраняется
+        mvc.perform(post("/tuning/profiles/" + id).with(csrf()).param("name", name).param("key", "net.core.somaxconn").param("value", "1; reboot"))
+                .andExpect(redirectedUrl("/tuning/profiles/" + id));
+        assertThat(profiles.find(id).orElseThrow().name()).isEqualTo(name + "-v2");
+        // раскатка без SSH-хостов не падает; удаление
+        mvc.perform(post("/tuning/profiles/" + id + "/apply").with(csrf())).andExpect(redirectedUrl("/tuning"));
+        mvc.perform(post("/tuning/profiles/" + id + "/delete").with(csrf())).andExpect(redirectedUrl("/tuning"));
+        assertThat(profiles.find(id)).isEmpty();
     }
 }

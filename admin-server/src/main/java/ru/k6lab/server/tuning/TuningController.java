@@ -39,11 +39,13 @@ public class TuningController {
     private final GeneratorRepository generators;
     private final HostTuningService service;
     private final HostTuningStore store;
+    private final TuningProfileStore profiles;
 
-    public TuningController(GeneratorRepository generators, HostTuningService service, HostTuningStore store) {
+    public TuningController(GeneratorRepository generators, HostTuningService service, HostTuningStore store, TuningProfileStore profiles) {
         this.generators = generators;
         this.service = service;
         this.store = store;
+        this.profiles = profiles;
     }
 
     @GetMapping
@@ -63,6 +65,7 @@ public class TuningController {
         model.addAttribute("minSeconds", HostTuningService.MIN_SECONDS);
         model.addAttribute("maxSeconds", HostTuningService.MAX_SECONDS);
         model.addAttribute("history", store.history(15));
+        model.addAttribute("optProfiles", profiles.list());
         model.addAttribute("conf", HostTuningService.CONF);
         return "tuning/index";
     }
@@ -114,6 +117,106 @@ public class TuningController {
     @PostMapping("/rollout")
     public String rollout(@RequestParam long sourceId, @RequestParam(required = false) List<Long> generatorIds, Principal user, RedirectAttributes ra) {
         return run(generatorIds, ra, ids -> service.rollout(sourceId, ids, user == null ? null : user.getName()), "Раскатка эталона");
+    }
+
+    // ------------------------------------------------------------------ профили оптимизации (сохранённые наборы настроек)
+
+    /** Сохраняет рекомендации профиля хоста как именованный профиль оптимизации, который потом можно править и раскатывать. */
+    @PostMapping("/profiles")
+    public String createOpt(@RequestParam String name, @RequestParam(required = false) String description, @RequestParam long fromHost,
+                            Principal user, RedirectAttributes ra) {
+        String n = name == null ? "" : name.strip();
+        if (n.isEmpty() || n.length() > 100) {
+            ra.addFlashAttribute("error", "Название профиля оптимизации: от 1 до 100 символов");
+            return "redirect:/tuning";
+        }
+        if (profiles.nameTaken(n, null)) {
+            ra.addFlashAttribute("error", "Профиль оптимизации «" + n + "» уже есть: выберите другое название");
+            return "redirect:/tuning";
+        }
+        HostTuningStore.Profile src = store.latestDone(fromHost).orElse(null);
+        java.util.Map<String, String> settings = src == null ? java.util.Map.of() : HostTuningService.recommended(src);
+        if (settings.isEmpty()) {
+            ra.addFlashAttribute("error", "В профиле хоста нет настроек для сохранения");
+            return "redirect:/tuning";
+        }
+        long id = profiles.create(n, description == null || description.isBlank() ? null : description.strip(), settings, user == null ? null : user.getName());
+        ra.addFlashAttribute("info", "Профиль оптимизации «" + n + "» сохранён: " + settings.size() + " настроек. Здесь его можно отредактировать.");
+        return "redirect:/tuning/profiles/" + id;
+    }
+
+    @GetMapping("/profiles/{id}")
+    public String editOpt(@PathVariable long id, Model model, RedirectAttributes ra) {
+        TuningProfileStore.OptProfile p = profiles.find(id).orElse(null);
+        if (p == null) {
+            ra.addFlashAttribute("error", "Профиль оптимизации не найден");
+            return "redirect:/tuning";
+        }
+        model.addAttribute("p", p);
+        List<String> free = new ArrayList<>(TuningAnalyzer.allKeys());
+        free.removeAll(p.settings().keySet());
+        model.addAttribute("freeKeys", free);
+        model.addAttribute("describe", (java.util.function.Function<String, String>) TuningAnalyzer::describe);
+        return "tuning/opt";
+    }
+
+    @PostMapping("/profiles/{id}")
+    public String saveOpt(@PathVariable long id, @RequestParam String name, @RequestParam(required = false) String description,
+                          @RequestParam(required = false) List<String> key, @RequestParam(required = false) List<String> value,
+                          @RequestParam(required = false) List<String> remove, @RequestParam(required = false) String newKey,
+                          @RequestParam(required = false) String newValue, RedirectAttributes ra) {
+        if (profiles.find(id).isEmpty()) {
+            ra.addFlashAttribute("error", "Профиль оптимизации не найден");
+            return "redirect:/tuning";
+        }
+        String n = name == null ? "" : name.strip();
+        if (n.isEmpty() || n.length() > 100) {
+            ra.addFlashAttribute("error", "Название профиля оптимизации: от 1 до 100 символов");
+            return "redirect:/tuning/profiles/" + id;
+        }
+        if (profiles.nameTaken(n, id)) {
+            ra.addFlashAttribute("error", "Профиль оптимизации «" + n + "» уже есть: выберите другое название");
+            return "redirect:/tuning/profiles/" + id;
+        }
+        java.util.Map<String, String> settings = new java.util.LinkedHashMap<>();
+        for (int i = 0; key != null && i < key.size(); i++) {
+            String k = key.get(i), v = value != null && i < value.size() ? value.get(i) : "";
+            if (remove != null && remove.contains(k)) {
+                continue;
+            }
+            if (!TuningAnalyzer.valid(k, v)) {
+                ra.addFlashAttribute("error", "Недопустимое значение для " + k + ": «" + v + "» (" + TuningAnalyzer.describe(k) + ")");
+                return "redirect:/tuning/profiles/" + id;
+            }
+            settings.put(k, v.strip().replaceAll("\\s+", " "));
+        }
+        if (newKey != null && !newKey.isBlank()) {
+            if (!TuningAnalyzer.valid(newKey, newValue)) {
+                ra.addFlashAttribute("error", "Недопустимое значение для " + newKey + ": «" + newValue + "» (" + TuningAnalyzer.describe(newKey) + ")");
+                return "redirect:/tuning/profiles/" + id;
+            }
+            settings.put(newKey, newValue.strip().replaceAll("\\s+", " "));
+        }
+        if (settings.isEmpty()) {
+            ra.addFlashAttribute("error", "В профиле должна остаться хотя бы одна настройка (чтобы убрать всё, удалите профиль)");
+            return "redirect:/tuning/profiles/" + id;
+        }
+        profiles.update(id, n, description == null || description.isBlank() ? null : description.strip(), settings);
+        ra.addFlashAttribute("info", "Профиль оптимизации сохранён");
+        return "redirect:/tuning/profiles/" + id;
+    }
+
+    @PostMapping("/profiles/{id}/delete")
+    public String deleteOpt(@PathVariable long id, RedirectAttributes ra) {
+        profiles.delete(id);
+        ra.addFlashAttribute("info", "Профиль оптимизации удалён (применённые на хостах настройки он не меняет)");
+        return "redirect:/tuning";
+    }
+
+    /** Раскатывает профиль оптимизации на отмеченные хосты, а если ничего не отмечено - на все. */
+    @PostMapping("/profiles/{id}/apply")
+    public String applyOpt(@PathVariable long id, @RequestParam(required = false) List<Long> generatorIds, Principal user, RedirectAttributes ra) {
+        return run(generatorIds, ra, ids -> service.applyProfile(id, ids, user == null ? null : user.getName()), "Раскатка профиля оптимизации");
     }
 
     /** Возвращает в исходное состояние все хосты с применённым тюнингом. */

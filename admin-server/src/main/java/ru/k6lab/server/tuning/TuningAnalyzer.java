@@ -24,11 +24,60 @@ public final class TuningAnalyzer {
     public record Analysis(List<Finding> findings, Map<String, String> recommended) {
     }
 
-    /** Параметры, которые админка читает и (по кнопке) меняет. */
+    /** Параметры sysctl, которые админка читает и (по кнопке) меняет. */
     public static final List<String> KEYS = List.of(
-            "net.core.somaxconn", "net.core.netdev_max_backlog", "net.ipv4.tcp_max_syn_backlog", "net.ipv4.ip_local_port_range",
-            "net.ipv4.tcp_tw_reuse", "net.ipv4.tcp_fin_timeout", "net.core.rmem_max", "net.core.wmem_max", "net.ipv4.tcp_rmem",
-            "net.ipv4.tcp_wmem", "net.netfilter.nf_conntrack_max", "fs.file-max", "fs.nr_open", "vm.swappiness");
+            "net.core.somaxconn", "net.core.netdev_max_backlog", "net.core.netdev_budget", "net.ipv4.tcp_max_syn_backlog",
+            "net.ipv4.ip_local_port_range", "net.ipv4.tcp_tw_reuse", "net.ipv4.tcp_fin_timeout", "net.core.rmem_max", "net.core.wmem_max",
+            "net.ipv4.tcp_rmem", "net.ipv4.tcp_wmem", "net.netfilter.nf_conntrack_max", "fs.file-max", "fs.nr_open", "vm.swappiness");
+
+    /** Настройки не из sysctl (запись в /sys): прозрачные большие страницы и режим частоты процессора. */
+    public static final String THP = "sys.thp";
+    public static final String GOVERNOR = "sys.cpu_governor";
+    public static final List<String> SYS_KEYS = List.of(THP, GOVERNOR);
+
+    /** Все параметры, которые разрешено менять. */
+    public static List<String> allKeys() {
+        List<String> all = new ArrayList<>(KEYS);
+        all.addAll(SYS_KEYS);
+        return all;
+    }
+
+    private static final java.util.regex.Pattern NUMBERS = java.util.regex.Pattern.compile("^[0-9]+( [0-9]+){0,2}$");
+
+    /** Допустимо ли значение параметра: для sysctl - числа, для sys.* - значение из фиксированного набора. */
+    public static boolean valid(String key, String value) {
+        if (key == null || value == null) {
+            return false;
+        }
+        String v = value.strip().replaceAll("\\s+", " ");
+        return switch (key) {
+            case THP -> List.of("always", "madvise", "never").contains(v);
+            case GOVERNOR -> List.of("performance", "powersave", "schedutil", "ondemand", "conservative").contains(v);
+            default -> KEYS.contains(key) && NUMBERS.matcher(v).matches();
+        };
+    }
+
+    /** Короткое объяснение параметра для редактора профилей оптимизации. */
+    public static String describe(String key) {
+        return switch (key) {
+            case "net.core.somaxconn" -> "Очередь принятых соединений";
+            case "net.core.netdev_max_backlog" -> "Очередь сетевых пакетов до обработки ядром";
+            case "net.core.netdev_budget" -> "Сколько пакетов ядро обрабатывает за один цикл";
+            case "net.ipv4.tcp_max_syn_backlog" -> "Очередь полуоткрытых соединений";
+            case "net.ipv4.ip_local_port_range" -> "Диапазон локальных портов для исходящих соединений";
+            case "net.ipv4.tcp_tw_reuse" -> "Повторное использование TIME_WAIT (1 - включено)";
+            case "net.ipv4.tcp_fin_timeout" -> "Сколько секунд порт занят после закрытия";
+            case "net.core.rmem_max", "net.core.wmem_max" -> "Максимальный размер сетевого буфера, байт";
+            case "net.ipv4.tcp_rmem", "net.ipv4.tcp_wmem" -> "Буфер TCP: минимум, по умолчанию, максимум";
+            case "net.netfilter.nf_conntrack_max" -> "Размер таблицы отслеживания соединений";
+            case "fs.file-max" -> "Системный лимит открытых файлов";
+            case "fs.nr_open" -> "Потолок лимита открытых файлов процесса";
+            case "vm.swappiness" -> "Склонность ядра вытеснять память в своп (меньше - реже)";
+            case THP -> "Прозрачные большие страницы: always, madvise или never";
+            case GOVERNOR -> "Режим частоты процессора: performance, powersave, schedutil";
+            default -> "";
+        };
+    }
 
     private static final long MIB16 = 16L * 1024 * 1024;
 
@@ -110,9 +159,11 @@ public final class TuningAnalyzer {
         }
         if (m.swapTotalKb > 0 && m.swapTotalKb - m.swapFreeKb > 0) {
             String cur = m.sysctl.get("vm.swappiness");
+            boolean change = cur == null || parseLong(cur) > 10;
             out.add(setting(Severity.WARN, "memory", "Генератор использует swap",
-                    "Своп на нагрузочном хосте резко увеличивает задержки. Снижение swappiness уменьшает вытеснение в своп.", "vm.swappiness", cur, 10,
-                    cur != null && parseLong(cur) > 10));
+                    "Своп на нагрузочном хосте резко увеличивает задержки. Снижение swappiness уменьшает вытеснение в своп."
+                            + (change ? "" : " vm.swappiness уже равен " + cur + ": своп используется из-за нехватки памяти, уменьшите maxVUs и данные в памяти скрипта либо добавьте память."),
+                    "vm.swappiness", cur, 10, change));
         }
     }
 
@@ -141,9 +192,12 @@ public final class TuningAnalyzer {
                     Math.min(65536, Math.max(now * 2, 5000)), now < 65536));
         }
         if (m.softnetSqueezed != null && m.softnetSqueezed > 0) {
-            out.add(new Finding(Severity.WARN, "network", "Обработка пакетов не успевает за бюджет (time_squeeze " + m.softnetSqueezed + ")",
-                    "Ядро прерывает цикл обработки пакетов по лимиту времени. Увеличьте net.core.netdev_budget вручную и проверьте распределение прерываний.",
-                    null, null, null));
+            String cur = m.sysctl.get("net.core.netdev_budget");
+            long now = cur == null ? 300 : parseLong(cur);
+            out.add(setting(Severity.WARN, "network", "Обработка пакетов не успевает за бюджет (time_squeeze " + m.softnetSqueezed + ")",
+                    "Ядро прерывает цикл обработки пакетов по лимиту времени. Увеличение бюджета даёт ядру обработать больше пакетов за цикл; "
+                            + "заодно проверьте распределение прерываний по ядрам.",
+                    "net.core.netdev_budget", cur, Math.min(2400, Math.max(now * 2, 600)), now < 2400));
         }
     }
 
@@ -266,11 +320,11 @@ public final class TuningAnalyzer {
     private static void system(HostMetrics m, List<Finding> out) {
         if ("always".equals(m.thp)) {
             out.add(new Finding(Severity.INFO, "system", "Включены прозрачные большие страницы (THP=always)",
-                    "Могут давать задержки при росте памяти k6. Рекомендуется madvise (echo madvise > /sys/kernel/mm/transparent_hugepage/enabled).", null, null, null));
+                    "Могут давать задержки при росте памяти k6. Рекомендуется madvise.", THP, "always", "madvise"));
         }
         if (m.governor != null && !m.governor.equals("performance")) {
             out.add(new Finding(Severity.INFO, "system", "Режим частоты процессора: " + m.governor,
-                    "Для стабильных измерений лучше performance (cpupower frequency-set -g performance).", null, null, null));
+                    "Для стабильных измерений лучше performance: частота не проседает при росте нагрузки.", GOVERNOR, m.governor, "performance"));
         }
     }
 

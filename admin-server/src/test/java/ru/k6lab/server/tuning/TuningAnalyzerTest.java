@@ -107,7 +107,10 @@ class TuningAnalyzerTest {
                 .containsEntry("net.netfilter.nf_conntrack_max", "131072")
                 .containsEntry("vm.swappiness", "10")
                 .containsEntry("fs.file-max", "1048576");
-        assertThat(TuningAnalyzer.KEYS).containsAll(a.recommended().keySet());
+        assertThat(TuningAnalyzer.allKeys()).containsAll(a.recommended().keySet());
+        // THP и режим частоты теперь тоже предлагаются к применению (запись в /sys)
+        assertThat(a.recommended()).containsEntry(TuningAnalyzer.THP, "madvise").containsEntry(TuningAnalyzer.GOVERNOR, "performance")
+                .containsEntry("net.core.netdev_budget", "600");
         // лимит файлов k6 - не sysctl: советом, без применяемого значения
         assertThat(a.findings().stream().filter(f -> f.title().contains("лимит открытых файлов у k6")).findFirst().orElseThrow().hasSetting()).isFalse();
     }
@@ -137,5 +140,39 @@ class TuningAnalyzerTest {
         m.sysctl.put("net.ipv4.tcp_rmem", "4096 87380 16777216");
         m.sysctl.put("net.ipv4.tcp_wmem", "4096 65536 16777216");
         assertThat(TuningAnalyzer.analyze(m).recommended()).isEmpty();
+    }
+
+    @Test
+    void swapAndSqueezeAreFixableEvenWhenTheCurrentValueWasNotRead() {
+        HostMetrics m = new HostMetrics();
+        m.cpuBusyPct = 50.0;
+        m.rxMbit = 10.0;
+        m.txMbit = 10.0;
+        m.memTotalKb = 8_000_000;
+        m.memAvailKb = 4_000_000;
+        m.swapTotalKb = 1_000_000;
+        m.swapFreeKb = 500_000;
+        m.softnetSqueezed = 5L;
+        // параметры ядра не прочитаны (например, sysctl не нашёлся в PATH): рекомендация всё равно предлагается
+        TuningAnalyzer.Analysis a = TuningAnalyzer.analyze(m);
+        assertThat(a.recommended()).containsEntry("vm.swappiness", "10").containsEntry("net.core.netdev_budget", "600");
+        // swappiness уже низкий: рекомендации нет, а в находке сказано почему
+        m.sysctl.put("vm.swappiness", "10");
+        TuningAnalyzer.Analysis b = TuningAnalyzer.analyze(m);
+        assertThat(b.recommended()).doesNotContainKey("vm.swappiness");
+        assertThat(b.findings().stream().filter(f -> f.title().contains("swap")).findFirst().orElseThrow().detail()).contains("уже равен 10");
+    }
+
+    @Test
+    void settingValidationAcceptsOnlyWhitelistedKeysAndSafeValues() {
+        assertThat(TuningAnalyzer.valid("net.core.somaxconn", "4096")).isTrue();
+        assertThat(TuningAnalyzer.valid("net.ipv4.ip_local_port_range", "1024  65535")).isTrue();
+        assertThat(TuningAnalyzer.valid("net.core.somaxconn", "4096; rm -rf /")).isFalse();
+        assertThat(TuningAnalyzer.valid("kernel.panic", "1")).isFalse();
+        assertThat(TuningAnalyzer.valid(TuningAnalyzer.THP, "madvise")).isTrue();
+        assertThat(TuningAnalyzer.valid(TuningAnalyzer.THP, "1")).isFalse();
+        assertThat(TuningAnalyzer.valid(TuningAnalyzer.GOVERNOR, "performance")).isTrue();
+        assertThat(TuningAnalyzer.valid(TuningAnalyzer.GOVERNOR, "performance; x")).isFalse();
+        TuningAnalyzer.allKeys().forEach(k -> assertThat(TuningAnalyzer.describe(k)).as(k).isNotBlank());
     }
 }
