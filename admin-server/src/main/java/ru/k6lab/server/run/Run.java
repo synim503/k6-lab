@@ -101,6 +101,10 @@ public class Run extends Auditable {
     @Column(name = "started_at")
     private Instant startedAt;
 
+    /** Сколько секунд прошло от плановой точки старта до реального начала нагрузки (инициализация скрипта k6); null - пока не определено. */
+    @Column(name = "init_sec")
+    private Integer initSec;
+
     @Column(name = "finished_at")
     private Instant finishedAt;
 

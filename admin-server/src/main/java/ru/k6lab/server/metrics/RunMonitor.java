@@ -104,6 +104,23 @@ public class RunMonitor {
     private void monitor(Run run, SettingsService.Prometheus p) throws IOException {
         RunSnapshot snap = runService.snapshot(run);
         Instant wall = Instant.now();
+        // шкала запуска привязана к реальному началу нагрузки по данным Prometheus: пока k6 инициализирует скрипт, нагрузки (и метрик) нет
+        if (run.getInitSec() == null) {
+            var started = prom.firstTimestamp(p, PromQueries.runStarted(names.names(), run.getId()), run.getPlannedStartAt().minusSeconds(60), wall);
+            if (started.isPresent()) {
+                orchestrator.reanchor(run.getId(), started.get());
+                return; // со следующего такта границы ступеней уже сдвинуты
+            }
+            long since = Math.max(0, wall.getEpochSecond() - run.getPlannedStartAt().getEpochSecond());
+            if (since >= 15) {
+                ObjectNode init = MAPPER.createObjectNode();
+                init.put("ts", wall.toEpochMilli());
+                init.put("phase", "init");
+                init.put("initSec", since);
+                broadcaster.publishMetrics(run.getId(), init.toString());
+            }
+            return;
+        }
         // метрики приходят в Prometheus с задержкой: всё считаем на момент последних полученных данных, а не на «сейчас»,
         // иначе окно «удержания» захватывает ещё разгон и интенсивность выглядит заниженной
         long lag = measureLag(run, p, wall);

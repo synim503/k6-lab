@@ -7,9 +7,9 @@
             <span class="badge fs-6" th:text="${fmt.runStatus(run.status.name())}" th:classappend="${fmt.runBadge(run.status.name(), run.thresholdsFailed)}"></span>
             <span class="badge text-bg-warning fs-6" th:if="${run.degraded}" title="Во время теста пропадала связь с генератором">Были потери связи</span>
             <span class="badge text-bg-warning fs-6" th:if="${run.thresholdsFailed}" title="k6 завершился кодом 99: пороги не выполнены. Это не авария, нагрузка отработала.">Пороги k6 не выполнены</span>
-            <span class="text-muted ms-1" th:if="${v.live}" th:text="${v.currentStep != null} ? 'Идёт нагрузка' : 'Подготовка к старту'"></span>
+            <span class="text-muted ms-1" th:if="${v.live}" th:text="${v.initializing} ? 'Инициализация скрипта' : (${v.currentStep != null} ? 'Идёт нагрузка' : 'Подготовка к старту')"></span>
         </div>
-        <div class="run-clock" th:if="${v.live or run.status.name() == 'FINISHED'}">
+        <div class="run-clock" th:if="${(v.live or run.status.name() == 'FINISHED') and !v.initializing}">
             <span class="fw-semibold" th:text="${#numbers.formatInteger(v.elapsedSec / 60, 1)} + ':' + ${#numbers.formatInteger(v.elapsedSec % 60, 2)}"></span>
             <span class="text-muted" th:if="${v.live and v.totalSec > 0}" th:text="' из ' + ${#numbers.formatInteger(v.totalSec / 60, 1)} + ':' + ${#numbers.formatInteger(v.totalSec % 60, 2)}"></span>
         </div>
@@ -24,6 +24,12 @@
     </div>
     <div class="progress mb-3" style="height: 8px" th:if="${run.status.name() == 'RUNNING' or run.status.name() == 'STOPPING' or run.status.name() == 'FINISHED'}">
         <div class="progress-bar" role="progressbar" th:style="'width:' + ${v.progressPct} + '%'"></div></div>
+    <div class="alert alert-warning py-2 small" th:if="${v.initializing}">
+        <i class="bi bi-hourglass-split me-1"></i><strong>k6 инициализирует скрипт: <span th:text="${v.initElapsedSec}"></span> с.</strong>
+        Нагрузки ещё нет, шкала запуска пойдёт с её реального начала (по данным Prometheus). Если инициализация длится минуты — в верхнем уровне скрипта
+        строятся тяжёлые данные (пулы шаблонов, <code>SharedArray</code>): уменьшите их размеры.</div>
+    <div class="small text-muted mb-2" th:if="${!v.initializing and run.initSec != null and run.initSec >= 15}"
+         th:text="'Инициализация скрипта заняла ' + ${run.initSec} + ' с: шкала запуска, прогрев и окна итогов отсчитываются от реального начала нагрузки.'"></div>
     <div class="alert alert-danger" th:if="${run.error}" th:text="${run.error}"></div>
     <div class="alert alert-warning py-2" th:if="${run.stopReason}"><strong>Причина остановки:</strong> <span th:text="${run.stopReason}"></span></div>
 

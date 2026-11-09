@@ -646,4 +646,33 @@ class RunE2EIT extends AbstractIT {
             assertThat(none.summary()).contains("Ни одной серии");
         }
     }
+
+    @Test
+    @Order(13)
+    void timelineIsAnchoredToTheRealStartOfLoadFromPrometheus() throws Exception {
+        Agent a = startAgent("e2eanchor", 1);
+        Script s = scriptWithLoad("anchor", 45, false, "work");
+        try (FakePrometheus prom = new FakePrometheus()) {
+            settings.savePrometheus(prom.rwUrl(), prom.baseUrl(), ru.k6lab.server.settings.SettingsService.AuthType.NONE, null, null, "");
+            Run run = startRun(scripts.get(s.getId()), Run.FailurePolicy.CONTINUE, new RunService.GeneratorSel(a.id(), 1));
+            long id = run.getId();
+            awaitStatus(id, Duration.ofSeconds(90), RunStatus.RUNNING, RunStatus.FINISHED, RunStatus.FAILED);
+            java.time.Instant planned = runService.get(id).getPlannedStartAt();
+            var stepBefore = runService.stepsOf(id).get(0);
+            // по данным Prometheus нагрузка началась через 25 с после плановой точки (k6 долго инициализировал скрипт)
+            prom.respond((q, t) -> q.contains("> 0") && t >= planned.getEpochSecond() + 25 ? Map.of("", 1.0) : Map.of());
+            await().atMost(Duration.ofSeconds(90)).until(() -> runService.get(id).getInitSec() != null);
+            Run after = runService.get(id);
+            assertThat(after.getInitSec()).isBetween(24, 26);
+            // шкала сдвинута на реальный старт: плановый старт и границы ступеней
+            assertThat(after.getPlannedStartAt()).isEqualTo(planned.plusSeconds(after.getInitSec()));
+            var stepAfter = runService.stepsOf(id).get(0);
+            assertThat(stepAfter.getHoldStartAt()).isEqualTo(stepBefore.getHoldStartAt().plusSeconds(after.getInitSec()));
+            assertThat(stepAfter.getHoldEndAt()).isEqualTo(stepBefore.getHoldEndAt().plusSeconds(after.getInitSec()));
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                    assertThat(logLines(id)).anyMatch(l -> l.contains("Инициализация скрипта k6 заняла")));
+            Run finished = awaitStatus(id, Duration.ofSeconds(120), RunStatus.FINISHED, RunStatus.FAILED, RunStatus.ABORTED);
+            assertThat(finished.getStatus()).as(dump(id)).isEqualTo(RunStatus.FINISHED);
+        }
+    }
 }

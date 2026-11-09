@@ -89,6 +89,8 @@ public class RunOrchestrator implements AgentEventListener {
         boolean finalized;
         String stopReason;
         Instant plannedStart;
+        /** Шкала запуска привязана к реальному началу нагрузки (определено по данным Prometheus). */
+        volatile boolean anchored;
         Instant stopRequestedAt;
         final Map<Long, GenCtx> gens = new LinkedHashMap<>();
         ScheduledFuture<?> prepareTimeout;
@@ -184,6 +186,7 @@ public class RunOrchestrator implements AgentEventListener {
         ctx.totalSec = (int) Math.max(snap.steps().stream().mapToInt(s -> s.rampSec() + s.holdSec()).sum(), span.totalSec());
         ctx.externallyControlled = run.getK6Config() != null && run.getK6Config().toString().contains("externally-controlled");
         ctx.plannedStart = run.getPlannedStartAt();
+        ctx.anchored = run.getInitSec() != null;
         ctx.startSent = run.getPlannedStartAt() != null;
         ctx.stopRequested = run.getStatus() == RunStatus.STOPPING;
         ctx.stopReason = run.getStopReason();
@@ -983,9 +986,15 @@ public class RunOrchestrator implements AgentEventListener {
                 if (ctx.finalized) {
                     continue;
                 }
+                // пока нагрузка реально не началась (k6 инициализирует скрипт), плановый конец не наступил: добавляем запас на инициализацию
+                // запас нужен, только пока k6 инициализирует скрипт: никто из генераторов ещё не ответил по REST API k6 (он стартует после инициализации).
+                // Как только хоть один ответил, плановый конец считается как обычно, и потерянный генератор объявляется вовремя
+                boolean initializing = !ctx.anchored && settings.prometheus().configured()
+                        && ctx.gens.values().stream().noneMatch(g -> g.k6Status != null);
+                long initAllowance = initializing ? INIT_ALLOWANCE_SEC : 0;
                 Instant deadline = ctx.stopRequestedAt != null
                         ? ctx.stopRequestedAt.plusSeconds(ctx.gracefulStopSec + 120L)
-                        : ctx.plannedStart != null ? ctx.plannedStart.plusSeconds(ctx.totalSec + ctx.gracefulStopSec + lostGraceSec) : null;
+                        : ctx.plannedStart != null ? ctx.plannedStart.plusSeconds(ctx.totalSec + ctx.gracefulStopSec + lostGraceSec + initAllowance) : null;
                 if (deadline == null || now.isBefore(deadline)) {
                     continue;
                 }
@@ -1009,6 +1018,58 @@ public class RunOrchestrator implements AgentEventListener {
                     }
                 }
             }
+        }
+    }
+
+    /** Запас сторожа на инициализацию скрипта k6, пока нагрузка не началась. */
+    static final long INIT_ALLOWANCE_SEC = 30 * 60;
+    /** Сдвиг меньше этого значения - обычный разброс старта, шкалу не двигаем. */
+    static final long REANCHOR_MIN_SEC = 15;
+
+    /**
+     * Нагрузка реально началась в {@code actualStart} (первая точка метрик в Prometheus). Если это заметно позже плановой точки
+     * (k6 долго инициализировал скрипт), шкала запуска - плановый старт, границы ступеней и конец для сторожа - переносится на реальный старт:
+     * иначе прогрев, окна итогов и SLA считались бы по времени, когда нагрузки ещё не было.
+     */
+    public void reanchor(long runId, Instant actualStart) {
+        Ctx ctx = contexts.get(runId);
+        if (ctx == null) {
+            return;
+        }
+        synchronized (ctx) {
+            Run run = runService.get(runId);
+            if (run.getInitSec() != null || ctx.plannedStart == null) {
+                return;
+            }
+            long delta = Math.max(0, Duration.between(ctx.plannedStart, actualStart).getSeconds());
+            if (delta < REANCHOR_MIN_SEC) {
+                runService.update(runId, r -> r.setInitSec((int) delta));
+                ctx.anchored = true;
+                return;
+            }
+            Instant newStart = ctx.plannedStart.plusSeconds(delta);
+            List<RunStep> shifted = new ArrayList<>();
+            for (RunStep s : runService.stepsOf(runId)) {
+                RunStep n = new RunStep();
+                n.setRunId(s.getRunId());
+                n.setStepNo(s.getStepNo());
+                n.setLabel(s.getLabel());
+                n.setLevelPct(s.getLevelPct());
+                n.setRampStartAt(s.getRampStartAt().plusSeconds(delta));
+                n.setHoldStartAt(s.getHoldStartAt().plusSeconds(delta));
+                n.setHoldEndAt(s.getHoldEndAt().plusSeconds(delta));
+                n.setReliable(s.isReliable());
+                shifted.add(n);
+            }
+            runService.update(runId, r -> {
+                r.setPlannedStartAt(newStart);
+                r.setInitSec((int) delta);
+            });
+            runService.saveSteps(runId, shifted);
+            ctx.plannedStart = newStart;
+            ctx.anchored = true;
+            logs.addSystem(runId, "INFO", "Инициализация скрипта k6 заняла " + delta + " с: шкала запуска сдвинута на реальное начало нагрузки");
+            broadcaster.publishStatus(runId, runStatusName(ctx));
         }
     }
 

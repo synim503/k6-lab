@@ -142,6 +142,12 @@
 
     var lastTs = 0;   // точки не дублируются: live-поток при подключении повторяет последнюю
     function onMetrics(m, quiet) {
+        if (m.phase === 'init') {
+            // k6 ещё инициализирует скрипт: точек на графиках нет, показываем только состояние
+            var ph0 = document.getElementById('metric-phase');
+            if (ph0 && !quiet) { ph0.textContent = 'Инициализация скрипта k6: ' + m.initSec + ' с — нагрузки и метрик ещё нет'; }
+            return;
+        }
         if (m.ts && m.ts <= lastTs) { return; }
         lastTs = m.ts || lastTs;
         // подпись по времени самих данных: метрики приходят с задержкой, и «сейчас» на графике было бы неверным

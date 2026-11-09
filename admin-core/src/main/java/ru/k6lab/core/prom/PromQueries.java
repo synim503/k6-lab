@@ -115,6 +115,11 @@ public final class PromQueries {
         return "sum(" + selector(n.vus(), runId, null) + ")";
     }
 
+    /** Нагрузка реально началась: есть работающие VU или хотя бы одна итерация. Используется для привязки шкалы запуска к началу данных. */
+    public static String runStarted(Names n, long runId) {
+        return "sum(" + selector(n.vus(), runId, null) + ") > 0 or sum(" + selector(n.iterations(), runId, null) + ") > 0";
+    }
+
     /** Суммарный максимум VU run (метрика vus_max без разбивки по scenario). */
     public static String totalVusMax(Names n, long runId) {
         return "sum(" + selector(n.vusMax(), runId, null) + ")";

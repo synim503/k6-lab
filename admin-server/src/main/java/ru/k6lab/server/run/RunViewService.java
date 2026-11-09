@@ -18,7 +18,7 @@ public class RunViewService {
 
     public record RunView(Run run, RunSnapshot snapshot, List<GenView> generators, List<RunStep> steps, Integer currentStep,
                           String currentPhase, long elapsedSec, long totalSec, int progressPct, boolean canStop,
-                          boolean canControl, boolean live) {
+                          boolean canControl, boolean live, boolean initializing, long initElapsedSec) {
 
         /** Максимальная загрузка CPU среди генераторов run (null - данных нет). */
         public Double maxCpu() {
@@ -65,13 +65,21 @@ public class RunViewService {
         long elapsed = 0;
         Integer current = null;
         String phase = null;
+        boolean initializing = false;
+        long initElapsed = 0;
         if (run.getPlannedStartAt() != null && !run.getStatus().isTerminal() && run.getStatus() != RunStatus.QUEUED) {
             Instant now = Instant.now();
             elapsed = Math.max(0, Duration.between(run.getPlannedStartAt(), now).getSeconds());
+            // k6 ещё инициализирует скрипт: нагрузки нет, шкалу запуска показывать рано
+            if (run.getStatus() == RunStatus.RUNNING && run.getInitSec() == null && elapsed >= 15) {
+                initializing = true;
+                initElapsed = elapsed;
+                elapsed = 0;
+            }
             for (RunStep s : steps) {
                 if (!now.isBefore(s.getRampStartAt()) && now.isBefore(s.getHoldEndAt())) {
                     current = s.getStepNo();
-                    phase = now.isBefore(s.getHoldStartAt()) ? (snap.warmup() != null ? "прогрев" : "разгон") : "удержание";
+                    phase = initializing ? "инициализация скрипта" : now.isBefore(s.getHoldStartAt()) ? (snap.warmup() != null ? "прогрев" : "разгон") : "удержание";
                 }
             }
         } else if (run.getStartedAt() != null && run.getFinishedAt() != null) {
@@ -83,6 +91,6 @@ public class RunViewService {
         }
         boolean active = run.getStatus().isActive() || run.getStatus() == RunStatus.QUEUED;
         return new RunView(run, snap, gens, steps, current, phase, elapsed, total, pct, active,
-                run.getStatus() == RunStatus.RUNNING && orchestrator.supportsControl(runId), orchestrator.isActive(runId));
+                run.getStatus() == RunStatus.RUNNING && orchestrator.supportsControl(runId), orchestrator.isActive(runId), initializing, initElapsed);
     }
 }
