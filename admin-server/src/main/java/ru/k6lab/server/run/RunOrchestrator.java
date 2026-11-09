@@ -1024,7 +1024,7 @@ public class RunOrchestrator implements AgentEventListener {
     /** Запас сторожа на инициализацию скрипта k6, пока нагрузка не началась. */
     static final long INIT_ALLOWANCE_SEC = 30 * 60;
     /** Сдвиг меньше этого значения - обычный разброс старта, шкалу не двигаем. */
-    static final long REANCHOR_MIN_SEC = 15;
+    static final long REANCHOR_MIN_SEC = 2;
 
     /**
      * Нагрузка реально началась в {@code actualStart} (первая точка метрик в Prometheus). Если это заметно позже плановой точки

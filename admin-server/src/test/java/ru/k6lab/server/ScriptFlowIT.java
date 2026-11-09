@@ -597,7 +597,8 @@ class ScriptFlowIT extends AbstractIT {
         // сохранение: файлы и данные попадают в версию, основной файл выбран
         String body = "{\"name\":\"sb-saved\",\"entrypoint\":\"main.js\",\"files\":["
                 + "{\"path\":\"main.js\",\"text\":\"export default function () {}\\nexport function pay() {}\\n\"},"
-                + "{\"path\":\"certs/client.pem\",\"base64\":\"LS0tLS1CRUdJTg==\"}]}";
+                + "{\"path\":\"certs/client.pem\",\"base64\":\"LS0tLS1CRUdJTg==\"}],"
+                + "\"env\":{\"BASE_URL\":\"http://stand.example\",\"BATCH_SIZE\":\"20\"}}";
         String resp = mvc.perform(post("/scripts/sandbox/save").with(csrf()).contentType("application/json").content(body))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(resp).contains("/scripts/");
@@ -605,6 +606,12 @@ class ScriptFlowIT extends AbstractIT {
         var v = scripts.latest(saved.getId()).orElseThrow();
         assertThat(v.getEntrypoint()).isEqualTo("main.js");
         assertThat(v.getFiles()).extracting(f -> f.path()).contains("main.js", "certs/client.pem");
+        // переменные окружения из отладчика сохраняются в нагрузку скрипта
+        assertThat(scripts.get(saved.getId()).getEnv()).containsEntry("BASE_URL", "http://stand.example").containsEntry("BATCH_SIZE", "20");
+        // некорректное имя переменной отклоняется
+        mvc.perform(post("/scripts/sandbox/save").with(csrf()).contentType("application/json")
+                        .content("{\"name\":\"sb-bad-env\",\"entrypoint\":\"main.js\",\"files\":[{\"path\":\"main.js\",\"text\":\"export default function () {}\"}],\"env\":{\"1BAD\":\"x\"}}"))
+                .andExpect(status().isBadRequest()).andExpect(content().string(containsString("Переменная окружения")));
     }
 
     @Test
@@ -627,13 +634,14 @@ class ScriptFlowIT extends AbstractIT {
         mvc.perform(get("/scripts/sandbox/script/999999")).andExpect(status().isBadRequest());
         // сохранение = новая версия того же скрипта
         String body = "{\"scriptId\":" + id + ",\"name\":\"flow-sb-existing\",\"entrypoint\":\"s.js\",\"comment\":\"из отладчика\",\"files\":["
-                + "{\"path\":\"s.js\",\"text\":\"export function login() {}\\nexport default function () {}\\n\"}]}";
+                + "{\"path\":\"s.js\",\"text\":\"export function login() {}\\nexport default function () {}\\n\"}],\"env\":{\"TOKEN\":\"abc\"}}";
         String resp = mvc.perform(post("/scripts/sandbox/save").with(csrf()).contentType("application/json").content(body))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(resp).contains("/scripts/" + id + "/versions/");
         var latest = scripts.latest(id).orElseThrow();
         assertThat(latest.getNumber()).isEqualTo(2);
         assertThat(scripts.list().stream().filter(x -> x.getName().equals("flow-sb-existing")).count()).isEqualTo(1);
+        assertThat(scripts.get(id).getEnv()).containsEntry("TOKEN", "abc"); // переменные из отладчика - в нагрузку существующего скрипта
     }
 
     @Test

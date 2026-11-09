@@ -89,6 +89,14 @@ public class ScriptService {
 
     /** Запоминает число генераторов последнего запуска как значение по умолчанию для формы запуска. */
     @org.springframework.transaction.annotation.Transactional
+    /** Переменные окружения скрипта (то, что подставляется в запуск): сохранение из режима отладки переносит их в нагрузку. */
+    public void updateEnv(Long scriptId, java.util.Map<String, String> env) {
+        Script script = get(scriptId);
+        script.setEnv(env == null ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(env));
+        scripts.save(script);
+        audit.record("script.env", "script", scriptId, java.util.Map.of("vars", script.getEnv().size()));
+    }
+
     public void rememberGeneratorCount(Long scriptId, int count) {
         Script script = get(scriptId);
         if (script.getGeneratorCount() != count && count >= 1 && count <= 200) {

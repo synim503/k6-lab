@@ -112,7 +112,8 @@ public class RunMonitor {
                 return; // со следующего такта границы ступеней уже сдвинуты
             }
             long since = Math.max(0, wall.getEpochSecond() - run.getPlannedStartAt().getEpochSecond());
-            if (since >= 15) {
+            boolean loadSeen = orchestrator.liveGenerators(run.getId()).stream().anyMatch(l -> l.vus() > 0 || l.iterations() > 0);
+            if (since >= 15 && !loadSeen) {
                 ObjectNode init = MAPPER.createObjectNode();
                 init.put("ts", wall.toEpochMilli());
                 init.put("phase", "init");
@@ -152,7 +153,8 @@ public class RunMonitor {
         // сверку с целью делаем, только когда окно целиком лежит после стабилизации ступени (как и в итогах по ступеням):
         // иначе в окно попадает хвост разгона/переключения уровня и факт выходит заниженным
         boolean settled = hold && intoHold - SETTLE_SEC >= window;
-        List<LiveRow> rows = liveRows(snap, current, settled ? current.getLevelPct() : null, run.getId(), window, now, p);
+        List<LiveRow> rows = liveRows(snap, current, settled ? current.getLevelPct() : null, run.getId(), window, now, p,
+                run.getK6Config(), run.getPlannedStartAt());
         ObjectNode json = MAPPER.createObjectNode();
         json.put("ts", wall.toEpochMilli());
         json.put("dataTs", now.toEpochMilli());
@@ -189,7 +191,7 @@ public class RunMonitor {
         StopCriteriaEvaluator.Config cfg = st.evaluator.config();
         if (cfg.anyEnabled() && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && !run.getStatus().isTerminal()) {
             long w = Math.max(minWindow, Math.min(cfg.windowSec(), intoHold - SETTLE_SEC));
-            List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p);
+            List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p, run.getK6Config(), run.getPlannedStartAt());
             List<StopCriteriaEvaluator.Sample> samples = new ArrayList<>();
             for (LiveRow r : evalRows) {
                 samples.add(new StopCriteriaEvaluator.Sample(r.operation(), r.percentileMs(), r.slaThresholdMs(), r.errorPct(),
@@ -249,8 +251,17 @@ public class RunMonitor {
                 && at.isBefore(step.getHoldStartAt().plusSeconds(Math.max(60, minWindowSec())));
     }
 
+    /** План интенсивности операции по конфигу k6 (стадии сценария) на момент at; null - плана по оп/с у этого исполнителя нет. */
+    private static Double plan(com.fasterxml.jackson.databind.JsonNode cfg, String op, Instant start, Instant at) {
+        if (cfg == null || start == null) {
+            return null;
+        }
+        com.fasterxml.jackson.databind.JsonNode sc = cfg.path("scenarios").path(op);
+        return sc.isMissingNode() ? null : ru.k6lab.core.k6config.ScenarioPlan.ratePerSec(sc, java.time.Duration.between(start, at).toMillis() / 1000.0);
+    }
+
     List<LiveRow> liveRows(RunSnapshot snap, RunStep step, Double levelOrNull, long runId, long windowSec, Instant at,
-                           SettingsService.Prometheus p) throws IOException {
+                           SettingsService.Prometheus p, com.fasterxml.jackson.databind.JsonNode cfg, Instant start) throws IOException {
         PromQueries.Names n = names.names();
         boolean helper = snap.usesHelper();
         Map<Integer, Map<String, Double>> pct = new HashMap<>();
@@ -285,9 +296,15 @@ public class RunMonitor {
             }
             double level = levelOrNull != null ? levelOrNull : step == null ? 0 : step.getLevelPct();
             // у прогрева без своей интенсивности план тот же, что и у основной нагрузки (это только отрезок времени)
-            double target = warmNow && levelOrNull == null
+            // план берётся из конфига k6 (стадии сценария: у ramping-arrival-rate он растёт линейно по стадиям); без плана по оп/с - прежний расчёт
+            Double planned = plan(cfg, o.name(), start, at);
+            double target = planned != null ? planned
+                    : warmNow && levelOrNull == null
                     ? (o.warmRatePerSec() > 0 ? o.warmRatePerSec() : o.ratePerSec() * level / 100.0)
                     : o.ratePerSec() * level / 100.0 * (levelOrNull != null ? 1 : rampFraction(step, at));
+            // сверка факта с целью - только при ровном плане на всём окне: на разгоне стадии факт за окно закономерно ниже цели
+            Double plannedBefore = planned == null ? null : plan(cfg, o.name(), start, at.minusSeconds(windowSec));
+            boolean steady = planned == null || (plannedBefore != null && Math.abs(planned - plannedBefore) <= 0.01 * Math.max(planned, plannedBefore));
             Double actual = rate.get(o.name());
             Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
             Double err = (helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp).get(o.name());
@@ -300,7 +317,7 @@ public class RunMonitor {
                 if (err != null && err > o.maxErrorPct()) {
                     reasons.add("ошибки > порога");
                 }
-                if (actual != null && target > 0 && levelOrNull != null && actual < target * 0.95) {
+                if (actual != null && target > 0 && levelOrNull != null && steady && actual < target * 0.95) {
                     reasons.add("интенсивность < 95% цели");
                 }
                 if (drop != null && drop > 0) {

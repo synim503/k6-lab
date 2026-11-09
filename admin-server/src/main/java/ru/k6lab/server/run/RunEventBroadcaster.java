@@ -40,8 +40,10 @@ public class RunEventBroadcaster {
     private final Map<Long, Channel> channels = new ConcurrentHashMap<>();
 
     /** Все точки live-метрик run с начала теста: новая вкладка видит графики целиком, а не только то, что пришло после открытия. */
-    private static final int METRIC_HISTORY = 2000;
-    private static final int HISTORY_RUNS = 30;
+    private static final int METRIC_HISTORY = 3000;
+    /** Сколько последних точек остаётся подробными при прореживании: старая часть истории редеет вдвое, но запуск виден целиком, сколько бы он ни шёл. */
+    private static final int METRIC_KEEP_FULL = 1000;
+    private static final int HISTORY_RUNS = 15;
     private final Map<Long, java.util.concurrent.ConcurrentLinkedDeque<String>> metricHistory = new ConcurrentHashMap<>();
 
     private Channel ch(long runId) {
@@ -75,9 +77,11 @@ public class RunEventBroadcaster {
 
     public void publishMetrics(long runId, String json) {
         var history = metricHistory.computeIfAbsent(runId, k -> new java.util.concurrent.ConcurrentLinkedDeque<>());
-        history.addLast(json);
-        while (history.size() > METRIC_HISTORY) {
-            history.pollFirst();
+        synchronized (history) {
+            history.addLast(json);
+            if (history.size() > METRIC_HISTORY) {
+                thin(history);
+            }
         }
         // помним последние запуски, а не все: старые вытесняются
         while (metricHistory.size() > HISTORY_RUNS) {
@@ -117,10 +121,27 @@ public class RunEventBroadcaster {
         return e;
     }
 
-    /** Точки метрик run с самого начала (JSON-строки по порядку времени). */
+    /** Прореживание: последние METRIC_KEEP_FULL точек без изменений, старая часть - каждая вторая (первая точка остаётся). */
+    static void thin(java.util.Deque<String> history) {
+        List<String> all = new ArrayList<>(history);
+        int cut = Math.max(0, all.size() - METRIC_KEEP_FULL);
+        history.clear();
+        for (int i = 0; i < all.size(); i++) {
+            if (i >= cut || i % 2 == 0) {
+                history.addLast(all.get(i));
+            }
+        }
+    }
+
+    /** Точки метрик run с самого начала (JSON-строки по порядку времени; давние точки реже). */
     public List<String> metricsHistory(long runId) {
         var h = metricHistory.get(runId);
-        return h == null ? List.of() : List.copyOf(h);
+        if (h == null) {
+            return List.of();
+        }
+        synchronized (h) {
+            return List.copyOf(h);
+        }
     }
 
     public SseEmitter subscribeMetrics(long runId) {

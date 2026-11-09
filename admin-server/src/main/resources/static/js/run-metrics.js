@@ -8,30 +8,53 @@
     if (!root || !root.dataset.metricsStream || typeof Chart === 'undefined') { return; }
 
     var charts = {};
-    var MAX_POINTS = 720; // час при шаге 5 с
+    // Графики держат весь запуск с самого начала: больше MAX_POINTS точек - старую часть прореживаем вдвое (последние KEEP_FULL точек остаются подробными),
+    // поэтому и через много часов видно весь график, а не только последний кусок
+    var MAX_POINTS = 3000, KEEP_FULL = 1000;
     var palette = ['#4f46e5', '#16a34a', '#dc2626', '#ea580c', '#9333ea', '#0891b2', '#64748b', '#db2777'];
     var selection = null; // null - видны все операции; иначе Set имён операций
+    var pre = [];         // точки до первых данных (инициализация скрипта): графики создаются позже и начинаются с них
 
-    // прогрев: полоса на графике по точкам, у которых фаза «warmup» (ошибки и SLA в это время не оцениваются)
-    var warmPlugin = {
-        id: 'warmup',
+    // фазы на графике: «Инициализация» (k6 ещё готовит скрипт, нагрузки нет) и «Прогрев» (ошибки и SLA в это время не оцениваются)
+    var PHASES = {
+        init: { fill: 'rgba(100, 116, 139, .14)', text: '#475569', title: 'Инициализация' },
+        warmup: { fill: 'rgba(245, 158, 11, .14)', text: '#b45309', title: 'Прогрев' }
+    };
+    var phasePlugin = {
+        id: 'phases',
         beforeDatasetsDraw: function (chart) {
-            var w = chart.$warm || [], xs = chart.scales && chart.scales.x, area = chart.chartArea;
-            if (!xs || !area) { return; }
-            var first = -1, last = -1;
-            for (var i = 0; i < w.length; i++) { if (w[i]) { if (first < 0) { first = i; } last = i; } }
-            if (first < 0) { return; }
-            var x0 = xs.getPixelForValue(first), x1 = xs.getPixelForValue(Math.min(last + 1, Math.max(0, w.length - 1)));
-            var ctx = chart.ctx;
-            ctx.save();
-            ctx.fillStyle = 'rgba(245, 158, 11, .14)';
-            ctx.fillRect(x0, area.top, Math.max(2, x1 - x0), area.bottom - area.top);
-            ctx.fillStyle = '#b45309'; ctx.font = '600 11px sans-serif';
-            ctx.fillText('Прогрев', x0 + 6, area.top + 14);
-            ctx.restore();
+            var ph = chart.$phase || [], xs = chart.scales && chart.scales.x, area = chart.chartArea;
+            if (!xs || !area || !ph.length) { return; }
+            var ctx = chart.ctx, i = 0;
+            while (i < ph.length) {
+                if (!ph[i] || !PHASES[ph[i]]) { i++; continue; }
+                var j = i;
+                while (j + 1 < ph.length && ph[j + 1] === ph[i]) { j++; }
+                var x0 = xs.getPixelForValue(i), x1 = xs.getPixelForValue(Math.min(j + 1, Math.max(0, ph.length - 1)));
+                ctx.save();
+                ctx.fillStyle = PHASES[ph[i]].fill;
+                ctx.fillRect(x0, area.top, Math.max(2, x1 - x0), area.bottom - area.top);
+                ctx.fillStyle = PHASES[ph[i]].text; ctx.font = '600 11px sans-serif';
+                ctx.fillText(PHASES[ph[i]].title, x0 + 6, area.top + 14);
+                ctx.restore();
+                i = j + 1;
+            }
         }
     };
 
+    // прореживание старой части всех графиков одинаково: чётные точки до границы остаются, последние KEEP_FULL - все
+    function compact() {
+        var keys = Object.keys(charts);
+        if (!keys.length || charts[keys[0]].data.labels.length <= MAX_POINTS) { return; }
+        var n = charts[keys[0]].data.labels.length, cut = n - KEEP_FULL;
+        function keep(i) { return i >= cut || i % 2 === 0; }
+        keys.forEach(function (k) {
+            var c = charts[k];
+            c.data.labels = c.data.labels.filter(function (x, i) { return keep(i); });
+            c.$phase = c.$phase.filter(function (x, i) { return keep(i); });
+            c.data.datasets.forEach(function (d) { d.data = d.data.filter(function (x, i) { return keep(i); }); });
+        });
+    }
     function esc(v) {
         return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     }
@@ -51,8 +74,8 @@
         document.getElementById(opts.container || 'metric-charts').appendChild(box);
         var c = new Chart(box.querySelector('canvas'), {
             type: 'line',
-            plugins: [warmPlugin],
-            data: { labels: [], datasets: [] },
+            plugins: [phasePlugin],
+            data: { labels: pre.map(function (x) { return x.label; }), datasets: [] },
             options: {
                 animation: false, responsive: true, maintainAspectRatio: false, spanGaps: true,
                 interaction: { mode: 'index', intersect: false },
@@ -62,7 +85,7 @@
             }
         });
         c.$box = box;
-        c.$warm = [];
+        c.$phase = pre.map(function (x) { return x.phase; });
         c.$selectable = selectable;
         c.$decimals = decimals === undefined ? 1 : decimals;
         if (selectable) {
@@ -143,17 +166,27 @@
     var lastTs = 0;   // точки не дублируются: live-поток при подключении повторяет последнюю
     function onMetrics(m, quiet) {
         if (m.phase === 'init') {
-            // k6 ещё инициализирует скрипт: точек на графиках нет, показываем только состояние
+            // k6 ещё инициализирует скрипт: данных нет, но время идёт - точка с пустыми значениями и меткой «Инициализация»
+            if (m.ts && m.ts <= lastTs) { return; }
+            lastTs = m.ts || lastTs;
+            var ti = new Date(m.ts).toTimeString().substring(0, 8);
+            pre.push({ label: ti, phase: 'init' });
+            Object.keys(charts).forEach(function (k) {
+                var c = charts[k];
+                c.data.labels.push(ti);
+                c.$phase.push('init');
+                c.data.datasets.forEach(function (d) { d.data.push(null); });
+                if (!quiet) { c.update('none'); }
+            });
             var ph0 = document.getElementById('metric-phase');
-            if (ph0 && !quiet) { ph0.textContent = 'Инициализация скрипта k6: ' + m.initSec + ' с — нагрузки и метрик ещё нет'; }
+            if (ph0 && !quiet) { ph0.textContent = 'Инициализация скрипта k6: ' + m.initSec + ' с'; }
             return;
-        }
-        if (m.ts && m.ts <= lastTs) { return; }
+        }        if (m.ts && m.ts <= lastTs) { return; }
         lastTs = m.ts || lastTs;
         // подпись по времени самих данных: метрики приходят с задержкой, и «сейчас» на графике было бы неверным
         var t = new Date(m.dataTs || m.ts).toTimeString().substring(0, 8);
         var any = Object.keys(charts)[0];
-        var idx = any ? charts[any].data.labels.length : 0;
+        var idx = any ? charts[any].data.labels.length : pre.length;
         // вкладка «Системные метрики»: VU по всем генераторам (задействованные и максимум) и dropped по операциям
         var vusC = ensure('vus', 'Виртуальные пользователи (VU) по всем генераторам: задействованные и максимум', 'VU', 0,
             { container: 'system-charts', label: 'Показатель', selectable: false });
@@ -181,14 +214,12 @@
             var c = charts[k];
             while (c.data.labels.length < idx) { c.data.labels.push(''); }
             c.data.labels[idx] = t;
-            c.$warm[idx] = m.phase === 'warmup';
+            c.$phase[idx] = m.phase === 'warmup' ? 'warmup' : '';
             c.data.datasets.forEach(function (d) { while (d.data.length <= idx) { d.data.push(null); } });
-            if (c.data.labels.length > MAX_POINTS) {
-                c.data.labels.shift();
-                c.$warm.shift();
-                c.data.datasets.forEach(function (d) { d.data.shift(); });
-            }
-            if (!quiet) { c.update('none'); renderLegend(c); }
+        });
+        compact();
+        Object.keys(charts).forEach(function (k) {
+            if (!quiet) { charts[k].update('none'); renderLegend(charts[k]); }
         });
         if (quiet) { return; }
         renderCurrent(m, t);

@@ -138,7 +138,23 @@ public class SandboxController {
 
     /** scriptId задан - сохраняем как новую версию существующего скрипта, иначе создаём новый скрипт. */
     public record SaveRequest(String name, String description, String entrypoint, List<SandboxService.FileIn> files,
-                              Long scriptId, String comment) {
+                              Long scriptId, String comment, Map<String, String> env) {
+    }
+
+    /** Имена переменных окружения: как у скрипта в нагрузке. */
+    private static final java.util.regex.Pattern ENV_NAME = java.util.regex.Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,100}$");
+
+    private static Map<String, String> cleanEnv(Map<String, String> env) {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        if (env != null) {
+            env.forEach((k, v) -> {
+                if (k == null || !ENV_NAME.matcher(k.strip()).matches()) {
+                    throw new IllegalArgumentException("Переменная окружения «" + k + "»: допустимы латиница, цифры и _, имя не начинается с цифры");
+                }
+                out.put(k.strip(), v == null ? "" : v);
+            });
+        }
+        return out;
     }
 
     /** Сохранение набора файлов как обычного скрипта (версия 1). */
@@ -151,11 +167,17 @@ public class SandboxController {
                 ScriptVersion nv = scripts.addVersionFromUpload(req.scriptId(), "sandbox.zip", new ByteArrayInputStream(zip),
                         req.entrypoint() == null ? "" : req.entrypoint(),
                         req.comment() == null || req.comment().isBlank() ? "правка в режиме отладки" : req.comment());
+                if (req.env() != null) {
+                    scripts.updateEnv(req.scriptId(), cleanEnv(req.env())); // переменные из отладчика - в нагрузку скрипта
+                }
                 return ResponseEntity.ok(Map.of("redirect", "/scripts/" + req.scriptId() + "/versions/" + nv.getId()));
             }
             ScriptVersion v = scripts.createFromUpload(req.name() == null ? "" : req.name(),
                     req.description() == null ? "" : req.description(), "sandbox.zip", new ByteArrayInputStream(zip),
                     req.entrypoint() == null ? "" : req.entrypoint(), "создан в режиме отладки");
+            if (req.env() != null && !req.env().isEmpty()) {
+                scripts.updateEnv(v.getScriptId(), cleanEnv(req.env()));
+            }
             return ResponseEntity.ok(Map.of("redirect", "/scripts/" + v.getScriptId()));
         } catch (IllegalArgumentException | IllegalStateException | IOException e) {
             return ResponseEntity.badRequest().body(Map.of("error", String.valueOf(e.getMessage())));

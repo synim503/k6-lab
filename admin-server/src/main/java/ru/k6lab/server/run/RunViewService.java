@@ -39,11 +39,14 @@ public class RunViewService {
     private final RunService runService;
     private final RunOrchestrator orchestrator;
     private final GeneratorMetricsService metrics;
+    private final ru.k6lab.server.settings.SettingsService settings;
 
-    public RunViewService(RunService runService, RunOrchestrator orchestrator, GeneratorMetricsService metrics) {
+    public RunViewService(RunService runService, RunOrchestrator orchestrator, GeneratorMetricsService metrics,
+                          ru.k6lab.server.settings.SettingsService settings) {
         this.runService = runService;
         this.orchestrator = orchestrator;
         this.metrics = metrics;
+        this.settings = settings;
     }
 
     public RunView view(Long runId) {
@@ -71,7 +74,9 @@ public class RunViewService {
             Instant now = Instant.now();
             elapsed = Math.max(0, Duration.between(run.getPlannedStartAt(), now).getSeconds());
             // k6 ещё инициализирует скрипт: нагрузки нет, шкалу запуска показывать рано
-            if (run.getStatus() == RunStatus.RUNNING && run.getInitSec() == null && elapsed >= 15) {
+            // «нагрузки нет» - только если реальный старт определяется по Prometheus (он настроен) и ни один генератор не показывает работающих VU или итераций
+            boolean loadSeen = live.stream().anyMatch(l -> l.vus() > 0 || l.iterations() > 0);
+            if (run.getStatus() == RunStatus.RUNNING && run.getInitSec() == null && elapsed >= 15 && settings.prometheus().configured() && !loadSeen) {
                 initializing = true;
                 initElapsed = elapsed;
                 elapsed = 0;

@@ -80,7 +80,26 @@ public class RunSeriesService {
         if (out.stream().noneMatch(OpSeries::hasData)) {
             out = fromHistory(run.getId(), snap, start);
         }
-        return out.stream().anyMatch(OpSeries::hasData) ? out : List.of();
+        return out.stream().anyMatch(OpSeries::hasData) ? withConfigPlans(out, run.getK6Config()) : List.of();
+    }
+
+    /** План - по стадиям сценария из конфига k6 (ломаная); у исполнителей без плана по оп/с остаётся прежний. */
+    private static List<OpSeries> withConfigPlans(List<OpSeries> series, com.fasterxml.jackson.databind.JsonNode cfg) {
+        if (cfg == null) {
+            return series;
+        }
+        List<OpSeries> out = new ArrayList<>();
+        for (OpSeries s : series) {
+            var poly = ru.k6lab.core.k6config.ScenarioPlan.polyline(cfg.path("scenarios").path(s.op()));
+            if (poly.isEmpty()) {
+                out.add(s);
+                continue;
+            }
+            List<Pt> plan = new ArrayList<>();
+            poly.forEach(pt -> plan.add(new Pt(pt.sec() / 60.0, pt.rate())));
+            out.add(new OpSeries(s.op(), s.pctN(), s.slaMs(), s.maxErrPct(), s.actual(), plan, s.pct(), s.err(), s.warmupMin()));
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------ Prometheus

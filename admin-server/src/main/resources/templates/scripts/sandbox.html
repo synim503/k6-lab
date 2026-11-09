@@ -455,7 +455,7 @@
                 if (!entry) { showErr('Выберите основной файл (звёздочка) среди .js-файлов'); return; }
                 fetch('/scripts/sandbox/save', {method: 'POST', headers: headers(true),
                     body: JSON.stringify({name: name, description: '', entrypoint: entry, files: payloadFiles(),
-                        scriptId: existing ? existing.id : null, comment: existing ? $('sb-comment').value : ''})})
+                        scriptId: existing ? existing.id : null, comment: existing ? $('sb-comment').value : '', env: envMap()})})
                     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
                     .then(function (res) { if (res.ok) { location.href = res.j.redirect; } else { showErr(res.j.error || 'Не удалось сохранить'); } })
                     .catch(function (e) { showErr('Ошибка запроса: ' + e); });
