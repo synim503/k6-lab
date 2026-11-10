@@ -52,6 +52,7 @@ public class SettingsController {
         model.addAttribute("allowMetrics", String.join("\n", settings.allowMetrics()));
         model.addAttribute("essentialMetrics", orchestrator.essentialMetrics());
         model.addAttribute("onlyNeeded", settings.onlyNeededHistograms());
+        model.addAttribute("nameTag", settings.urlNameTag());
         model.addAttribute("metricNames", names.json());
         model.addAttribute("logLines", settings.logLinesPerSecond());
         model.addAttribute("logDays", settings.logRetentionDays());
@@ -90,7 +91,8 @@ public class SettingsController {
     /** Белый список метрик: что агенты отправляют в Prometheus. Метрики, нужные самой админке, добавляются автоматически. */
     @PostMapping("/allow-metrics")
     public String saveAllowMetrics(@RequestParam(required = false) String allowMetrics,
-                                   @RequestParam(defaultValue = "false") boolean onlyNeeded, RedirectAttributes ra) {
+                                   @RequestParam(defaultValue = "false") boolean onlyNeeded,
+                                   @RequestParam(defaultValue = "false") boolean nameTag, RedirectAttributes ra) {
         List<String> patterns = SettingsService.parseMetricMasks(allowMetrics);
         for (String pat : patterns) {
             if (!pat.matches("[A-Za-z0-9_:*]+")) {
@@ -100,6 +102,7 @@ public class SettingsController {
         }
         settings.set(SettingsService.ALLOW_METRICS, String.join(System.lineSeparator(), patterns));
         settings.set(SettingsService.ONLY_NEEDED_HISTOGRAMS, String.valueOf(onlyNeeded));
+        settings.set(SettingsService.URL_NAME_TAG, String.valueOf(nameTag));
         ra.addFlashAttribute("info", patterns.isEmpty() ? "Белый список пуст: агенты отправляют все метрики"
                 : "Агенты будут отправлять только: " + String.join(", ", patterns) + " (и метрики, нужные админке). Применится к следующим запускам.");
         return "redirect:/settings#allow";

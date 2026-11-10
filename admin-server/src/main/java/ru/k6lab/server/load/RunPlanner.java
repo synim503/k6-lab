@@ -39,10 +39,26 @@ public class RunPlanner {
 
     private final ScriptService scripts;
     private final LoadService load;
+    private final ru.k6lab.server.settings.SettingsService settings;
 
-    public RunPlanner(ScriptService scripts, LoadService load) {
+    public RunPlanner(ScriptService scripts, LoadService load, ru.k6lab.server.settings.SettingsService settings) {
         this.scripts = scripts;
         this.load = load;
+        this.settings = settings;
+    }
+
+    /** Убирает системный тег name (адрес запроса) из конфига, если он отключён в настройках. */
+    private static boolean dropNameTag(JsonNode config) {
+        boolean changed = false;
+        if (config != null && config.path("systemTags") instanceof com.fasterxml.jackson.databind.node.ArrayNode tags) {
+            for (int i = tags.size() - 1; i >= 0; i--) {
+                if ("name".equals(tags.get(i).asText())) {
+                    tags.remove(i);
+                    changed = true;
+                }
+            }
+        }
+        return changed;
     }
 
     public RunPlan plan(Long scriptId, int generatorCount) {
@@ -99,6 +115,9 @@ public class RunPlanner {
                 // ручные правки конфига k6 (maxVUs и т.п.) накладываются поверх расчётного конфига
                 var applied = K6ConfigOverrides.apply(gen.config(), script.getK6Overrides());
                 finalConfig = applied.config();
+                if (!settings.urlNameTag() && (dropNameTag(gen.config()) | dropNameTag(finalConfig))) {
+                    json = K6ConfigGenerator.toJson(gen);
+                }
                 // единственная «ступень» запуска - весь тест: длительность по самому долгому сценарию конфига, уровень 100%.
                 // Планы по оп/с (constant-arrival-rate) уже учитывают всё нужное, профиль нагрузки больше не задаётся отдельно.
                 long spanSec = ru.k6lab.core.k6config.ConfigDuration.of(finalConfig).totalSec();

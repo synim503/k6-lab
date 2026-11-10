@@ -92,6 +92,7 @@ class ResultsIT extends AbstractIT {
         o.setSlaPercentile(95);
         o.setMaxErrorPct(1.0);
         f.getOps().add(o);
+        f.setEnvText("BASE_URL=http://sut.example\nAPI_TOKEN=s3cr3tval");
         load.save(v.getScriptId(), f);
         return scripts.get(v.getScriptId());
     }
@@ -131,7 +132,7 @@ class ResultsIT extends AbstractIT {
             if (q.contains("k6_iterations_total")) {
                 return Map.of("work", 10.0 * (1 + 0.1 * (step - 1)) * 0.99);
             }
-            if (q.contains("k6_op_errors_total") || q.contains("http_req_failed")) {
+            if (q.contains("k6_op_errors_total") || q.contains("expected_response")) {
                 return Map.of("work", 0.1);
             }
             return Map.of();
@@ -160,7 +161,7 @@ class ResultsIT extends AbstractIT {
         // сохранено и читается обратно
         assertThat(results.load(run.getId())).get().extracting(d -> d.steps().size()).isEqualTo(3);
         // перцентили запрашивались только как histogram_quantile по сумме всех генераторов
-        assertThat(prom.queries).anyMatch(q -> q.startsWith("histogram_quantile(0.95, sum by (scenario, le)"));
+        assertThat(prom.queries).anyMatch(q -> q.startsWith("(histogram_quantile(0.95, sum by (scenario, le)"));
         assertThat(prom.queries).noneMatch(q -> q.contains("avg(") && q.contains("quantile"));
 
         mvc.perform(get("/runs/" + run.getId() + "/results")).andExpect(status().isOk())
@@ -171,6 +172,10 @@ class ResultsIT extends AbstractIT {
         // графики по времени от начала теста (много точек), а не «по ступеням» (одна точка на ступень)
         assertThat(html).contains("Интенсивность: факт и план").contains("Время ответа: work").contains("Ошибки");
         assertThat(prom.queries).anyMatch(q -> q.startsWith("sum by (scenario) (increase(k6_iterations_total"));
+        // переменные запуска видны в отчёте и на странице запуска; значение переменной с именем, похожим на секрет, скрыто
+        assertThat(html).contains("Переменные запуска").contains("BASE_URL").contains("http://sut.example").contains("API_TOKEN").doesNotContain("s3cr3tval");
+        mvc.perform(get("/runs/" + run.getId())).andExpect(content().string(containsString("http://sut.example")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("s3cr3tval"))));
         byte[] pdf = mvc.perform(get("/runs/" + run.getId() + "/report.pdf")).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
         assertThat(new String(pdf, 0, 5, StandardCharsets.ISO_8859_1)).isEqualTo("%PDF-");
         assertThat(pdf.length).isGreaterThan(5_000);

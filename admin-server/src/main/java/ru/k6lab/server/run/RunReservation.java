@@ -99,6 +99,24 @@ public class RunReservation {
         return Optional.of(out);
     }
 
+    /** Выбранные для run генераторы, которых больше нет (удалены, пока run ждал в очереди): такой run не запустится никогда. */
+    @Transactional(readOnly = true)
+    @SuppressWarnings("unchecked")
+    public List<Long> missingGenerators(Long runId) {
+        Run run = runs.findById(runId).orElse(null);
+        if (run == null || run.getRequest() == null || !(run.getRequest().get("generators") instanceof List<?> sel)) {
+            return List.of();
+        }
+        List<Long> missing = new ArrayList<>();
+        for (Map<String, Object> m : (List<Map<String, Object>>) sel) {
+            long id = ((Number) m.get("id")).longValue();
+            if (!generators.existsById(id)) {
+                missing.add(id);
+            }
+        }
+        return missing;
+    }
+
     /** Освобождает генераторы run (active_runs - 1). Вызывается ровно один раз при завершении. */
     @Transactional
     public void release(List<Long> generatorIds) {

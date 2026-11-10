@@ -52,6 +52,7 @@ public class ReportService {
         ctx.setVariable("snap", snap);
         ctx.setVariable("data", data);
         ctx.setVariable("charts", charts);
+        ctx.setVariable("envRows", ReportFormat.envRows(snap.env(), run.getK6Config()));
         ctx.setVariable("fmt", new ReportFormat());
         ctx.setVariable("generatedAt", Instant.now());
         return engine.process("reports/report", ctx);

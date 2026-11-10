@@ -191,6 +191,12 @@ public class StepResultService {
             int holdSec = (int) Duration.between(step.getHoldStartAt(), step.getHoldEndAt()).getSeconds();
             Instant winStart = step.getHoldStartAt().plusSeconds(Math.min(SETTLE_SEC, holdSec / 4));
             Instant winEnd = step.getHoldEndAt().isAfter(finished) ? finished : step.getHoldEndAt();
+            // шкала привязана к первой точке метрик, а она появляется позже реального начала нагрузки (до интервала отправки k6): на столько же
+            // позже реального конца оказался бы конец окна. Хвост без нагрузки занижал бы среднюю интенсивность, поэтому окно короче на интервал
+            long trim = run.getInitSec() == null ? 0 : settings.pushIntervalSec();
+            if (Duration.between(winStart, winEnd).getSeconds() - trim >= 2L * MIN_WINDOW_SEC) {
+                winEnd = winEnd.minusSeconds(trim);
+            }
             long winSec = Duration.between(winStart, winEnd).getSeconds();
             String label = step.getLabel();
             if (winSec < MIN_WINDOW_SEC) {
@@ -203,7 +209,7 @@ public class StepResultService {
                 boolean reliable = reliable(gens, step.getHoldStartAt(), winEnd);
                 Double cpuMax = cpuMax(gens, winStart, winEnd);
                 boolean overloaded = cpuMax != null && cpuMax > criteria.maxCpuPct();
-                List<StepAnalysis.OpMetrics> metrics = opMetrics(snap, n, run.getId(), step.getLevelPct(), winSec, winEnd, p);
+                List<StepAnalysis.OpMetrics> metrics = opMetrics(snap, n, run, step.getLevelPct(), winSec, winEnd, p);
                 StepAnalysis.StepVerdict v = StepAnalysis.analyze(step.getStepNo(), reliable, overloaded, metrics, sla, criteria);
                 verdicts.add(v);
                 List<ResultData.OpRow> ops = new ArrayList<>();
@@ -225,8 +231,9 @@ public class StepResultService {
         return new ResultData(rows, error == null, error, now, genRows);
     }
 
-    private List<StepAnalysis.OpMetrics> opMetrics(RunSnapshot snap, PromQueries.Names n, long runId, double stepLevel, long winSec,
+    private List<StepAnalysis.OpMetrics> opMetrics(RunSnapshot snap, PromQueries.Names n, Run run, double stepLevel, long winSec,
                                                    Instant at, SettingsService.Prometheus p) throws IOException {
+        long runId = run.getId();
         boolean helper = snap.usesHelper();
         Map<Integer, Map<String, Double>> pct = new HashMap<>();
         for (int q : new int[]{50, 90, 95, 99}) {
@@ -247,6 +254,15 @@ public class StepResultService {
             }
             double level = stepLevel;
             double target = o.ratePerSec() * level / 100.0;
+            // план по конфигу k6 (стадии сценария): средняя плановая интенсивность за то же окно, что и факт. Без этого у ramping-arrival-rate
+            // цели не было вовсе и интенсивность в итогах не сверялась
+            if (run.getK6Config() != null && run.getPlannedStartAt() != null) {
+                double toSec = Duration.between(run.getPlannedStartAt(), at).toMillis() / 1000.0;
+                Double planned = ru.k6lab.core.k6config.ScenarioPlan.averageRate(run.getK6Config().path("scenarios").path(o.name()), toSec - winSec, toSec);
+                if (planned != null) {
+                    target = planned;
+                }
+            }
             Double err = helper ? errHelper.get(o.name()) : "CHECKS".equals(o.failureSource()) ? errChecks.get(o.name()) : errHttp.get(o.name());
             Double drop = dropped.get(o.name());
             // нет серии dropped = ни одной пропущенной итерации (k6 не создаёт счётчик до первого события)

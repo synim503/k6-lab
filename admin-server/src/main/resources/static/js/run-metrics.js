@@ -181,7 +181,8 @@
             var ph0 = document.getElementById('metric-phase');
             if (ph0 && !quiet) { ph0.textContent = 'Инициализация скрипта k6: ' + m.initSec + ' с'; }
             return;
-        }        if (m.ts && m.ts <= lastTs) { return; }
+        }
+        if (m.ts && m.ts <= lastTs) { return; }
         lastTs = m.ts || lastTs;
         // подпись по времени самих данных: метрики приходят с задержкой, и «сейчас» на графике было бы неверным
         var t = new Date(m.dataTs || m.ts).toTimeString().substring(0, 8);
@@ -225,12 +226,40 @@
         renderCurrent(m, t);
     }
 
+    // период таблицы, как в Grafana: последняя минута (окно расчёта) или весь тест; выбор запоминается в браузере
+    var range = 'window', lastMsg = null, lastT = '';
+    try { range = localStorage.getItem('k6lab.metricRange') === 'all' ? 'all' : 'window'; } catch (e) { /* хранилище недоступно */ }
+    function markRange() {
+        document.querySelectorAll('#metric-range [data-range]').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.range === range);
+        });
+    }
+    var rangeBox = document.getElementById('metric-range');
+    if (rangeBox) {
+        markRange();
+        rangeBox.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-range]');
+            if (!b) { return; }
+            range = b.dataset.range;
+            try { localStorage.setItem('k6lab.metricRange', range); } catch (err) { /* хранилище недоступно */ }
+            markRange();
+            if (lastMsg) { renderCurrent(lastMsg, lastT); }
+        });
+    }
+    function span(sec) {
+        if (sec < 120) { return sec + ' с'; }
+        if (sec < 7200) { return Math.round(sec / 60) + ' мин'; }
+        return (sec / 3600).toFixed(1) + ' ч';
+    }
+
     function renderCurrent(m, t) {
+        lastMsg = m; lastT = t;
         // таблица текущих значений с подсветкой нарушений
         var tb = document.getElementById('metric-table');
+        var all = range === 'all' && m.rowsAll;
         if (tb) {
             var html = '';
-            (m.rows || []).forEach(function (r) {
+            (all ? m.rowsAll : (m.rows || [])).forEach(function (r) {
                 html += '<tr class="' + (r.violation ? 'table-danger' : '') + '"><td>' + esc(r.op) + '</td><td>' + fmt(r.actual) + ' / ' + fmt(r.target) +
                     '</td><td>' + fmt(r.pct, 0) + ' / ' + r.sla + ' мс (p' + r.pctN + ')</td><td>' + fmt(r.err, 2) + ' / ' + r.maxErr +
                     ' %</td><td>' + fmt(r.dropped, 0) + '</td><td class="small">' + (r.reasons || []).join(', ') + '</td></tr>';
@@ -238,10 +267,13 @@
             tb.innerHTML = html || '<tr><td colspan="6" class="text-muted">Нет данных</td></tr>';
         }
         var ph = document.getElementById('metric-phase');
-        if (ph) {
+        if (ph && m.phase === 'init') {
+            ph.textContent = 'Инициализация скрипта k6: ' + m.initSec + ' с';
+        } else if (ph) {
             var lag = m.lagSec === undefined ? '' : '. Данные на ' + t + ', задержка метрик ' + m.lagSec + ' с';
             ph.textContent = (m.phase === 'warmup' ? 'Идёт прогрев: ошибки и время ответа пока не оцениваются'
-                : m.phase ? 'Идёт нагрузка, окно расчёта ' + m.windowSec + ' с' : 'Ожидание данных') + lag;
+                : m.phase ? 'Идёт нагрузка, ' + (all ? 'показатели за весь тест (' + span(m.wholeSec) + ')'
+                    : 'окно расчёта ' + m.windowSec + ' с' + (range === 'all' ? ' (за весь тест данных пока нет)' : '')) : 'Ожидание данных') + lag;
         }
     }
 

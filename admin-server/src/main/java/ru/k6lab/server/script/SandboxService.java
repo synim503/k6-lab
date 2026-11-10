@@ -303,6 +303,12 @@ public class SandboxService {
         }
     }
 
+    /** Каталоги завершённых отладочных запусков удаляются по расписанию, а не только при следующем запуске. */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 600_000, initialDelay = 600_000)
+    public void purge() {
+        cleanup();
+    }
+
     private void cleanup() {
         long now = System.currentTimeMillis();
         sessions.entrySet().removeIf(e -> {

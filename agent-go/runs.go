@@ -254,7 +254,13 @@ func (m *RunManager) cancelPrepare(c RunCmd) CmdAck {
 		return ackOK(c.CmdID)
 	}
 	if st := r.getState(); st == stRunning || st == stStopping {
-		return ackErr(c.CmdID, "run уже запущен - используйте STOP/ABORT")
+		// отмена пришла, когда k6 уже стартовал (сервер закрыл запуск в момент старта): сервер этот run больше не ведёт и остановить его
+		// будет некому, поэтому k6 завершается сразу, а не отрабатывает весь тест без присмотра
+		r.mu.Lock()
+		r.aborted = true
+		r.mu.Unlock()
+		r.killQuietly()
+		return ackOK(c.CmdID)
 	}
 	r.mu.Lock()
 	r.cancelled = true
@@ -480,7 +486,11 @@ func (m *RunManager) launch(r *Run) {
 			r.cmd = cmd
 			r.state = stRunning
 			r.pollStop = make(chan struct{})
+			cancelledMeanwhile := r.cancelled
 			r.mu.Unlock()
+			if cancelledMeanwhile {
+				_ = cmd.Process.Kill() // отмена успела прийти, пока k6 запускался
+			}
 			m.emit(func(seq int64) any {
 				return Status{Type: "STATUS", Seq: seq, Ts: nowMs(), RunID: p.RunID, State: stRunning, Pid: &pid}
 			})

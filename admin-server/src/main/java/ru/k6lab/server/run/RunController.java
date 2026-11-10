@@ -51,6 +51,7 @@ public class RunController {
         model.addAttribute("run", v.run());
         model.addAttribute("snap", v.snapshot());
         model.addAttribute("blockedControl", v.canControl());
+        model.addAttribute("envRows", ru.k6lab.server.result.ReportFormat.envRows(v.snapshot().env(), v.run().getK6Config()));
         model.addAttribute("grafanaUrl", grafanaUrl(v));
         return "runs/view";
     }

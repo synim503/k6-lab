@@ -147,6 +147,16 @@ public class SettingsService {
         return !"false".equals(get(ONLY_NEEDED_HISTOGRAMS, "true"));
     }
 
+    public static final String URL_NAME_TAG = "metrics.tag.name";
+
+    /**
+     * true (по умолчанию) - метрики HTTP несут тег name (адрес запроса). Каждый уникальный адрес - отдельный набор рядов в Prometheus
+     * (у гистограммы ~170 рядов на генератор), поэтому для скриптов с идентификаторами в пути тег можно отключить.
+     */
+    public boolean urlNameTag() {
+        return !"false".equals(get(URL_NAME_TAG, "true"));
+    }
+
     /** Строки/запятые/пробелы -> список масок без пустых и повторов. */
     public static List<String> parseMetricMasks(String text) {
         if (text == null) {

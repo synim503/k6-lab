@@ -199,11 +199,19 @@ class K6ConfigGeneratorTest {
     }
 
     @Test
-    void warmupThresholdsWithoutHelperStayOnTheWholeScenario() {
-        var ops = List.of(custom("soak", "work", "constant-vus", Map.of("vus", 3, "duration", "1m", "warmup", Map.of("duration", "20s"))));
+    void scenarioWithWarmupGetsNoK6ThresholdsWithoutHelper() {
+        var ops = List.of(custom("soak", "work", "constant-vus", Map.of("vus", 3, "duration", "1m", "warmup", Map.of("duration", "20s"))),
+                custom("plain", "work", "constant-vus", Map.of("vus", 3, "duration", "1m")));
         var cfg = K6ConfigGenerator.generate(new ConfigInput(ops, steps(100), 30, 30, 1, 1.5, 3, false));
-        // без helper метрик с тегом фазы нет: пороги прежние (прогрев в итоги исключается по времени на стороне админки)
-        assertThat(cfg.config().path("thresholds").toString()).contains("scenario:soak}").doesNotContain("phase");
+        // без helper тега фазы нет: порог k6 захватил бы прогрев, поэтому у сценария с прогревом порогов нет (SLA оценивает админка по времени)
+        assertThat(cfg.config().path("thresholds").toString()).doesNotContain("scenario:soak").contains("scenario:plain}").doesNotContain("phase");
+    }
+
+    @Test
+    void warmupStageDurationMayBeCompound() {
+        var op = custom("rar", "work", "ramping-arrival-rate", Map.of("startRate", 10, "timeUnit", "1s", "preAllocatedVUs", 5,
+                "stages", List.of(Map.of("duration", "1m30s", "target", 10), Map.of("duration", "5m", "target", 50)), "warmup", Map.of("stages", 1)));
+        assertThat(K6ConfigGenerator.warmupEndSec(op)).isEqualTo(90);
     }
 
     @Test

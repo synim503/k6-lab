@@ -70,7 +70,12 @@ public final class PromQueries {
      * при helper - время операции op() (op_duration, для старых запусков).
      */
     public static String percentileMs(Names n, boolean helper, int percentile, long runId, long rangeSec) {
-        return quantile(helper ? n.opDuration() : n.httpReqDuration(), n.classic(), percentile, runId, rangeSec);
+        if (helper) {
+            return quantile(n.opDuration(), n.classic(), percentile, runId, rangeSec);
+        }
+        // у сценариев без HTTP-запросов (gRPC, брокеры, SQL) http_req_duration нет: для них берётся время итерации, иначе SLA было бы «нет данных»
+        return "(" + quantile(n.httpReqDuration(), n.classic(), percentile, runId, rangeSec) + ") or ("
+                + quantile(n.iterationDuration(), n.classic(), percentile, runId, rangeSec) + ")";
     }
 
     /** Перцентиль времени метода целиком (итерации: все запросы, паузы и работа генератора), мс, по сценариям. Показатель здоровья генератора, не SLA. */
@@ -100,9 +105,22 @@ public final class PromQueries {
         return switch (source) {
             case HELPER -> "100 * sum by (scenario) (increase(" + selector(n.opErrors(), runId, null) + "[" + r
                     + "])) / sum by (scenario) (increase(" + selector(n.opCount(), runId, null) + "[" + r + "]))";
-            case HTTP -> "100 * avg by (scenario) (avg_over_time(" + selector(n.httpReqFailed(), runId, null) + "[" + r + "]))";
+            case HTTP -> {
+                // по счётчикам запросов за окно: http_req_failed в Prometheus - доля с начала теста отдельно по каждому набору меток
+                // (status, name, генератор), её среднее не взвешено числом запросов и не относится к окну
+                String all = httpCount(n, runId, r, false);
+                yield "100 * (" + httpCount(n, runId, r, true) + " / " + all + " or " + all + " * 0)";
+            }
             case CHECKS -> "100 * (1 - avg by (scenario) (avg_over_time(" + selector(n.checks(), runId, null) + "[" + r + "])))";
         };
+    }
+
+    /** Число HTTP-запросов за окно по операциям (счётчик гистограммы http_req_duration); failedOnly - только неуспешные. */
+    private static String httpCount(Names n, long runId, String range, boolean failedOnly) {
+        String labels = "{test_run_id=\"" + runId + "\"" + (failedOnly ? ",expected_response=\"false\"" : "") + "}";
+        return n.classic()
+                ? "sum by (scenario) (increase(" + n.httpReqDuration() + "_count" + labels + "[" + range + "]))"
+                : "sum by (scenario) (histogram_count(increase(" + n.httpReqDuration() + labels + "[" + range + "])))";
     }
 
     /** dropped_iterations за окно по операциям. */

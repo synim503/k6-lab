@@ -66,7 +66,11 @@ public final class K6ConfigGenerator {
                     : closedScenario(op, in, scenarios, warnings);
             if (plan != null) {
                 plans.add(plan);
-                addThresholds(op, in.usesHelper(), thresholds);
+                // пороги k6 считаются за весь тест на каждом генераторе и без helper прогрев исключить не умеют (нет тега phase):
+                // у сценария с прогревом они дали бы ложное «thresholds не выполнены», поэтому не задаются - SLA оценивает админка
+                if (in.usesHelper() || warmupEndSec(op) == 0) {
+                    addThresholds(op, in.usesHelper(), thresholds);
+                }
             }
         }
         if (plans.isEmpty()) {
@@ -453,19 +457,15 @@ public final class K6ConfigGenerator {
         return o instanceof Number n ? n.longValue() : 0;
     }
 
-    /** "30s", "1m", "2h", "500ms" -> секунды; нераспознанное - 0. */
+    /** "30s", "1m", "1m30s", "500ms", число без единиц (секунды) -> секунды; нераспознанное - 0. */
     private static double durationSec(String s) {
-        java.util.regex.Matcher m = Pattern.compile("^\\s*([0-9]*\\.?[0-9]+)\\s*(ms|s|m|h)?\\s*$").matcher(s);
-        if (!m.matches()) {
+        if (s == null) {
             return 0;
         }
-        double v = Double.parseDouble(m.group(1));
-        return switch (m.group(2) == null ? "s" : m.group(2)) {
-            case "ms" -> v / 1000;
-            case "m" -> v * 60;
-            case "h" -> v * 3600;
-            default -> v;
-        };
+        if (s.trim().matches("[0-9]*\\.?[0-9]+")) {
+            return Double.parseDouble(s.trim());
+        }
+        return ConfigDuration.parse(s, 0); // тот же разбор, что и у плановой длительности: составные значения вроде 1m30s
     }
 
     // ------------------------------------------------------------------ закрытая модель

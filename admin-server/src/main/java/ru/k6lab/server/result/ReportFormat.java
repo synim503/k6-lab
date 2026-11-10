@@ -136,4 +136,44 @@ public class ReportFormat {
             default -> "text-bg-primary";
         };
     }
+
+    // ------------------------------------------------------------------ переменные запуска
+
+    /** Переменная запуска для страницы запуска и отчёта: где задана (скрипт или сценарий), имя и значение для показа. */
+    public record EnvRow(String scope, String name, String value) {
+    }
+
+    private static final java.util.regex.Pattern SENSITIVE = java.util.regex.Pattern.compile(
+            "(?i).*(pass(word|wd)?|secret|token|api[_-]?key|private[_-]?key|credential|authorization).*");
+
+    /**
+     * Значение переменной для показа. Ссылка на секрет ${secret:ИМЯ} показывается как есть (само значение в запуск подставляет агент),
+     * а значение переменной с именем, похожим на пароль или токен, скрывается: отчёт уходит людям, которым секрет знать не нужно.
+     */
+    public static String envValue(String name, String value) {
+        if (value == null) {
+            return "";
+        }
+        if (value.contains("${secret:")) {
+            return value;
+        }
+        return name != null && SENSITIVE.matcher(name).matches() && !value.isEmpty() ? "•••••• (скрыто)" : value;
+    }
+
+    /** Переменные запуска: общие для скрипта (из снимка запуска) и заданные у сценариев (из конфига k6); служебные не показываются. */
+    public static java.util.List<EnvRow> envRows(java.util.Map<String, String> scriptEnv, com.fasterxml.jackson.databind.JsonNode k6Config) {
+        java.util.List<EnvRow> out = new java.util.ArrayList<>();
+        if (scriptEnv != null) {
+            new java.util.TreeMap<>(scriptEnv).forEach((k, v) -> out.add(new EnvRow("скрипт", k, envValue(k, v))));
+        }
+        if (k6Config != null) {
+            k6Config.path("scenarios").fields().forEachRemaining(sc -> {
+                java.util.Map<String, String> env = new java.util.TreeMap<>();
+                sc.getValue().path("env").fields().forEachRemaining(e -> env.put(e.getKey(), e.getValue().asText()));
+                env.remove("K6LAB_WARMUP_END_MS");
+                env.forEach((k, v) -> out.add(new EnvRow("сценарий " + sc.getKey(), k, envValue(k, v))));
+            });
+        }
+        return out;
+    }
 }

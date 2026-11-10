@@ -84,6 +84,8 @@ public class RunOrchestrator implements AgentEventListener {
         int totalSec;
         boolean externallyControlled;
         boolean startSent;
+        /** Все генераторы готовы, идёт проверка часов перед START (в отдельном потоке). */
+        boolean starting;
         boolean stopRequested;
         boolean abortRequested;
         boolean finalized;
@@ -277,7 +279,9 @@ public class RunOrchestrator implements AgentEventListener {
     static String artifactUrl(String serverUrl, long runId, String token) {
         URI u = URI.create(serverUrl);
         String scheme = "wss".equals(u.getScheme()) ? "https" : "http";
-        return scheme + "://" + u.getHost() + ":" + u.getPort() + "/agent/artifact/" + runId + "/" + token;
+        // порт в адресе сервера может быть не указан (ws://host/agent/ws за балансировщиком): тогда порт по умолчанию для схемы
+        int port = u.getPort() > 0 ? u.getPort() : "https".equals(scheme) ? 443 : 80;
+        return scheme + "://" + u.getHost() + ":" + port + "/agent/artifact/" + runId + "/" + token;
     }
 
     private void onPrepareTimeout(long runId) {
@@ -382,8 +386,11 @@ public class RunOrchestrator implements AgentEventListener {
         runService.updateGenerator(g.rgId, x -> x.setStatus(RunGenerator.Status.PREPARED));
         logs.addSystem(ctx.runId, "INFO", "Генератор " + g.name + " подготовлен");
         broadcaster.publishStatus(ctx.runId, RunStatus.PREPARING.name());
-        if (!ctx.startSent && !ctx.stopRequested && ctx.gens.values().stream().allMatch(x -> x.status == RunGenerator.Status.PREPARED)) {
-            startAll(ctx);
+        if (!ctx.startSent && !ctx.starting && !ctx.stopRequested
+                && ctx.gens.values().stream().allMatch(x -> x.status == RunGenerator.Status.PREPARED)) {
+            // не в потоке WebSocket этого генератора: перемер часов ждёт PONG, а поток, занятый здесь, не смог бы его принять
+            ctx.starting = true;
+            scheduler.execute(() -> startAll(ctx));
         }
     }
 
@@ -431,28 +438,59 @@ public class RunOrchestrator implements AgentEventListener {
         return s.clockOffsetMs();
     }
 
-    /** Все PREPARED: проверка часов, затем START всем с общим start_at. */
+    /**
+     * Все PREPARED: проверка часов, затем START всем с общим start_at. Часы измеряются без блокировки запуска (ожидание ответов агентов),
+     * решение и отправка START - под ней.
+     */
     private void startAll(Ctx ctx) {
-        cancel(ctx.prepareTimeout);
-        Map<Long, Long> offsets = new HashMap<>();
-        for (GenCtx g : ctx.gens.values()) {
-            AgentSession s = registry.get(g.genId).orElse(null);
-            if (s == null) {
-                fail(ctx, "Генератор " + g.name + " отключился перед стартом");
-                return;
+        MDC.put("run_id", String.valueOf(ctx.runId));
+        try {
+            List<GenCtx> gens;
+            synchronized (ctx) {
+                gens = List.copyOf(ctx.gens.values());
             }
-            Long off = freshClockOffset(s);
-            if (off == null) {
-                fail(ctx, "Не измерено расхождение часов генератора " + g.name + " - синхронный старт невозможен");
-                return;
+            Map<Long, Long> offsets = new HashMap<>();
+            String problem = null;
+            for (GenCtx g : gens) {
+                AgentSession s = registry.get(g.genId).orElse(null);
+                if (s == null) {
+                    problem = "Генератор " + g.name + " отключился перед стартом";
+                    break;
+                }
+                Long off = freshClockOffset(s);
+                if (off == null) {
+                    problem = "Не измерено расхождение часов генератора " + g.name + " - синхронный старт невозможен";
+                    break;
+                }
+                if (Math.abs(off) > MAX_CLOCK_SKEW_MS) {
+                    problem = "Часы генератора " + g.name + " расходятся с сервером на " + off + " мс (> " + MAX_CLOCK_SKEW_MS
+                            + " мс): синхронный старт заблокирован. Настройте chrony/NTP на генераторе.";
+                    break;
+                }
+                offsets.put(g.genId, off);
             }
-            if (Math.abs(off) > MAX_CLOCK_SKEW_MS) {
-                fail(ctx, "Часы генератора " + g.name + " расходятся с сервером на " + off + " мс (> " + MAX_CLOCK_SKEW_MS
-                        + " мс): синхронный старт заблокирован. Настройте chrony/NTP на генераторе.");
-                return;
+            synchronized (ctx) {
+                if (ctx.finalized || ctx.startSent || ctx.stopRequested) {
+                    return;
+                }
+                if (problem != null) {
+                    fail(ctx, problem);
+                    return;
+                }
+                sendStart(ctx, offsets);
             }
-            offsets.put(g.genId, off);
+        } catch (RuntimeException e) {
+            log.error("Run {}: не удалось отправить START", ctx.runId, e);
+            synchronized (ctx) {
+                fail(ctx, "Не удалось запустить тест: " + e);
+            }
+        } finally {
+            MDC.remove("run_id");
         }
+    }
+
+    private void sendStart(Ctx ctx, Map<Long, Long> offsets) {
+        cancel(ctx.prepareTimeout);
         long startAt = System.currentTimeMillis() + START_DELAY_MS;
         ctx.plannedStart = Instant.ofEpochMilli(startAt);
         for (GenCtx g : ctx.gens.values()) {
@@ -610,6 +648,10 @@ public class RunOrchestrator implements AgentEventListener {
         } else if (!crashed.isEmpty() && !ctx.stopRequested) {
             target = RunStatus.FAILED;
             error = "k6 завершился аварийно на: " + String.join(", ", crashed);
+        } else if (!ctx.stopRequested && ctx.gens.values().stream().allMatch(g -> g.status == RunGenerator.Status.LOST)) {
+            // ни один генератор не довёл тест до конца: результата нет, это не успешное завершение
+            target = RunStatus.FAILED;
+            error = "Все генераторы потеряны: тест не доведён до конца";
         } else {
             target = RunStatus.FINISHED;
         }
@@ -990,7 +1032,7 @@ public class RunOrchestrator implements AgentEventListener {
                 // запас нужен, только пока k6 инициализирует скрипт: никто из генераторов ещё не ответил по REST API k6 (он стартует после инициализации).
                 // Как только хоть один ответил, плановый конец считается как обычно, и потерянный генератор объявляется вовремя
                 boolean initializing = !ctx.anchored && settings.prometheus().configured()
-                        && ctx.gens.values().stream().noneMatch(g -> g.k6Status != null);
+                        && ctx.gens.values().stream().noneMatch(g -> g.k6Status != null && !g.k6Status.isEmpty());
                 long initAllowance = initializing ? INIT_ALLOWANCE_SEC : 0;
                 Instant deadline = ctx.stopRequestedAt != null
                         ? ctx.stopRequestedAt.plusSeconds(ctx.gracefulStopSec + 120L)
@@ -1016,6 +1058,10 @@ public class RunOrchestrator implements AgentEventListener {
                             sendQuietly(g.genId, ctx.runId, "ABORT");
                         }
                     }
+                    // не ответившие на ABORT объявляются потерянными: иначе run остался бы активным навсегда
+                    long id = ctx.runId;
+                    cancel(ctx.escalation);
+                    ctx.escalation = scheduler.schedule(() -> markLost(id), 20, TimeUnit.SECONDS);
                 }
             }
         }

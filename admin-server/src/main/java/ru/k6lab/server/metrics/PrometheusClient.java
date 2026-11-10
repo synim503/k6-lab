@@ -110,7 +110,8 @@ public class PrometheusClient {
     /** Время первой точки запроса на отрезке (по шагам); empty, если данных ещё нет. Шаг растёт с длиной отрезка, чтобы не превысить лимит точек. */
     public Optional<Instant> firstTimestamp(SettingsService.Prometheus p, String promql, Instant start, Instant end) throws IOException {
         long range = Math.max(1, end.getEpochSecond() - start.getEpochSecond());
-        int step = (int) Math.max(5, range / 2000);
+        // шаг в секунду, пока отрезок короткий: по этой точке привязывается шкала запуска, грубый шаг сдвигал бы её позже реального начала
+        int step = (int) Math.max(1, range / 2000);
         JsonNode data = call(p, "/api/v1/query_range", "query=" + enc(promql) + "&start=" + start.getEpochSecond() + "&end="
                 + end.getEpochSecond() + "&step=" + step);
         double best = Double.MAX_VALUE;

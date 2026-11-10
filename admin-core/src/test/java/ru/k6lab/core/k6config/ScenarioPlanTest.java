@@ -44,4 +44,15 @@ class ScenarioPlanTest {
         assertThat(ScenarioPlan.ratePerSec(json("{\"executor\":\"ramping-vus\",\"stages\":[]}"), 5)).isNull();
         assertThat(ScenarioPlan.ratePerSec(null, 5)).isNull();
     }
+
+    @Test
+    void averageRateIsTheAreaUnderThePlan() {
+        JsonNode sc = json("{\"executor\":\"ramping-arrival-rate\",\"startRate\":0,\"timeUnit\":\"1s\",\"stages\":["
+                + "{\"duration\":\"100s\",\"target\":100},{\"duration\":\"100s\",\"target\":100}]}");
+        assertThat(ScenarioPlan.averageRate(sc, 0, 100)).isEqualTo(50.0);     // линейный разгон: в среднем половина
+        assertThat(ScenarioPlan.averageRate(sc, 100, 200)).isEqualTo(100.0);  // удержание
+        assertThat(ScenarioPlan.averageRate(sc, 50, 150)).isEqualTo(87.5);    // половина разгона (75) и половина удержания (100)
+        assertThat(ScenarioPlan.averageRate(sc, 150, 250)).isEqualTo(50.0);   // после конца сценария плана нет - ноль
+        assertThat(ScenarioPlan.averageRate(json("{\"executor\":\"constant-vus\",\"vus\":1,\"duration\":\"1m\"}"), 0, 10)).isNull();
+    }
 }

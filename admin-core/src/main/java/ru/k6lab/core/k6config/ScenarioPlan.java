@@ -76,4 +76,29 @@ public final class ScenarioPlan {
         }
         return a.rate();
     }
+
+    /**
+     * Средняя плановая интенсивность в оп/с на отрезке [fromSec, toSec] от начала теста (площадь под ломаной, делённая на длину);
+     * null - плана по оп/с нет. С ней сверяется средняя фактическая интенсивность за то же окно - в том числе на разгоне по стадиям.
+     */
+    public static Double averageRate(JsonNode sc, double fromSec, double toSec) {
+        List<Pt> poly = polyline(sc);
+        if (poly.isEmpty()) {
+            return null;
+        }
+        if (toSec <= fromSec) {
+            return ratePerSec(sc, fromSec);
+        }
+        double area = 0;
+        for (int i = 0; i + 1 < poly.size(); i++) {
+            Pt a = poly.get(i), b = poly.get(i + 1);
+            double lo = Math.max(a.sec(), fromSec), hi = Math.min(b.sec(), toSec);
+            if (b.sec() <= a.sec() || hi <= lo) {
+                continue;
+            }
+            double k = (b.rate() - a.rate()) / (b.sec() - a.sec());
+            area += (2 * a.rate() + k * (lo - a.sec()) + k * (hi - a.sec())) / 2 * (hi - lo);
+        }
+        return area / (toSec - fromSec);
+    }
 }

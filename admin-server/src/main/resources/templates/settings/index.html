@@ -81,6 +81,13 @@
                         <div class="form-text">Время итерации, время операции и http_req_duration; остальные гистограммы k6 (blocked, connecting, tls_handshaking,
                             sending, waiting, receiving) отбрасываются: каждая даёт ~170 серий на набор меток.</div>
                     </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="nameTag" name="nameTag" value="true" th:checked="${nameTag}">
+                        <label class="form-check-label" for="nameTag">Тег <code>name</code> (адрес запроса) в метриках HTTP</label>
+                        <div class="form-text">Каждый уникальный адрес — отдельный набор рядов в Prometheus (у гистограммы ~170 рядов на генератор).
+                            Если в адресах скрипта есть идентификаторы и адреса не сгруппированы тегом <code>name</code> в самом скрипте, отключите:
+                            разбивка по операциям, статусам и методам останется.</div>
+                    </div>
                     <button class="btn btn-primary">Сохранить</button>
                 </form>
                 <div class="form-text mt-2">Маска — имя метрики в Prometheus, <code>*</code> заменяет любую часть; для гистограмм сверяется имя без

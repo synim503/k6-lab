@@ -422,8 +422,8 @@ class RunE2EIT extends AbstractIT {
         assertThat(java.time.Duration.between(step.getRampStartAt(), step.getHoldStartAt()).getSeconds()).isEqualTo(5);
         // нагрузка не менялась: ~10 оп/с * 10 с = ~100 итераций, прогрев - часть тех же 10 секунд
         assertThat(finalIterations(g)).isBetween(85L, 125L);
-        // пороги k6 - по времени запросов (http_req_duration) сценария
-        assertThat(g.getSummary().path("metrics").has("http_req_duration{scenario:work}")).isTrue();
+        // у сценария с прогревом порогов k6 нет: k6 считает их за весь тест вместе с прогревом, SLA оценивает админка
+        assertThat(g.getSummary().path("metrics").has("http_req_duration{scenario:work}")).isFalse();
     }
     @Test
     @Order(2)

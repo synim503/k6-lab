@@ -38,6 +38,9 @@ public class RunDispatcher {
                 if (reserved.isPresent()) {
                     log.info("Run {}: захвачено генераторов {}, подготовка", r.getId(), reserved.get().size());
                     orchestrator.begin(r.getId());
+                } else if (!reservation.missingGenerators(r.getId()).isEmpty()) {
+                    // генератор удалён, пока run ждал: очередь не дождётся его никогда
+                    orchestrator.failQuietly(r.getId(), "Выбранный генератор удалён, пока запуск ждал в очереди");
                 }
             } catch (RuntimeException e) {
                 log.error("Не удалось запустить run {}", r.getId(), e);

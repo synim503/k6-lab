@@ -51,6 +51,9 @@ public class RunMonitor {
         StopCriteriaEvaluator evaluator;
         int tick;
         int lastStep = -1;
+        /** Строки таблицы за весь тест: пересчитываются реже live-строк (запросы по длинному диапазону дороже). */
+        List<LiveRow> wholeRows;
+        long wholeSec;
     }
 
     /** Строка live-таблицы по операции. */
@@ -86,7 +89,8 @@ public class RunMonitor {
             return;
         }
         for (Run run : runService.activeRuns()) {
-            if (run.getStatus() != RunStatus.RUNNING || run.getPlannedStartAt() == null) {
+            // на остановке графики продолжают идти (k6 завершает итерации), критерии остановки уже не оцениваются
+            if ((run.getStatus() != RunStatus.RUNNING && run.getStatus() != RunStatus.STOPPING) || run.getPlannedStartAt() == null) {
                 continue;
             }
             MDC.put("run_id", String.valueOf(run.getId()));
@@ -154,7 +158,19 @@ public class RunMonitor {
         // иначе в окно попадает хвост разгона/переключения уровня и факт выходит заниженным
         boolean settled = hold && intoHold - SETTLE_SEC >= window;
         List<LiveRow> rows = liveRows(snap, current, settled ? current.getLevelPct() : null, run.getId(), window, now, p,
-                run.getK6Config(), run.getPlannedStartAt());
+                run.getK6Config(), run.getPlannedStartAt(), false);
+        // те же показатели за весь тест (без прогрева): раз в 15 с, окно - от конца прогрева (или от старта) до последних данных
+        Instant wholeFrom = hold ? current.getHoldStartAt() : run.getPlannedStartAt();
+        long whole = Math.max(0, now.getEpochSecond() - wholeFrom.getEpochSecond());
+        if (whole >= minWindow && (st.wholeRows == null || st.tick % 3 == 0)) {
+            try {
+                st.wholeRows = liveRows(snap, current, hold ? current.getLevelPct() : null, run.getId(), whole, now, p,
+                        run.getK6Config(), run.getPlannedStartAt(), true);
+                st.wholeSec = whole;
+            } catch (IOException | RuntimeException e) {
+                log.debug("Run {}: показатели за весь тест: {}", run.getId(), e.toString());
+            }
+        }
         ObjectNode json = MAPPER.createObjectNode();
         json.put("ts", wall.toEpochMilli());
         json.put("dataTs", now.toEpochMilli());
@@ -167,7 +183,16 @@ public class RunMonitor {
         putD(json, "vusMax", scalar(prom.query(p, PromQueries.totalVusMax(n0, run.getId()), now)));
         json.put("elapsedSec", elapsed);
         json.put("windowSec", window);
-        ArrayNode ra = json.putArray("rows");
+        putRows(json.putArray("rows"), rows);
+        if (st.wholeRows != null) {
+            json.put("wholeSec", st.wholeSec);
+            putRows(json.putArray("rowsAll"), st.wholeRows);
+        }
+        broadcaster.publishMetrics(run.getId(), json.toString());
+        evaluateStop(run, snap, st, current, hold, intoHold, minWindow, window, rows, now, p, stepNo);
+    }
+
+    private static void putRows(ArrayNode ra, List<LiveRow> rows) {
         for (LiveRow r : rows) {
             ObjectNode o = ra.addObject();
             o.put("op", r.operation());
@@ -184,14 +209,16 @@ public class RunMonitor {
             ArrayNode rs = o.putArray("reasons");
             r.reasons().forEach(rs::add);
         }
-        broadcaster.publishMetrics(run.getId(), json.toString());
+    }
 
-        // серверные критерии остановки: раз в 15 с, только на удержании после settle
+    /** Серверные критерии остановки: раз в 15 с, только на удержании после settle. */
+    private void evaluateStop(Run run, RunSnapshot snap, State st, RunStep current, boolean hold, long intoHold, long minWindow, long window,
+                              List<LiveRow> rows, Instant now, SettingsService.Prometheus p, int stepNo) throws IOException {
         st.tick++;
         StopCriteriaEvaluator.Config cfg = st.evaluator.config();
-        if (cfg.anyEnabled() && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && !run.getStatus().isTerminal()) {
+        if (cfg.anyEnabled() && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && run.getStatus() == RunStatus.RUNNING) {
             long w = Math.max(minWindow, Math.min(cfg.windowSec(), intoHold - SETTLE_SEC));
-            List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p, run.getK6Config(), run.getPlannedStartAt());
+            List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p, run.getK6Config(), run.getPlannedStartAt(), false);
             List<StopCriteriaEvaluator.Sample> samples = new ArrayList<>();
             for (LiveRow r : evalRows) {
                 samples.add(new StopCriteriaEvaluator.Sample(r.operation(), r.percentileMs(), r.slaThresholdMs(), r.errorPct(),
@@ -260,8 +287,9 @@ public class RunMonitor {
         return sc.isMissingNode() ? null : ru.k6lab.core.k6config.ScenarioPlan.ratePerSec(sc, java.time.Duration.between(start, at).toMillis() / 1000.0);
     }
 
+    /** average - окно длинное (весь тест): план - средний за окно, а не на момент at. */
     List<LiveRow> liveRows(RunSnapshot snap, RunStep step, Double levelOrNull, long runId, long windowSec, Instant at,
-                           SettingsService.Prometheus p, com.fasterxml.jackson.databind.JsonNode cfg, Instant start) throws IOException {
+                           SettingsService.Prometheus p, com.fasterxml.jackson.databind.JsonNode cfg, Instant start, boolean average) throws IOException {
         PromQueries.Names n = names.names();
         boolean helper = snap.usesHelper();
         Map<Integer, Map<String, Double>> pct = new HashMap<>();
@@ -287,7 +315,7 @@ public class RunMonitor {
         }
 
         // прогрев: пока он идёт, цель - заданная интенсивность прогрева (оп/с), нарушения не отмечаем
-        boolean warm = inWarmup(snap, step, at);
+        boolean warm = !average && inWarmup(snap, step, at) || average && snap.warmup() != null && step != null && at.isBefore(step.getHoldStartAt());
         boolean warmNow = warm && at.isBefore(step.getHoldStartAt());
         List<LiveRow> rows = new ArrayList<>();
         for (RunSnapshot.OpInfo o : snap.operations()) {
@@ -298,13 +326,17 @@ public class RunMonitor {
             // у прогрева без своей интенсивности план тот же, что и у основной нагрузки (это только отрезок времени)
             // план берётся из конфига k6 (стадии сценария: у ramping-arrival-rate он растёт линейно по стадиям); без плана по оп/с - прежний расчёт
             Double planned = plan(cfg, o.name(), start, at);
+            if (average && planned != null) {
+                double toSec = java.time.Duration.between(start, at).toMillis() / 1000.0;
+                planned = ru.k6lab.core.k6config.ScenarioPlan.averageRate(cfg.path("scenarios").path(o.name()), toSec - windowSec, toSec);
+            }
             double target = planned != null ? planned
                     : warmNow && levelOrNull == null
                     ? (o.warmRatePerSec() > 0 ? o.warmRatePerSec() : o.ratePerSec() * level / 100.0)
                     : o.ratePerSec() * level / 100.0 * (levelOrNull != null ? 1 : rampFraction(step, at));
             // сверка факта с целью - только при ровном плане на всём окне: на разгоне стадии факт за окно закономерно ниже цели
             Double plannedBefore = planned == null ? null : plan(cfg, o.name(), start, at.minusSeconds(windowSec));
-            boolean steady = planned == null || (plannedBefore != null && Math.abs(planned - plannedBefore) <= 0.01 * Math.max(planned, plannedBefore));
+            boolean steady = average || planned == null || (plannedBefore != null && Math.abs(planned - plannedBefore) <= 0.01 * Math.max(planned, plannedBefore));
             Double actual = rate.get(o.name());
             Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
             Double err = (helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp).get(o.name());

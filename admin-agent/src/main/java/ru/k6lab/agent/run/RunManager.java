@@ -168,13 +168,14 @@ public class RunManager implements CommandHandler, RunStateProvider {
         return new Messages.CmdAck(s.cmdId(), true, null);
     }
 
-    private Messages.CmdAck cancelPrepare(Messages.CancelPrepare c) {
+    private Messages.CmdAck cancelPrepare(Messages.CancelPrepare c) throws Exception {
         Run r = runs.get(c.runId());
         if (r == null) {
             return new Messages.CmdAck(c.cmdId(), true, null);
         }
         if (r.state == AgentRunState.RUNNING || r.state == AgentRunState.STOPPING) {
-            return new Messages.CmdAck(c.cmdId(), false, "run уже запущен - используйте STOP/ABORT");
+            // отмена пришла, когда k6 уже стартовал: сервер этот run больше не ведёт, поэтому k6 завершается сразу
+            return control(c.cmdId(), c.runId(), Run::abort);
         }
         r.cancelled = true;
         if (r.startTask != null) {

@@ -61,6 +61,13 @@
         <td th:text="${#numbers.formatDecimal(o.maxErrorPct, 1, 2)} + '%'"></td></tr></tbody>
 </table>
 
+<h4>Переменные запуска</h4>
+<div class="muted" th:if="${envRows.isEmpty()}">Переменные не заданы.</div>
+<table class="tbl" th:if="${!envRows.isEmpty()}">
+    <thead><tr><th>Где задана</th><th>Переменная</th><th>Значение</th></tr></thead>
+    <tbody><tr th:each="e : ${envRows}"><td th:text="${e.scope}"></td><td><code th:text="${e.name}"></code></td><td th:text="${e.value}"></td></tr></tbody>
+</table>
+
 <h2>Результаты по ступеням</h2>
 <div class="muted">Перцентили рассчитаны в Prometheus через histogram_quantile по гистограммам, просуммированным по всем генераторам (не усреднением). Окно ступени — удержание без первых секунд выхода на режим.</div>
 <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
