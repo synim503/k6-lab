@@ -17,10 +17,11 @@
         <div class="stage-warm mb-3 is-off" id="gw-box">
             <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="gw-on" aria-label="Прогрев для всех сценариев">
                 <label class="form-check-label fw-semibold" for="gw-on">Прогрев</label></div>
-            <div class="input-group input-group-sm stage-warm-n"><span class="input-group-text">Стадий в прогреве</span>
-                <input class="form-control" id="gw-n" type="number" min="1" max="10" step="1" value="1" disabled aria-label="Сколько первых стадий считать прогревом"></div>
-            <span class="small text-muted">Общий для всех сценариев со стадиями (ramping-*): в каждом появляются жёлтые стадии прогрева. Ошибки, dropped и время ответа
-                в них не попадают в итоги и SLA, на графиках они выделены. Выключение превращает стадии прогрева в обычные. У constant-* прогрев — длительность в самом сценарии.</span>
+            <div class="input-group input-group-sm stage-warm-n"><span class="input-group-text">Время прогрева</span>
+                <input class="form-control" id="gw-d" type="text" value="2m" placeholder="2m" disabled aria-label="Время прогрева, общее для всех сценариев"></div>
+            <span class="small text-muted">Одно время на все сценарии. У сценариев со стадиями (ramping-*) первая, жёлтая стадия — прогрев: за это время нагрузка
+                растёт от начального значения до заданного в ней (VU или итераций за интервал). У constant-* прогрев — первые минуты на заданной нагрузке.
+                Ошибки, dropped и время ответа прогрева не попадают в итоги и SLA, на графиках он выделен. Выключение превращает стадию прогрева в обычную.</span>
         </div>
         <div class="sect-title mt-0"><h5>Операции</h5>
             <span class="hint">каждая функция скрипта — отдельная операция; для одной функции можно добавить несколько сценариев</span></div>
@@ -173,7 +174,7 @@
 
     const body = document.getElementById('ops-body');
     if (!body) return;
-    const gwOnEl = document.getElementById('gw-on'), gwNEl = document.getElementById('gw-n'), gwBox = document.getElementById('gw-box');
+    const gwOnEl = document.getElementById('gw-on'), gwDEl = document.getElementById('gw-d'), gwBox = document.getElementById('gw-box');
     const isRamp = ex => ex.indexOf('ramping') === 0;
 
     // буфер скопированного сценария целиком (исполнитель и параметры): общий для всех сценариев, живёт до закрытия вкладки
@@ -204,16 +205,8 @@
     function fieldHtml(key, val, exKey) {
         const f = F[key];
         if (f.type === 'warmup') {
-            // у constant-* стадий нет: прогрев - длительность первых минут сценария; у ramping-* прогрев - общие жёлтые стадии
-            const on = !!(val && val.duration);
-            const dis = on ? '' : ' disabled';
-            return '<div class="col-12"><div class="op-warm' + (on ? '' : ' is-off') + '">'
-                + '<div class="form-check form-switch m-0"><input class="form-check-input op-warm-on" type="checkbox" role="switch"' + (on ? ' checked' : '') + ' aria-label="Прогрев сценария">'
-                + '<label class="form-check-label fw-semibold">Прогрев</label></div>'
-                + '<div class="input-group input-group-sm op-warm-field"><span class="input-group-text">Длительность</span>'
-                + '<input class="form-control op-warm-d" placeholder="2m" value="' + esc(on ? val.duration : '') + '" aria-label="Длительность прогрева"' + dis + '></div>'
-                + '<span class="small text-muted op-warm-help">Первые минуты сценария считаются прогревом, нагрузка остаётся той, что задана ниже. '
-                + 'Ошибки, dropped и время ответа прогрева не попадают в итоги и SLA, на графиках он виден и выделен.</span></div></div>';
+            // у constant-* стадий нет: прогрев - первые минуты сценария на заданной нагрузке; время общее, задаётся сверху
+            return '<div class="col-12"><div class="op-warm op-cwarm d-none"><span class="small op-cwarm-text"></span></div></div>';
         }
         if (f.type === 'stages') {
             const unit = exKey.indexOf('arrival') >= 0 ? 'Итераций за интервал' : 'VU';
@@ -264,6 +257,12 @@
     // состояние блока стадий: жёлтые строки прогрева, недоступное удаление единственной стадии прогрева, кнопка «Первая стадия»
     function refreshStages(row) {
         const panel = detailOf(row).querySelector('.op-panel');
+        const cw = panel.querySelector('.op-cwarm');
+        if (cw) {
+            const d = row.dataset.cwarm || '';
+            cw.classList.toggle('d-none', !d);
+            cw.querySelector('.op-cwarm-text').textContent = d ? 'Прогрев: первые ' + d + ' сценария идут на заданной ниже нагрузке и не попадают в итоги и SLA.' : '';
+        }
         const box = panel.querySelector('.op-stages');
         if (!box) return;
         const rows = [...box.querySelectorAll('.op-stage')];
@@ -272,6 +271,10 @@
         rows.forEach((r, i) => {
             r.classList.toggle('is-warm', i < wn);
             r.querySelector('.stage-lbl').textContent = i < wn ? 'Прогрев' : 'Длительность';
+            const d = r.querySelector('.op-st-d');
+            d.readOnly = i < wn;
+            d.title = i < wn ? 'Время прогрева общее для всех сценариев и задаётся сверху' : '';
+            r.querySelector('.stage-ins-above').hidden = i < wn;
             r.querySelector('.op-stage-del').disabled = wn === 1 && i === 0; // обязательная стадия прогрева
         });
         const first = panel.querySelector('.op-stage-first');
@@ -289,25 +292,30 @@
                 + (bad ? '. Не учтено стадий с нераспознанной длительностью: ' + bad : '');
         }
     }
-    // нормализация прогрева у ramping-*: прогрев - число первых стадий; прежний формат {duration[, target]} превращается в стадии
+    // нормализация прогрева у ramping-*: прогрев - одна первая стадия. Прежние форматы: {duration, target} превращается в первую стадию,
+    // несколько стадий прогрева - остаётся первая (остальные становятся обычными), {duration} без значения - стадия добавится при отрисовке
     function normalizeWarm(exKey, state) {
-        if (!isRamp(exKey) || !state.warmup || state.warmup.stages) return state;
+        if (!state.warmup) return state;
+        if (!isRamp(exKey)) {
+            if (!state.warmup.duration) delete state.warmup; // у constant-* прогрев - только длительность
+            return state;
+        }
         const w = state.warmup, st = (state.stages || []).map(x => Object.assign({}, x));
-        const startKey = exKey === 'ramping-vus' ? 'startVUs' : 'startRate';
-        if (w.target) {
+        if (w.stages) {
+            state.warmup = st.length ? {stages: 1} : undefined;
+        } else if (w.target) {
             st.unshift({duration: w.duration, target: Number(w.target)});
-            state[startKey] = Number(w.target);
             state.warmup = {stages: 1};
         } else {
-            const limit = parseDur(w.duration);
-            let sum = 0, cnt = 0;
-            for (const x of st) { cnt++; sum += parseDur(x.duration); if (sum >= limit) break; }
-            state.warmup = st.length ? {stages: Math.max(1, cnt)} : undefined;
+            state.warmup = undefined;
         }
+        if (!state.warmup) delete state.warmup;
         state.stages = st;
         return state;
     }
-    function warmStage(base) { return {duration: '2m', target: Math.max(1, Math.round((Number(base) || 0) * 0.3))}; }
+    function gwDur() { return gwDEl && gwDEl.value.trim() ? gwDEl.value.trim() : '2m'; }
+    function gwActive() { return !!(gwOnEl && gwOnEl.checked); }
+    function warmStage(base) { return {duration: gwDur(), target: Math.max(1, Math.round((Number(base) || 0) * 0.3))}; }
     function kvRow(k, v, ph) {
         return '<div class="input-group input-group-sm mb-1 op-kvrow"><input class="form-control op-kv-k" placeholder="' + esc(ph[0]) + '" value="' + esc(k) + '">'
             + '<input class="form-control op-kv-v" placeholder="' + esc(ph[1]) + '" value="' + esc(v) + '">'
@@ -318,15 +326,20 @@
     function render(row, exKey, state) {
         const ex = EX[exKey];
         state = normalizeWarm(exKey, state);
-        // общий прогрев включён: у сценария со стадиями без прогрева сверху появляются стадии прогрева
-        if (isRamp(exKey) && gwOnEl && gwOnEl.checked && !(state.warmup && state.warmup.stages)) {
-            const n = Math.max(1, parseInt(gwNEl.value, 10) || 1), st = (state.stages || []).map(x => Object.assign({}, x));
-            const w = warmStage(st.length ? st[0].target : 0);
-            for (let i = 0; i < n; i++) st.unshift(Object.assign({}, w));
-            state.stages = st;
-            state.warmup = {stages: n};
+        // общий прогрев включён: у сценария со стадиями первая стадия - прогрев с общим временем; у constant-* - общее время как длительность
+        if (isRamp(exKey)) {
+            if (gwActive()) {
+                const st = (state.stages || []).map(x => Object.assign({}, x));
+                if (!(state.warmup && state.warmup.stages)) st.unshift(warmStage(st.length ? st[0].target : 0));
+                st[0].duration = gwDur();
+                state.stages = st;
+                state.warmup = {stages: 1};
+            }
+        } else if (ex.fields.includes('warmup') && gwActive()) {
+            state.warmup = {duration: gwDur()};
         }
-        row.dataset.warm = isRamp(exKey) && state.warmup && state.warmup.stages ? state.warmup.stages : 0;
+        row.dataset.warm = isRamp(exKey) && state.warmup && state.warmup.stages ? 1 : 0;
+        row.dataset.cwarm = !isRamp(exKey) && ex.fields.includes('warmup') && state.warmup && state.warmup.duration ? state.warmup.duration : '';
         const panel = detailOf(row).querySelector('.op-panel');
         panel.innerHTML = '<div class="op-desc">' + esc(ex.desc) + '</div><div class="row g-2">'
             + ex.fields.map(k => fieldHtml(k, state[k], exKey)).join('') + '</div>';
@@ -351,9 +364,8 @@
             const wn = Math.min(warmOf(row), o.stages.length);
             if (isRamp(exKey) && wn > 0) o.warmup = {stages: wn};
         }
-        const wOn = panel.querySelector('.op-warm-on');
-        if (wOn && wOn.checked) {
-            o.warmup = {duration: panel.querySelector('.op-warm-d').value.trim()};
+        if (panel.querySelector('.op-cwarm') && row.dataset.cwarm) {
+            o.warmup = {duration: row.dataset.cwarm};
         }
         panel.querySelectorAll('.op-kv').forEach(c => {
             const m = {};
@@ -391,19 +403,52 @@
         document.querySelectorAll('.op-paste').forEach(b => { b.disabled = !scenarioClipboard; });
     }
 
-    // ---- общий прогрев: один рубильник и число стадий на все сценарии со стадиями
-    function rampRows() { return [...body.querySelectorAll('.op-row')].filter(r => isRamp(r.querySelector('.op-exec').value)); }
+    // ---- общий прогрев: один рубильник и одно время на все сценарии
     function gwRefresh() {
         if (!gwOnEl) return;
-        gwNEl.disabled = !gwOnEl.checked;
+        gwDEl.disabled = !gwOnEl.checked;
         gwBox.classList.toggle('is-off', !gwOnEl.checked);
     }
-    function gwFromRows() {
+    // время прогрева допустимо: от 5 секунд до часа
+    function gwValid() {
+        const sec = durSec(gwDur());
+        const ok = sec !== null && sec >= 5 && sec <= 3600;
+        gwDEl.classList.toggle('is-invalid', gwActive() && !ok);
+        gwDEl.title = ok ? '' : 'От 5 секунд до 1 часа, например 2m или 90s';
+        return ok;
+    }
+    // состояние рубильника по сохранённым сценариям: включён, если прогрев есть хотя бы у одного; время - самое длинное из заданных
+    function gwAdopt(durations) {
         if (!gwOnEl) return;
-        const max = Math.max(0, ...rampRows().map(warmOf));
-        gwOnEl.checked = max > 0;
-        if (max > 0) gwNEl.value = max;
+        let best = null;
+        durations.forEach(d => { const s = durSec(d); if (s !== null && (best === null || s > durSec(best))) best = d; });
+        gwOnEl.checked = durations.length > 0;
+        if (best !== null) gwDEl.value = best;
         gwRefresh();
+    }
+    function gwFromJson() {
+        const found = [];
+        body.querySelectorAll('.op-row').forEach(row => {
+            let o = {};
+            try { o = JSON.parse(detailOf(row).querySelector('.op-json').value || '{}') || {}; } catch (e) { o = {}; }
+            const w = o.warmup;
+            if (!w || !row.querySelector('.op-on').checked) return;
+            if (w.stages && o.stages && o.stages.length) found.push(String(o.stages[0].duration || ''));
+            else if (w.duration) found.push(String(w.duration));
+        });
+        gwAdopt(found);
+    }
+    function gwFromRows() {
+        const found = [];
+        body.querySelectorAll('.op-row').forEach(row => {
+            if (warmOf(row) > 0) {
+                const d = row.querySelector('.op-stage .op-st-d');
+                if (d) found.push(d.value.trim());
+            } else if (row.dataset.cwarm) {
+                found.push(row.dataset.cwarm);
+            }
+        });
+        gwAdopt(found);
     }
     function insertStages(row, atStart, list) {
         const c = row.querySelector('.op-stages');
@@ -417,34 +462,35 @@
         }
     }
     function gwApply() {
-        const on = gwOnEl.checked, n = Math.max(1, parseInt(gwNEl.value, 10) || 1);
-        rampRows().forEach(row => {
+        gwRefresh();
+        const on = gwOnEl.checked;
+        if (on && !gwValid()) return;
+        if (!on) gwDEl.classList.remove('is-invalid');
+        const g = gwDur();
+        body.querySelectorAll('.op-row').forEach(row => {
+            const exKey = row.querySelector('.op-exec').value;
             const c = row.querySelector('.op-stages');
-            if (!c) return;
-            const w = warmOf(row);
-            if (!on) {
-                row.dataset.warm = 0; // стадии прогрева остаются обычными стадиями
-            } else if (w === 0) {
-                const first = c.querySelector('.op-stage .op-st-t');
-                const st = warmStage(first ? first.value : 0);
-                insertStages(row, 0, Array.from({length: n}, () => Object.assign({}, st)));
-                row.dataset.warm = n;
-            } else if (n > w) {
-                const rows = c.querySelectorAll('.op-stage'), last = rows[Math.min(w, rows.length) - 1];
-                const st = {duration: last.querySelector('.op-st-d').value, target: last.querySelector('.op-st-t').value};
-                insertStages(row, w, Array.from({length: n - w}, () => Object.assign({}, st)));
-                row.dataset.warm = n;
-            } else {
-                row.dataset.warm = n; // лишние стадии прогрева становятся обычными
+            if (isRamp(exKey) && c) {
+                if (!on) {
+                    row.dataset.warm = 0; // стадия прогрева остаётся обычной стадией
+                } else {
+                    if (warmOf(row) === 0) {
+                        const first = c.querySelector('.op-stage .op-st-t');
+                        insertStages(row, 0, [warmStage(first ? first.value : 0)]);
+                    }
+                    c.querySelector('.op-stage .op-st-d').value = g;
+                    row.dataset.warm = 1;
+                }
+            } else if (detailOf(row).querySelector('.op-cwarm')) {
+                row.dataset.cwarm = on ? g : '';
             }
             refreshStages(row);
             sync(row);
         });
-        gwRefresh();
     }
     if (gwOnEl) {
         gwOnEl.addEventListener('change', () => { gwApply(); markDirty(); });
-        gwNEl.addEventListener('change', () => { if (gwOnEl.checked) { gwApply(); markDirty(); } });
+        gwDEl.addEventListener('input', () => { if (gwOnEl.checked) { gwApply(); markDirty(); } });
     }
 
     function initRow(row) {
@@ -500,7 +546,8 @@
             if (!scenarioClipboard || !EX[scenarioClipboard.executor]) return;
             row.querySelector('.op-exec').value = scenarioClipboard.executor;
             render(row, scenarioClipboard.executor, JSON.parse(JSON.stringify(scenarioClipboard.scenario)));
-            if (gwOnEl && !gwOnEl.checked && warmOf(row) > 0) gwFromRows();
+            // вставленный сценарий с прогревом при выключенном общем рубильнике включает его для всех
+            if (gwOnEl && !gwOnEl.checked && (warmOf(row) > 0 || row.dataset.cwarm)) { gwFromRows(); gwApply(); }
             sync(row);
             flash(row, 'Вставлено');
             markDirty();
@@ -509,16 +556,16 @@
         if (t.closest('.stage-ins')) {
             // новая стадия - копия той, у границы которой нажали плюс; внутри прогрева она тоже становится прогревом
             const cur = t.closest('.op-stage'), c = row.querySelector('.op-stages'), above = !!t.closest('.stage-ins-above');
-            const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur), pos = above ? idx : idx + 1;
+            const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur);
+            if (above && idx < warmOf(row)) return; // стадия прогрева всегда первая
             cur.insertAdjacentHTML(above ? 'beforebegin' : 'afterend', stageRow(cur.querySelector('.op-st-d').value, cur.querySelector('.op-st-t').value, c.dataset.unit));
-            if (warmOf(row) > 0 && pos < warmOf(row)) row.dataset.warm = warmOf(row) + 1;
         } else if (t.closest('.op-stage-first')) {
             const c = row.querySelector('.op-stages');
             c.insertAdjacentHTML('beforeend', stageRow('1m', 1, c.dataset.unit));
         } else if (t.closest('.op-stage-del')) {
             const cur = t.closest('.op-stage'), c = row.querySelector('.op-stages');
             const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur);
-            if (warmOf(row) > 0 && idx < warmOf(row)) row.dataset.warm = Math.max(1, warmOf(row) - 1);
+            if (idx < warmOf(row)) return; // стадия прогрева убирается только общим рубильником
             cur.remove();
         } else if (t.closest('.op-kv-add')) {
             const b = t.closest('.op-kv-add');
@@ -536,22 +583,13 @@
         const row = e.target.closest('.op-row');
         if (!row) return;
         if (e.target.classList.contains('op-on')) { refreshRow(row); return; }
-        if (e.target.classList.contains('op-warm-on')) {
-            const box = e.target.closest('.op-warm'), on = e.target.checked;
-            box.classList.toggle('is-off', !on);
-            box.querySelectorAll('.op-warm-d').forEach(i => { i.disabled = !on; });
-            if (on) {
-                const d = box.querySelector('.op-warm-d');
-                if (!d.value.trim()) d.value = '2m';
-            }
-            sync(row);
-            return;
-        }
         if (e.target.classList.contains('op-exec')) {
             const exKey = e.target.value, old = collect(row), ex = EX[exKey];
             // переносим то, что есть и у нового исполнителя; остальное - значения по умолчанию
             const state = Object.assign({}, ex.def);
             ex.fields.forEach(k => { if (k in old && old[k] !== undefined && !(['stages'].includes(k) && !old[k].length)) state[k] = old[k]; });
+            // стадия прогрева переносится вместе со стадиями: иначе при смене исполнителя добавилась бы вторая
+            if (isRamp(exKey) && old.warmup && old.warmup.stages && state.stages === old.stages) state.warmup = {stages: 1};
             render(row, exKey, state);
             sync(row);
         }
@@ -573,8 +611,8 @@
         window.addEventListener('beforeunload', e => { if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; } });
     }
 
+    gwFromJson(); // сначала общий рубильник и время по сохранённым сценариям, затем отрисовка: она применяет их ко всем
     body.querySelectorAll('.op-row').forEach(initRow);
-    gwFromRows();
     refreshAll();
     // начальная расстановка не считается правкой
     dirty = false;

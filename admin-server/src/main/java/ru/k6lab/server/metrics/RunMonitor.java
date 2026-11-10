@@ -176,7 +176,9 @@ public class RunMonitor {
         json.put("dataTs", now.toEpochMilli());
         json.put("lagSec", lag);
         json.put("step", stepNo);
-        json.put("phase", current == null ? "" : inWarmup(snap, current, now) ? "warmup" : hold ? "hold" : "ramp");
+        // полоса «Прогрев» на графиках - ровно до конца прогрева по плану. Нарушения не отмечаются ещё одно окно расчёта после него
+        // (inWarmup): в скользящее окно пока попадают данные прогрева, но на выделение это не влияет
+        json.put("phase", current == null ? "" : hold ? "hold" : snap.warmup() != null ? "warmup" : "ramp");
         // системные метрики: VU задействованные и максимум по всем генераторам (вкладка «Системные метрики»)
         PromQueries.Names n0 = names.names();
         putD(json, "vus", scalar(prom.query(p, PromQueries.totalVus(n0, run.getId()), now)));
