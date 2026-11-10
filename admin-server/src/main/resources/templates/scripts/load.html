@@ -220,6 +220,7 @@
             const rows = (val || []).map(s => stageRow(s.duration, s.target, unit)).join('');
             return '<div class="col-12"><div class="small fw-semibold mb-1">' + f.label + '</div>'
                 + '<div class="op-stages" data-k="stages" data-unit="' + esc(unit) + '">' + rows + '</div>'
+                + '<div class="small text-muted mt-1 op-stage-total" aria-live="polite"></div>'
                 + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-first d-none"><i class="bi bi-plus-lg me-1"></i>Первая стадия</button></div>';
         }
         if (f.type === 'kv') {
@@ -243,6 +244,23 @@
             + '<button type="button" class="stage-ins stage-ins-above" title="Добавить стадию выше (копия этой)" aria-label="Добавить стадию выше"><span>+</span></button>'
             + '<button type="button" class="stage-ins stage-ins-below" title="Добавить стадию ниже (копия этой)" aria-label="Добавить стадию ниже"><span>+</span></button></div>';
     }
+    // длительность k6 в секунды: 30s, 10m, 1h30m, 500ms; не распознано - null
+    function durSec(text) {
+        const s = String(text == null ? '' : text).trim();
+        if (!s) return null;
+        const re = /([0-9]*\.?[0-9]+)\s*(ms|s|m|h)/g;
+        let m, sum = 0, end = 0;
+        while ((m = re.exec(s)) !== null) {
+            if (s.slice(end, m.index).trim()) return null;
+            sum += parseFloat(m[1]) * ({ms: 0.001, s: 1, m: 60, h: 3600})[m[2]];
+            end = re.lastIndex;
+        }
+        return end === 0 || s.slice(end).trim() ? null : sum;
+    }
+    function durText(sec) {
+        const t = Math.round(sec), h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
+        return [h ? h + ' ч' : '', m ? m + ' мин' : '', s || (!h && !m) ? s + ' с' : ''].filter(Boolean).join(' ');
+    }
     // состояние блока стадий: жёлтые строки прогрева, недоступное удаление единственной стадии прогрева, кнопка «Первая стадия»
     function refreshStages(row) {
         const panel = detailOf(row).querySelector('.op-panel');
@@ -258,6 +276,18 @@
         });
         const first = panel.querySelector('.op-stage-first');
         if (first) first.classList.toggle('d-none', rows.length > 0);
+        // справочно: суммарное время стадий, отдельно прогрев и основная нагрузка
+        const total = panel.querySelector('.op-stage-total');
+        if (total) {
+            let warm = 0, main = 0, bad = 0;
+            rows.forEach((r, i) => {
+                const v = durSec(r.querySelector('.op-st-d').value);
+                if (v === null) { bad++; } else if (i < wn) { warm += v; } else { main += v; }
+            });
+            total.textContent = !rows.length ? '' : 'Всего по стадиям: ' + durText(warm + main)
+                + (wn > 0 ? ' (прогрев ' + durText(warm) + ' + нагрузка ' + durText(main) + ')' : '')
+                + (bad ? '. Не учтено стадий с нераспознанной длительностью: ' + bad : '');
+        }
     }
     // нормализация прогрева у ramping-*: прогрев - число первых стадий; прежний формат {duration[, target]} превращается в стадии
     function normalizeWarm(exKey, state) {
@@ -529,6 +559,7 @@
     body.addEventListener('input', e => {
         const row = e.target.closest('.op-row');
         if (row && e.target.closest('.op-detail')) sync(row);
+        if (row && e.target.classList.contains('op-st-d')) refreshStages(row);
     });
 
     // ---- несохранённые изменения: пометка и предупреждение при уходе со страницы
