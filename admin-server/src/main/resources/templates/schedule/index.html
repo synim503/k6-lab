@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/main}">
+<head><title>Расписание запусков</title></head>
+<body>
+<th:block layout:fragment="content">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="m-0"><i class="bi bi-calendar-event me-2"></i>Расписание запусков</h4>
+        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts}">К скриптам</a>
+    </div>
+    <div class="alert alert-secondary small">В назначенное время сервер сам создаёт запуск с заданными переменными и интенсивностью по операциям.
+        Если свободных генераторов в этот момент не хватает, запуск пропускается и помечается ошибкой с причиной (в очередь он не ставится).
+        Запланировать запуск можно на странице запуска скрипта.</div>
+    <div class="card empty-state" th:if="${items.isEmpty()}"><i class="bi bi-calendar-x"></i>Запланированных запусков нет.</div>
+    <div class="card" th:unless="${items.isEmpty()}"><table class="table table-sm align-middle mb-0">
+        <thead><tr><th>Когда</th><th>Скрипт</th><th>Генераторы</th><th>Интенсивность</th><th>Переменные</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+        <tr th:each="s : ${items}">
+            <td><time class="local-time" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time></td>
+            <td><a th:href="@{/scripts/{id}(id=${s.scriptId})}" th:text="${s.scriptName}"></a></td>
+            <td th:text="${s.generatorIds.isEmpty()} ? (${s.generatorCount} + ' (свободные)') : (${s.generatorIds.size()} + ' выбранных')"></td>
+            <td class="small">
+                <span class="text-muted" th:if="${s.intensity.isEmpty()}">как в скрипте</span>
+                <span th:each="e : ${s.intensity}" class="me-2"><code th:text="${e.key}"></code> <b th:text="${#numbers.formatDecimal(e.value, 1, 'DEFAULT', 1, 'DEFAULT')} + '%'"></b></span></td>
+            <td class="small">
+                <span class="text-muted" th:if="${s.env == null}">как в скрипте</span>
+                <span class="text-muted" th:if="${s.env != null and s.env.isEmpty()}">без переменных</span>
+                <span th:if="${s.env != null and !s.env.isEmpty()}" th:each="e : ${s.env}" class="me-2"><code th:text="${e.key}"></code></span></td>
+            <td>
+                <span class="badge text-bg-primary" th:if="${s.status.name() == 'PENDING'}">ожидает</span>
+                <span class="badge text-bg-info" th:if="${s.status.name() == 'STARTING'}">запускается</span>
+                <span class="badge text-bg-success" th:if="${s.status.name() == 'STARTED'}">запущен</span>
+                <span class="badge text-bg-danger" th:if="${s.status.name() == 'FAILED'}">ошибка</span>
+                <span class="badge text-bg-secondary" th:if="${s.status.name() == 'CANCELLED'}">отменён</span>
+                <a th:if="${s.runId != null}" th:href="@{/runs/{id}(id=${s.runId})}" class="ms-1" th:text="'запуск #' + ${s.runId}"></a>
+                <div class="small text-danger mt-1" th:if="${s.error != null}" th:text="${s.error}"></div></td>
+            <td class="text-end">
+                <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="m-0"
+                      onsubmit="return confirm('Отменить запланированный запуск?')">
+                    <button class="btn btn-sm btn-outline-danger">Отменить</button></form></td>
+        </tr></tbody></table></div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script>
+        // время показывается в часовом поясе браузера
+        document.querySelectorAll('time.local-time').forEach(function (t) {
+            var d = new Date(t.getAttribute('datetime'));
+            if (!isNaN(d)) { t.textContent = d.toLocaleString('ru-RU'); }
+        });
+    </script>
+</th:block>
+</body>
+</html>

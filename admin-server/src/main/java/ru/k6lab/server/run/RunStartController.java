@@ -29,9 +29,11 @@ public class RunStartController {
     private final RunPlanner planner;
     private final ScriptService scripts;
     private final GeneratorRepository generators;
+    private final ru.k6lab.server.schedule.ScheduledRunService schedule;
 
     public RunStartController(RunService runs, RunOrchestrator orchestrator, RunPlanner planner, ScriptService scripts,
-                              GeneratorRepository generators) {
+                              GeneratorRepository generators, ru.k6lab.server.schedule.ScheduledRunService schedule) {
+        this.schedule = schedule;
         this.runs = runs;
         this.orchestrator = orchestrator;
         this.planner = planner;
@@ -59,6 +61,11 @@ public class RunStartController {
         model.addAttribute("errors", plan.errors());
         model.addAttribute("warnings", plan.warnings());
         model.addAttribute("blockReason", runs.blockReason().orElse(null));
+        // запланированные запуски: переменные скрипта для редактирования и уже ожидающие этого скрипта
+        StringBuilder env = new StringBuilder();
+        script.getEnv().forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
+        model.addAttribute("envText", env.toString());
+        model.addAttribute("pendingSchedule", schedule.pendingOf(id));
     }
 
     /**

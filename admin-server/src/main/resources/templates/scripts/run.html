@@ -60,6 +60,47 @@
             <a class="btn btn-link" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a></div>
         <div class="alert alert-danger mt-3 mb-0" th:if="${error}" th:text="${error}"></div>
     </form>
+
+    <form class="card card-body mx-0 mt-3" id="schedule" th:action="@{/scripts/{id}/schedule(id=${script.id})}" method="post">
+        <h6 class="mb-2"><i class="bi bi-calendar-event me-1"></i>Запланировать запуск</h6>
+        <div class="form-text mb-2">Сервер сам запустит скрипт в назначенное время. Если генераторов в этот момент не хватает, запуск пропускается с ошибкой.</div>
+        <div class="alert alert-info py-2 small" th:if="${!pendingSchedule.isEmpty()}">Уже запланировано:
+            <span th:each="p : ${pendingSchedule}" class="me-2"><time class="local-time" th:attr="datetime=${p.runAt}" th:text="${p.runAt}"></time></span>
+            <a th:href="@{/schedule}">все запуски</a></div>
+        <div class="row g-3">
+            <div class="col-md-6"><label class="form-label fw-semibold" for="sch-at">Когда</label>
+                <input class="form-control" type="datetime-local" id="sch-at" required>
+                <input type="hidden" name="runAt" id="sch-iso">
+                <div class="form-text">Время вашего часового пояса.</div></div>
+            <div class="col-md-6"><label class="form-label fw-semibold" for="sch-count">Генераторов</label>
+                <input class="form-control" type="number" min="1" name="count" id="sch-count" th:value="${defaultCount}">
+                <div class="form-text">Свободные на момент старта. Или отметьте конкретные ниже.</div></div>
+        </div>
+        <details class="mt-2" th:unless="${generators.isEmpty()}"><summary class="text-muted">Выбрать конкретные серверы (необязательно)</summary>
+            <div class="mt-2 form-check" th:each="g : ${generators}">
+                <input class="form-check-input" type="checkbox" name="generatorId" th:id="'sg' + ${g.id}" th:value="${g.id}">
+                <label class="form-check-label" th:for="'sg' + ${g.id}" th:text="${g.name}"></label></div></details>
+
+        <div class="fw-semibold mt-3 mb-1">Интенсивность по операциям</div>
+        <div class="form-text mb-2">Процент от нагрузки, заданной в скрипте: 100 — без изменений, 150 — в полтора раза выше. Умножаются ставки и цели стадий.</div>
+        <div class="text-muted small" th:if="${ops.isEmpty()}">Нагрузка не описана.</div>
+        <div class="row g-2">
+            <div class="col-md-6" th:each="o : ${ops}">
+                <div class="input-group input-group-sm"><span class="input-group-text flex-grow-1 text-start" th:text="${o.name}"></span>
+                    <input class="form-control" style="max-width:90px" type="number" min="1" max="10000" step="any" value="100" th:name="'pct_' + ${o.name}" aria-label="Процент интенсивности">
+                    <span class="input-group-text">%</span></div></div>
+        </div>
+
+        <div class="fw-semibold mt-3 mb-1">Переменные</div>
+        <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-script" value="script" checked>
+            <label class="form-check-label" for="env-script">как в скрипте на момент запуска</label></div>
+        <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-custom" value="custom">
+            <label class="form-check-label" for="env-custom">свои для этого запуска (полный набор вместо заданных в скрипте)</label></div>
+        <textarea class="form-control font-monospace mt-2" rows="5" name="envText" id="sch-env" disabled placeholder="KEY=VALUE, по одной на строку"
+                  th:text="${envText}"></textarea>
+        <div class="form-text">Можно ссылаться на секреты: <code>${secret:ИМЯ}</code>.</div>
+        <div class="mt-3"><button class="btn btn-primary" th:disabled="${generators.isEmpty() or !errors.isEmpty()}"><i class="bi bi-calendar-plus me-1"></i>Запланировать</button></div>
+    </form>
     </div>
     <div class="col-lg-5">
         <div class="card"><div class="card-header">Что будет запущено</div>
@@ -83,6 +124,19 @@
 </th:block>
 <th:block layout:fragment="scripts">
     <script>
+        // планирование: локальное время браузера -> ISO (UTC) для сервера; переменные редактируются только в режиме «свои»
+        (function () {
+            var at = document.getElementById('sch-at'), iso = document.getElementById('sch-iso');
+            if (!at) { return; }
+            at.addEventListener('input', function () { var d = new Date(at.value); iso.value = isNaN(d) ? '' : d.toISOString(); });
+            var env = document.getElementById('sch-env');
+            document.querySelectorAll('input[name=envMode]').forEach(function (r) {
+                r.addEventListener('change', function () { env.disabled = document.getElementById('env-custom').checked ? false : true; });
+            });
+            document.querySelectorAll('time.local-time').forEach(function (t) {
+                var d = new Date(t.getAttribute('datetime')); if (!isNaN(d)) { t.textContent = d.toLocaleString('ru-RU'); }
+            });
+        })();
         // отмеченные хосты задают количество: поле синхронизируется и блокируется
         (function () {
             var cnt = document.getElementById('gen-count');

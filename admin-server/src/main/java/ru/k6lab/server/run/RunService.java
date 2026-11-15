@@ -42,12 +42,42 @@ public class RunService {
     public record GeneratorSel(Long generatorId, int weight) {
     }
 
+    /**
+     * Особые условия одного запуска (запуск по расписанию): env - полный набор переменных вместо заданных в скрипте (null - как в скрипте),
+     * intensityPct - интенсивность по операциям в процентах от заданной в нагрузке (100 - без изменений); scheduleId - откуда запуск.
+     */
+    public record Overrides(Map<String, String> env, Map<String, Double> intensityPct, Long scheduleId, String scheduledBy) {
+
+        public boolean scalesLoad() {
+            return intensityPct != null && intensityPct.values().stream().anyMatch(v -> v != null && Math.abs(v - 100) > 1e-9);
+        }
+    }
+
     public record CreateRequest(Long scriptId, List<GeneratorSel> generators, Run.FailurePolicy failurePolicy,
-                                Integer prepareTimeoutSec, List<K6Flag> flags) {
+                                Integer prepareTimeoutSec, List<K6Flag> flags, Overrides overrides) {
+
+        public CreateRequest(Long scriptId, List<GeneratorSel> generators, Run.FailurePolicy failurePolicy, Integer prepareTimeoutSec,
+                             List<K6Flag> flags) {
+            this(scriptId, generators, failurePolicy, prepareTimeoutSec, flags, null);
+        }
 
         public CreateRequest(Long scriptId, List<GeneratorSel> generators, Run.FailurePolicy failurePolicy, Integer prepareTimeoutSec) {
-            this(scriptId, generators, failurePolicy, prepareTimeoutSec, List.of());
+            this(scriptId, generators, failurePolicy, prepareTimeoutSec, List.of(), null);
         }
+    }
+
+    /** Конфиг k6 с интенсивностью, умноженной по операциям на заданные проценты (исходный конфиг плана не меняется). */
+    static com.fasterxml.jackson.databind.JsonNode scaledConfig(com.fasterxml.jackson.databind.JsonNode config, Map<String, Double> pct) {
+        if (config == null || pct == null || pct.isEmpty()) {
+            return config;
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode copy = config.deepCopy();
+        pct.forEach((op, p) -> {
+            if (p != null && copy.path("scenarios").path(op) instanceof com.fasterxml.jackson.databind.node.ObjectNode sc) {
+                ru.k6lab.core.k6config.ScenarioScaler.scale(sc, p / 100.0);
+            }
+        });
+        return copy;
     }
 
     private final RunRepository runs;
@@ -134,10 +164,22 @@ public class RunService {
         if (req.flags() != null && !req.flags().isEmpty()) {
             request.put("k6Flags", req.flags().stream().map(Enum::name).toList());
         }
+        RunService.Overrides ov = req.overrides();
+        if (ov != null && ov.scheduleId() != null) {
+            request.put("scheduleId", ov.scheduleId());
+        }
         run.setRequest(request);
-        run.setK6Config(plan.config());
+        if (ov != null && ov.intensityPct() != null) {
+            Set<String> known = plan.operations().stream().map(LoadOperation::getName).collect(java.util.stream.Collectors.toSet());
+            for (String op : ov.intensityPct().keySet()) {
+                if (!known.contains(op)) {
+                    throw new IllegalArgumentException("Интенсивность задана для операции «" + op + "», которой нет в нагрузке скрипта");
+                }
+            }
+        }
+        run.setK6Config(ov != null && ov.scalesLoad() ? scaledConfig(plan.config(), ov.intensityPct()) : plan.config());
         run.setScriptVersionId(plan.version().getId());
-        run.setSnapshot(MAPPER.convertValue(buildSnapshot(plan), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+        run.setSnapshot(MAPPER.convertValue(buildSnapshot(plan, ov), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
         }));
         var auth = SecurityContextHolder.getContext().getAuthentication();
         run.setCreatedBy(auth == null ? "system" : auth.getName());
@@ -146,14 +188,16 @@ public class RunService {
         return saved;
     }
 
-    private RunSnapshot buildSnapshot(RunPlan plan) {
+    private RunSnapshot buildSnapshot(RunPlan plan, RunService.Overrides ov) {
         ScriptVersion v = plan.version();
         Script script = plan.script();
         List<RunSnapshot.OpInfo> ops = new ArrayList<>();
         for (LoadOperation o : plan.operations()) {
-            ops.add(new RunSnapshot.OpInfo(o.getName(), o.getExecFn(), o.getRatePerSec(), o.getExpectedDurationSec(),
+            // цель интенсивности в итогах - с учётом процента запуска по расписанию
+            double f = ov == null || ov.intensityPct() == null || ov.intensityPct().get(o.getName()) == null ? 1 : ov.intensityPct().get(o.getName()) / 100.0;
+            ops.add(new RunSnapshot.OpInfo(o.getName(), o.getExecFn(), o.getRatePerSec() * f, o.getExpectedDurationSec(),
                     o.getSlaPercentile(), o.getSlaThresholdMs(), o.getMaxErrorPct(), o.getFailureSource().name(), o.isEnabled(),
-                    ru.k6lab.core.k6config.K6ConfigGenerator.warmupRatePerSec(o.toSpec())));
+                    ru.k6lab.core.k6config.K6ConfigGenerator.warmupRatePerSec(o.toSpec()) * f));
         }
         List<RunSnapshot.StepInfo> steps = plan.steps().stream()
                 .map(st -> new RunSnapshot.StepInfo(st.no(), st.label(), st.levelPct(), st.rampSec(), st.holdSec())).toList();
@@ -162,12 +206,34 @@ public class RunService {
         return new RunSnapshot(
                 new RunSnapshot.ScriptInfo(script.getId(), script.getName(), v.getId(), v.getNumber(), v.getSha256(), v.getEntrypoint(),
                         v.getSource().name(), v.getCommitHash(), v.getGitBranch()),
-                script.getEnv(), ops, steps, plan.gracefulStopSec(), plan.gracefulRampDownSec(), data,
+                ov != null && ov.env() != null ? new java.util.LinkedHashMap<>(ov.env()) : script.getEnv(), ops, steps, plan.gracefulStopSec(), plan.gracefulRampDownSec(), data,
                 LoadCriteria.stopToMap(LoadCriteria.stop(script.getStopCriteria())),
                 LoadCriteria.successToMap(LoadCriteria.success(script.getSuccessCriteria())), false,
-                List.of(), null, plan.warnings(),
+                List.of(), null, withScheduleNote(plan.warnings(), ov),
                 plan.steps().isEmpty() || plan.steps().get(0).rampSec() <= 0 ? null
                         : new RunSnapshot.Warmup(plan.steps().get(0).rampSec(), 0));
+    }
+
+    /** Предупреждения плана плюс пометка, что запуск шёл по расписанию с изменённой нагрузкой или переменными. */
+    private static List<String> withScheduleNote(List<String> warnings, Overrides ov) {
+        if (ov == null || ov.scheduleId() == null) {
+            return warnings;
+        }
+        List<String> out = new ArrayList<>(warnings);
+        StringBuilder sb = new StringBuilder("Запуск по расписанию (#" + ov.scheduleId() + ")");
+        if (ov.scheduledBy() != null) {
+            sb.append(", назначил ").append(ov.scheduledBy());
+        }
+        if (ov.scalesLoad()) {
+            sb.append(". Интенсивность: ");
+            ov.intensityPct().entrySet().stream().filter(e -> e.getValue() != null && Math.abs(e.getValue() - 100) > 1e-9)
+                    .forEach(e -> sb.append(e.getKey()).append(' ').append(java.math.BigDecimal.valueOf(e.getValue()).stripTrailingZeros().toPlainString()).append("% "));
+        }
+        if (ov.env() != null) {
+            sb.append(". Переменные заданы при планировании");
+        }
+        out.add(0, sb.toString().trim());
+        return out;
     }
 
     // ------------------------------------------------------------------ чтение
