@@ -184,8 +184,40 @@
     function esc(v) {
         return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     }
+    // значение числового поля: число или выражение со знаками + - * / (также x × ÷), скобками и запятой как десятичным разделителем.
+    // Разбор собственный, без eval: допустимы только эти символы. Не выражение - NaN.
+    function calc(text) {
+        const src = String(text == null ? '' : text).replace(/,/g, '.').replace(/[x×]/gi, '*').replace(/÷/g, '/').replace(/\s+/g, '');
+        if (src === '') return NaN;
+        if (!/^[0-9.+\-*\/()]+$/.test(src)) return NaN;
+        let i = 0;
+        function num() {
+            if (src[i] === '(') { i++; const v = add(); if (src[i] !== ')') throw 0; i++; return v; }
+            const m = /^[0-9]*\.?[0-9]+/.exec(src.slice(i));
+            if (!m) throw 0;
+            i += m[0].length;
+            return parseFloat(m[0]);
+        }
+        function unary() {
+            if (src[i] === '-') { i++; return -unary(); }
+            if (src[i] === '+') { i++; return unary(); }
+            return num();
+        }
+        function mul() {
+            let v = unary();
+            while (src[i] === '*' || src[i] === '/') { const op = src[i++]; const r = unary(); v = op === '*' ? v * r : v / r; }
+            return v;
+        }
+        function add() {
+            let v = mul();
+            while (src[i] === '+' || src[i] === '-') { const op = src[i++]; const r = mul(); v = op === '+' ? v + r : v - r; }
+            return v;
+        }
+        try { const v = add(); return i === src.length && isFinite(v) ? v : NaN; } catch (e) { return NaN; }
+    }
+    function calcOr0(text) { const v = calc(text); return isNaN(v) ? 0 : v; }
     function readStages(container) {
-        return [...container.querySelectorAll('.op-stage')].map(r => ({duration: r.querySelector('.op-st-d').value.trim(), target: Number(r.querySelector('.op-st-t').value || 0)}))
+        return [...container.querySelectorAll('.op-stage')].map(r => ({duration: r.querySelector('.op-st-d').value.trim(), target: calcOr0(r.querySelector('.op-st-t').value)}))
             .filter(x => x.duration !== '');
     }
     function parseDur(v) {
@@ -222,17 +254,17 @@
                 + '<div class="op-kv" data-k="' + key + '">' + rows + '</div>'
                 + '<button type="button" class="btn btn-sm btn-outline-secondary op-kv-add mt-1" data-ph="' + esc(f.ph.join('|')) + '">+ добавить</button></div>';
         }
-        const t = f.type === 'dur' ? 'text' : 'number';
-        const step = f.type === 'num' ? ' step="any"' : f.type === 'int' ? ' step="1"' : '';
+        const t = 'text';
+        const step = f.type === 'dur' ? '' : ' inputmode="decimal" autocomplete="off"';
         return '<div class="col-6 col-md-3"><label class="form-label small mb-1" title="' + esc(f.hint) + '">' + f.label + '</label>'
-            + '<input class="form-control form-control-sm op-f" data-k="' + key + '" data-t="' + f.type + '" type="' + t + '"' + step
-            + (t === 'number' ? ' min="0"' : '') + ' placeholder="' + esc(f.ph || '') + '" value="' + esc(val) + '" title="' + esc(f.hint) + '"></div>';
+            + '<input class="form-control form-control-sm op-f' + (f.type === 'dur' ? '' : ' op-calc') + '" data-k="' + key + '" data-t="' + f.type + '" type="' + t + '"' + step
+            + ' placeholder="' + esc(f.ph || '') + '" value="' + esc(val) + '" title="' + esc(f.hint + (f.type === 'dur' ? '' : '. Можно выражение: 50*1.5, 95+95')) + '"></div>';
     }
     // строка стадии: между строками при наведении появляется линия с плюсом (как в Excel), вставляет копию стадии, у границы которой нажали
     function stageRow(d, tg, unit) {
         return '<div class="input-group input-group-sm op-stage">'
             + '<span class="input-group-text stage-lbl">Длительность</span><input class="form-control op-st-d" placeholder="1m" value="' + esc(d) + '">'
-            + '<span class="input-group-text">' + esc(unit) + '</span><input class="form-control op-st-t" type="number" step="any" min="0" value="' + esc(tg) + '">'
+            + '<span class="input-group-text">' + esc(unit) + '</span><input class="form-control op-st-t op-calc" type="text" inputmode="decimal" autocomplete="off" title="Число или выражение: 95+95, 50*1.5, (100+20)/2" value="' + esc(tg) + '">'
             + '<button type="button" class="btn btn-outline-danger op-stage-del" title="Убрать стадию" aria-label="Убрать стадию">×</button>'
             + '<button type="button" class="stage-ins stage-ins-above" title="Добавить стадию выше (копия этой)" aria-label="Добавить стадию выше"><span>+</span></button>'
             + '<button type="button" class="stage-ins stage-ins-below" title="Добавить стадию ниже (копия этой)" aria-label="Добавить стадию ниже"><span>+</span></button></div>';
@@ -356,7 +388,7 @@
         panel.querySelectorAll('.op-f').forEach(i => {
             const v = i.value.trim();
             if (v === '') return;
-            o[i.dataset.k] = i.dataset.t === 'dur' ? v : Number(v);
+            o[i.dataset.k] = i.dataset.t === 'dur' ? v : calcOr0(v);
         });
         const st = panel.querySelector('.op-stages');
         if (st) {
@@ -594,7 +626,24 @@
             sync(row);
         }
     });
+    // выражение в числовом поле: на выходе из поля заменяется результатом; непонятное выражение подсвечивается и не даёт сохранить
+    function markCalc(el) {
+        const bad = el.value.trim() !== '' && isNaN(calc(el.value));
+        el.classList.toggle('is-invalid', bad);
+        return !bad;
+    }
+    body.addEventListener('change', e => {
+        const el = e.target;
+        if (!el.classList || !el.classList.contains('op-calc')) return;
+        if (markCalc(el) && el.value.trim() !== '') {
+            const v = calc(el.value);
+            if (!isNaN(v)) el.value = String(Math.round(v * 1e6) / 1e6);
+            const row = el.closest('.op-row');
+            if (row) { refreshStages(row); sync(row); }
+        }
+    });
     body.addEventListener('input', e => {
+        if (e.target.classList && e.target.classList.contains('op-calc')) markCalc(e.target);
         const row = e.target.closest('.op-row');
         if (row && e.target.closest('.op-detail')) sync(row);
         if (row && e.target.classList.contains('op-st-d')) refreshStages(row);
@@ -607,7 +656,10 @@
     if (form) {
         form.addEventListener('input', markDirty);
         form.addEventListener('change', markDirty);
-        form.addEventListener('submit', () => { submitting = true; body.querySelectorAll('.op-row').forEach(sync); });
+        form.addEventListener('submit', ev => {
+            const bad = body.querySelector('.op-calc.is-invalid');
+            if (bad) { ev.preventDefault(); bad.focus(); alert('Не удаётся вычислить выражение в числовом поле. Допустимы числа и знаки + - * / ( ).'); return; }
+            submitting = true; body.querySelectorAll('.op-row').forEach(sync); });
         window.addEventListener('beforeunload', e => { if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; } });
     }
 
