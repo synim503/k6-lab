@@ -30,9 +30,15 @@ public class RunStartController {
     private final ScriptService scripts;
     private final GeneratorRepository generators;
     private final ru.k6lab.server.schedule.ScheduledRunService schedule;
+    private final ru.k6lab.server.load.LoadService load;
+    private final ru.k6lab.server.load.LoadProfileStore profileStore;
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
 
     public RunStartController(RunService runs, RunOrchestrator orchestrator, RunPlanner planner, ScriptService scripts,
-                              GeneratorRepository generators, ru.k6lab.server.schedule.ScheduledRunService schedule) {
+                              GeneratorRepository generators, ru.k6lab.server.schedule.ScheduledRunService schedule,
+                              ru.k6lab.server.load.LoadService load, ru.k6lab.server.load.LoadProfileStore profileStore) {
+        this.load = load;
+        this.profileStore = profileStore;
         this.schedule = schedule;
         this.runs = runs;
         this.orchestrator = orchestrator;
@@ -66,6 +72,21 @@ public class RunStartController {
         script.getEnv().forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
         model.addAttribute("envText", env.toString());
         model.addAttribute("pendingSchedule", schedule.pendingOf(id));
+        // профили нагрузки для планирования: выбор профиля меняет список операций (интенсивность) и переменные в форме
+        model.addAttribute("loadProfiles", profileStore.list(id));
+        try {
+            java.util.Map<String, java.util.List<String>> opsByProfile = new java.util.LinkedHashMap<>();
+            opsByProfile.put("", plan.operations().stream().map(o -> o.getName()).toList());
+            load.profileOperationNames(id).forEach((pid, names) -> opsByProfile.put(String.valueOf(pid), names));
+            java.util.Map<String, String> envByProfile = new java.util.LinkedHashMap<>();
+            envByProfile.put("", env.toString());
+            load.profileEnvText(id).forEach((pid, t) -> envByProfile.put(String.valueOf(pid), t));
+            model.addAttribute("profileOpsJson", JSON.writeValueAsString(opsByProfile));
+            model.addAttribute("profileEnvJson", JSON.writeValueAsString(envByProfile));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            model.addAttribute("profileOpsJson", "{}");
+            model.addAttribute("profileEnvJson", "{}");
+        }
     }
 
     /**

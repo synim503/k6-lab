@@ -42,6 +42,7 @@ public class ScheduleController {
     @PostMapping("/scripts/{id}/schedule")
     public String create(@PathVariable Long id, @RequestParam String runAt, @RequestParam(required = false) Integer count,
                          @RequestParam(name = "generatorId", required = false) List<Long> generatorIds,
+                         @RequestParam(required = false) Long profile,
                          @RequestParam(defaultValue = "script") String envMode, @RequestParam(required = false) String envText,
                          @RequestParam Map<String, String> all, Principal user, RedirectAttributes ra) {
         try {
@@ -66,7 +67,7 @@ public class ScheduleController {
             if (!bad.isEmpty()) {
                 throw new IllegalArgumentException("Интенсивность должна быть числом (операции: " + String.join(", ", bad) + ")");
             }
-            long sid = service.schedule(id, at, generatorIds, count, env, pct, user == null ? "system" : user.getName());
+            long sid = service.schedule(id, at, generatorIds, count, env, pct, profile, user == null ? "system" : user.getName());
             ra.addFlashAttribute("info", "Запуск запланирован (#" + sid + ")");
             return "redirect:/schedule";
         } catch (IllegalArgumentException | IllegalStateException e) {

@@ -84,6 +84,23 @@ public class PrometheusClient {
     public record Point(double ts, double value) {
     }
 
+    /** Точки первого ряда запроса с временем (для агрегатов sum(...) без разбивки); NaN отбрасываются. */
+    public List<Point> rangePoints(SettingsService.Prometheus p, String promql, Instant start, Instant end, int stepSec) throws IOException {
+        JsonNode data = call(p, "/api/v1/query_range", "query=" + enc(promql) + "&start=" + start.getEpochSecond() + "&end="
+                + end.getEpochSecond() + "&step=" + Math.max(1, stepSec));
+        List<Point> out = new ArrayList<>();
+        JsonNode result = data.path("result");
+        if (result.isArray() && result.size() > 0) {
+            for (JsonNode v : result.get(0).path("values")) {
+                double d = parse(v.path(1).asText());
+                if (Double.isFinite(d)) {
+                    out.add(new Point(v.path(0).asDouble(), d));
+                }
+            }
+        }
+        return out;
+    }
+
     /** Range query с разбивкой по метке scenario: все точки каждого ряда (NaN отбрасываются). */
     public Map<String, List<Point>> rangeByScenario(SettingsService.Prometheus p, String promql, Instant start, Instant end,
                                                     int stepSec) throws IOException {

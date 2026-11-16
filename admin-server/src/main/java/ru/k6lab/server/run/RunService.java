@@ -46,7 +46,12 @@ public class RunService {
      * Особые условия одного запуска (запуск по расписанию): env - полный набор переменных вместо заданных в скрипте (null - как в скрипте),
      * intensityPct - интенсивность по операциям в процентах от заданной в нагрузке (100 - без изменений); scheduleId - откуда запуск.
      */
-    public record Overrides(Map<String, String> env, Map<String, Double> intensityPct, Long scheduleId, String scheduledBy) {
+    public record Overrides(Map<String, String> env, Map<String, Double> intensityPct, Long scheduleId, String scheduledBy,
+                            Long profileId, String profileName) {
+
+        public Overrides(Map<String, String> env, Map<String, Double> intensityPct, Long scheduleId, String scheduledBy) {
+            this(env, intensityPct, scheduleId, scheduledBy, null, null);
+        }
 
         public boolean scalesLoad() {
             return intensityPct != null && intensityPct.values().stream().anyMatch(v -> v != null && Math.abs(v - 100) > 1e-9);
@@ -145,7 +150,10 @@ public class RunService {
         }
         int count = sel.size();
 
-        RunPlan plan = planner.plan(script.getId(), count);
+        // нагрузка из профиля (запуск по расписанию с профилем) вместо сохранённой в скрипте
+        LoadService.BuiltLoad built = req.overrides() != null && req.overrides().profileId() != null
+                ? load.fromProfile(script.getId(), req.overrides().profileId()) : null;
+        RunPlan plan = planner.plan(script.getId(), count, built);
         if (!plan.ok()) {
             throw new IllegalArgumentException("Скрипт нельзя запустить: " + String.join("; ", plan.errors()));
         }
@@ -168,6 +176,9 @@ public class RunService {
         if (ov != null && ov.scheduleId() != null) {
             request.put("scheduleId", ov.scheduleId());
         }
+        if (ov != null && ov.profileId() != null) {
+            request.put("loadProfileId", ov.profileId());
+        }
         run.setRequest(request);
         if (ov != null && ov.intensityPct() != null) {
             Set<String> known = plan.operations().stream().map(LoadOperation::getName).collect(java.util.stream.Collectors.toSet());
@@ -179,7 +190,7 @@ public class RunService {
         }
         run.setK6Config(ov != null && ov.scalesLoad() ? scaledConfig(plan.config(), ov.intensityPct()) : plan.config());
         run.setScriptVersionId(plan.version().getId());
-        run.setSnapshot(MAPPER.convertValue(buildSnapshot(plan, ov), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+        run.setSnapshot(MAPPER.convertValue(buildSnapshot(plan, ov, built), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
         }));
         var auth = SecurityContextHolder.getContext().getAuthentication();
         run.setCreatedBy(auth == null ? "system" : auth.getName());
@@ -188,7 +199,7 @@ public class RunService {
         return saved;
     }
 
-    private RunSnapshot buildSnapshot(RunPlan plan, RunService.Overrides ov) {
+    private RunSnapshot buildSnapshot(RunPlan plan, RunService.Overrides ov, LoadService.BuiltLoad built) {
         ScriptVersion v = plan.version();
         Script script = plan.script();
         List<RunSnapshot.OpInfo> ops = new ArrayList<>();
@@ -201,12 +212,12 @@ public class RunService {
         }
         List<RunSnapshot.StepInfo> steps = plan.steps().stream()
                 .map(st -> new RunSnapshot.StepInfo(st.no(), st.label(), st.levelPct(), st.rampSec(), st.holdSec())).toList();
-        List<RunSnapshot.DataFileInfo> data = load.dataFiles(script.getId()).stream()
+        List<RunSnapshot.DataFileInfo> data = (built != null ? built.dataFiles() : load.dataFiles(script.getId())).stream()
                 .map(d -> new RunSnapshot.DataFileInfo(d.getPath(), d.getMode().name(), d.isHasHeader(), d.isConsumed())).toList();
         return new RunSnapshot(
                 new RunSnapshot.ScriptInfo(script.getId(), script.getName(), v.getId(), v.getNumber(), v.getSha256(), v.getEntrypoint(),
                         v.getSource().name(), v.getCommitHash(), v.getGitBranch()),
-                ov != null && ov.env() != null ? new java.util.LinkedHashMap<>(ov.env()) : script.getEnv(), ops, steps, plan.gracefulStopSec(), plan.gracefulRampDownSec(), data,
+                ov != null && ov.env() != null ? new java.util.LinkedHashMap<>(ov.env()) : built != null ? new java.util.LinkedHashMap<>(built.env()) : script.getEnv(), ops, steps, plan.gracefulStopSec(), plan.gracefulRampDownSec(), data,
                 LoadCriteria.stopToMap(LoadCriteria.stop(script.getStopCriteria())),
                 LoadCriteria.successToMap(LoadCriteria.success(script.getSuccessCriteria())), false,
                 List.of(), null, withScheduleNote(plan.warnings(), ov),
@@ -221,6 +232,9 @@ public class RunService {
         }
         List<String> out = new ArrayList<>(warnings);
         StringBuilder sb = new StringBuilder("Запуск по расписанию (#" + ov.scheduleId() + ")");
+        if (ov.profileName() != null) {
+            sb.append(", профиль нагрузки «").append(ov.profileName()).append('»');
+        }
         if (ov.scheduledBy() != null) {
             sb.append(", назначил ").append(ov.scheduledBy());
         }

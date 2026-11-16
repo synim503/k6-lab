@@ -31,9 +31,12 @@ public class RunController {
     private final RunEventBroadcaster broadcaster;
     private final RunLogService logs;
     private final ru.k6lab.server.settings.SettingsService settings;
+    private final ru.k6lab.server.metrics.RunHistoryService history;
 
     public RunController(RunService runService, RunViewService views, RunOrchestrator orchestrator, RunEventBroadcaster broadcaster,
-                         RunLogService logs, ru.k6lab.server.settings.SettingsService settings) {
+                         RunLogService logs, ru.k6lab.server.settings.SettingsService settings,
+                         ru.k6lab.server.metrics.RunHistoryService history) {
+        this.history = history;
         this.settings = settings;
         this.runService = runService;
         this.views = views;
@@ -104,7 +107,16 @@ public class RunController {
     @GetMapping(value = "/{id}/metrics/history", produces = MediaType.APPLICATION_JSON_VALUE)
     @org.springframework.web.bind.annotation.ResponseBody
     public String metricsHistory(@PathVariable Long id) {
-        return "[" + String.join(",", broadcaster.metricsHistory(id)) + "]";
+        List<String> live = broadcaster.metricsHistory(id);
+        // в памяти истории нет (запуск завершён давно или сервер перезапускался) - график восстанавливается из Prometheus
+        if (live.isEmpty()) {
+            try {
+                live = history.rebuild(runService.get(id));
+            } catch (IllegalArgumentException e) {
+                live = List.of(); // запуска нет: истории тоже
+            }
+        }
+        return "[" + String.join(",", live) + "]";
     }
 
     @GetMapping("/{id}/log.txt")

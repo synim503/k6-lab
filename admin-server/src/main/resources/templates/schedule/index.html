@@ -17,7 +17,8 @@
         <tbody>
         <tr th:each="s : ${items}">
             <td><time class="local-time" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time></td>
-            <td><a th:href="@{/scripts/{id}(id=${s.scriptId})}" th:text="${s.scriptName}"></a></td>
+            <td><a th:href="@{/scripts/{id}(id=${s.scriptId})}" th:text="${s.scriptName}"></a>
+                <div class="small text-muted" th:if="${s.profileName != null}"><i class="bi bi-collection me-1"></i><span th:text="${s.profileName}"></span></div></td>
             <td th:text="${s.generatorIds.isEmpty()} ? (${s.generatorCount} + ' (свободные)') : (${s.generatorIds.size()} + ' выбранных')"></td>
             <td class="small">
                 <span class="text-muted" th:if="${s.intensity.isEmpty()}">как в скрипте</span>

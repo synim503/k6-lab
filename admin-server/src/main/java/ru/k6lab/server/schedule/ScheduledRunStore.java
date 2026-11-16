@@ -24,7 +24,7 @@ public class ScheduledRunStore {
     /** env == null - переменные как в скрипте на момент запуска; intensity - проценты по операциям (только отличные от 100). */
     public record Item(long id, long scriptId, String scriptName, Instant runAt, Instant createdAt, String createdBy, List<Long> generatorIds,
                        Integer generatorCount, Map<String, String> env, Map<String, Double> intensity, Status status, Long runId,
-                       String error, Instant finishedAt) {
+                       String error, Instant finishedAt, Long profileId, String profileName) {
 
         public boolean pending() {
             return status == Status.PENDING;
@@ -50,7 +50,8 @@ public class ScheduledRunStore {
                     rs.getString("env") == null ? null : read(rs.getString("env"), new TypeReference<Map<String, String>>() { }),
                     read(rs.getString("intensity"), new TypeReference<Map<String, Double>>() { }),
                     Status.valueOf(rs.getString("status")), rs.getObject("run_id") == null ? null : rs.getLong("run_id"),
-                    rs.getString("error"), fin == null ? null : fin.toInstant());
+                    rs.getString("error"), fin == null ? null : fin.toInstant(),
+                    rs.getObject("profile_id") == null ? null : rs.getLong("profile_id"), rs.getString("profile_name"));
         }
     };
 
@@ -71,10 +72,10 @@ public class ScheduledRunStore {
     }
 
     public long create(long scriptId, String scriptName, Instant runAt, String user, List<Long> generatorIds, Integer generatorCount,
-                       Map<String, String> env, Map<String, Double> intensity) {
-        return jdbc.queryForObject("insert into scheduled_run (script_id, script_name, run_at, created_by, generator_ids, generator_count, env, intensity) "
-                        + "values (?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?::jsonb) returning id", Long.class, scriptId, scriptName,
-                Timestamp.from(runAt), user, json(generatorIds), generatorCount, env == null ? null : json(env), json(intensity));
+                       Map<String, String> env, Map<String, Double> intensity, Long profileId, String profileName) {
+        return jdbc.queryForObject("insert into scheduled_run (script_id, script_name, run_at, created_by, generator_ids, generator_count, env, intensity, "
+                        + "profile_id, profile_name) values (?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?::jsonb, ?, ?) returning id", Long.class, scriptId, scriptName,
+                Timestamp.from(runAt), user, json(generatorIds), generatorCount, env == null ? null : json(env), json(intensity), profileId, profileName);
     }
 
     public Optional<Item> find(long id) {

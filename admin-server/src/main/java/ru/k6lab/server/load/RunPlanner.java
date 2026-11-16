@@ -62,12 +62,18 @@ public class RunPlanner {
     }
 
     public RunPlan plan(Long scriptId, int generatorCount) {
+        return plan(scriptId, generatorCount, null);
+    }
+
+    /** План запуска; built - нагрузка из профиля вместо сохранённой в скрипте (null - сохранённая). */
+    public RunPlan plan(Long scriptId, int generatorCount, LoadService.BuiltLoad built) {
         Script script = scripts.get(scriptId);
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
-        List<LoadOperation> ops = load.activeOperations(scriptId).stream().filter(LoadOperation::isEnabled).toList();
+        List<LoadOperation> ops = (built == null ? load.activeOperations(scriptId) : load.activeOf(scriptId, built.ops())).stream()
+                .filter(LoadOperation::isEnabled).toList();
         // функции, которых нет в последней версии (скрипт обновили), в запуск не попадают
-        List<String> stale = load.staleOperations(scriptId).stream().map(LoadOperation::getName).toList();
+        List<String> stale = (built == null ? load.staleOperations(scriptId) : load.staleOf(scriptId, built.ops())).stream().map(LoadOperation::getName).toList();
         ScriptVersion version = scripts.latest(scriptId).orElse(null);
         List<StepPlan> steps = null;
         GeneratedConfig gen = null;
@@ -150,7 +156,7 @@ public class RunPlanner {
                 for (GeneratedConfig.Warning w : gen.warnings()) {
                     warnings.add((w.operation() == null ? "" : w.operation() + ": ") + w.message());
                 }
-                dataWarnings(script, version, gen, steps, generatorCount, warnings);
+                dataWarnings(script, version, gen, steps, generatorCount, warnings, built == null ? load.dataFiles(script.getId()) : built.dataFiles());
             } catch (IllegalArgumentException | JsonProcessingException e) {
                 errors.add(e.getMessage());
             }
@@ -161,8 +167,7 @@ public class RunPlanner {
 
     /** Предупреждение: после нарезки на генератор приходится меньше строк, чем ожидаемых итераций. */
     private void dataWarnings(Script script, ScriptVersion v, GeneratedConfig gen, List<StepPlan> steps, int generators,
-                              List<String> warnings) {
-        List<ScriptDataFile> files = load.dataFiles(script.getId());
+                              List<String> warnings, List<ScriptDataFile> files) {
         if (files.stream().noneMatch(f -> f.getMode() == ScriptDataFile.Mode.SPLIT && f.isConsumed())) {
             return;
         }

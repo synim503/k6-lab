@@ -144,6 +144,33 @@ class ResultsIT extends AbstractIT {
     }
 
     @Test
+    void metricsTabOfAFinishedRunIsRestoredFromPrometheusWhenMemoryHasNoHistory() throws Exception {
+        connectProm();
+        Instant t0 = Instant.now().minusSeconds(3600);
+        prom.respond(responder(t0, 1.0));
+        Run run = finishedRun(scriptWithLoad(), t0);
+        runService.update(run.getId(), r -> r.setPlannedStartAt(t0));
+        String json = mvc.perform(get("/runs/" + run.getId() + "/metrics/history")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        var points = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        assertThat(points.size()).as("точки из Prometheus по всему запуску").isGreaterThan(20);
+        var mid = points.get(points.size() / 2);
+        var row = mid.path("rows").get(0);
+        assertThat(row.path("op").asText()).isEqualTo("work");
+        assertThat(row.path("pct").asDouble()).isGreaterThan(0);
+        assertThat(row.path("sla").asDouble()).isEqualTo(500.0);
+        assertThat(row.path("actual").asDouble()).isGreaterThan(0);
+        assertThat(row.path("err").asDouble()).isEqualTo(0.1);
+        assertThat(mid.path("dataTs").asLong()).isGreaterThan(t0.toEpochMilli());
+        // последняя точка несёт и таблицу «Весь тест»
+        var last = points.get(points.size() - 1);
+        assertThat(last.path("rowsAll").size()).isEqualTo(1);
+        assertThat(last.path("wholeSec").asLong()).isGreaterThan(60);
+        // без времени старта (нечего считать от) - пустой список, а не ошибка
+        Run bare = finishedRun(scriptWithLoad(), t0);
+        mvc.perform(get("/runs/" + bare.getId() + "/metrics/history")).andExpect(status().isOk()).andExpect(content().string("[]"));
+    }
+
+    @Test
     void stepVerdictsAreComputedFromPrometheusAndPagesRender() throws Exception {
         connectProm();
         Instant t0 = Instant.now().minusSeconds(3600);

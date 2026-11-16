@@ -46,9 +46,11 @@ public class LoadController {
     private final SecretService secrets;
     private final K6Tool k6;
     private final AdminHelper helper;
+    private final LoadProfileStore profiles;
 
     public LoadController(ScriptService scripts, LoadService load, RunPlanner planner, SecretService secrets, K6Tool k6,
-                          AdminHelper helper) {
+                          AdminHelper helper, LoadProfileStore profiles) {
+        this.profiles = profiles;
         this.scripts = scripts;
         this.load = load;
         this.planner = planner;
@@ -58,10 +60,70 @@ public class LoadController {
     }
 
     @GetMapping("/load")
-    public String form(@PathVariable Long id, @RequestParam(required = false) Integer generators, Model model) {
+    public String form(@PathVariable Long id, @RequestParam(required = false) Integer generators,
+                       @RequestParam(required = false) Long profile, Model model) {
         // без параметра - число генераторов, заданное в скрипте
-        fill(model, id, load.toForm(id), generators != null ? generators : scripts.get(id).getGeneratorCount());
+        LoadForm f = load.toForm(id);
+        if (profile != null) {
+            // профиль открывается в форме, но нагрузка скрипта не меняется, пока не нажато «Сохранить нагрузку»
+            var p = profiles.find(id, profile);
+            if (p.isPresent()) {
+                try {
+                    f = LoadJson.fromJson(p.get().data());
+                    load.completeWithScriptFunctions(id, f);
+                    model.addAttribute("loadedProfile", p.get().name());
+                    model.addAttribute("loadedProfileId", p.get().id());
+                    model.addAttribute("formDirty", true);
+                    model.addAttribute("info", "Открыт профиль «" + p.get().name() + "». В нагрузку скрипта он попадёт после «Сохранить нагрузку».");
+                } catch (IllegalArgumentException e) {
+                    model.addAttribute("error", "Профиль «" + p.get().name() + "» не открывается: " + e.getMessage());
+                }
+            } else {
+                model.addAttribute("error", "Профиль не найден");
+            }
+        }
+        fill(model, id, f, generators != null ? generators : scripts.get(id).getGeneratorCount());
         return "scripts/load";
+    }
+
+    /**
+     * Сохраняет текущее состояние формы (в том числе ещё не сохранённое в нагрузку) как профиль; профиль с таким именем обновляется.
+     * Форма остаётся открытой со всеми правками. Полная проверка нагрузки выполняется, когда профиль сохраняют в нагрузку скрипта.
+     */
+    @PostMapping("/load/profile")
+    public String saveProfile(@PathVariable Long id, @ModelAttribute("form") LoadForm f, @RequestParam String profileName,
+                              java.security.Principal user, Model model) {
+        try {
+            String name = profileName == null ? "" : profileName.strip();
+            if (name.isEmpty() || name.length() > 120) {
+                throw new IllegalArgumentException("Название профиля: от 1 до 120 символов");
+            }
+            f.getOps().removeIf(LoadForm.OpForm::blank);
+            f.getOps().forEach(LoadForm.OpForm::parseScenario); // ошибка в JSON параметров сценария - сразу понятным сообщением
+            if (f.getOps().stream().noneMatch(LoadForm.OpForm::isEnabled)) {
+                throw new IllegalArgumentException("В профиле нет включённых операций");
+            }
+            LoadForm toStore = LoadJson.fromJson(LoadJson.toJson(f));
+            var saved = profiles.save(id, name, LoadJson.toJson(toStore), user == null ? "system" : user.getName());
+            model.addAttribute("info", (saved.updated() ? "Профиль «" + name + "» обновлён" : "Профиль «" + name + "» сохранён"));
+            model.addAttribute("loadedProfile", name);
+            model.addAttribute("loadedProfileId", saved.id());
+            model.addAttribute("formDirty", true);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            model.addAttribute("error", e.getMessage());
+        }
+        fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()));
+        return "scripts/load";
+    }
+
+    @PostMapping("/load/profile/delete")
+    public String deleteProfile(@PathVariable Long id, @RequestParam Long profile, RedirectAttributes ra) {
+        if (profiles.delete(id, profile)) {
+            ra.addFlashAttribute("info", "Профиль удалён");
+        } else {
+            ra.addFlashAttribute("error", "Профиль не найден");
+        }
+        return "redirect:/scripts/" + id + "/load";
     }
 
     @PostMapping("/load")
@@ -191,6 +253,7 @@ public class LoadController {
     }
 
     private void fill(Model model, Long id, LoadForm f, int generators) {
+        model.addAttribute("profiles", profiles.list(id));
         model.addAttribute("formJson", LoadJson.toJson(f));
         RunPlan plan = planner.plan(id, Math.max(1, generators));
         model.addAttribute("script", scripts.get(id));

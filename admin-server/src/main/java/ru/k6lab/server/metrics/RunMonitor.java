@@ -194,7 +194,7 @@ public class RunMonitor {
         evaluateStop(run, snap, st, current, hold, intoHold, minWindow, window, rows, now, p, stepNo);
     }
 
-    private static void putRows(ArrayNode ra, List<LiveRow> rows) {
+    static void putRows(ArrayNode ra, List<LiveRow> rows) {
         for (LiveRow r : rows) {
             ObjectNode o = ra.addObject();
             o.put("op", r.operation());
@@ -290,6 +290,11 @@ public class RunMonitor {
     }
 
     /** average - окно длинное (весь тест): план - средний за окно, а не на момент at. */
+    /** Для восстановления истории завершённого запуска (см. {@link RunHistoryService}). */
+    PromQueries.Names metricNames() {
+        return names.names();
+    }
+
     List<LiveRow> liveRows(RunSnapshot snap, RunStep step, Double levelOrNull, long runId, long windowSec, Instant at,
                            SettingsService.Prometheus p, com.fasterxml.jackson.databind.JsonNode cfg, Instant start, boolean average) throws IOException {
         PromQueries.Names n = names.names();
@@ -380,7 +385,7 @@ public class RunMonitor {
         return samples.isEmpty() ? null : samples.get(0).value();
     }
 
-    private static void putD(ObjectNode o, String k, Double v) {
+    static void putD(ObjectNode o, String k, Double v) {
         if (v != null && Double.isFinite(v)) {
             o.put(k, v);
         }

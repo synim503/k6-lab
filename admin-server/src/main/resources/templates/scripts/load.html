@@ -12,7 +12,28 @@
         <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
         Они убраны из списка и не участвуют в запуске. Если вернуть версию с этими функциями (откат), их нагрузка вернётся, пока вы не сохранили форму.</div>
 
-    <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post">
+    <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post" th:attr="data-from-profile=${formDirty != null ? 'true' : null}">
+
+        <div class="card card-body mb-3 py-2" id="profiles-box">
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <span class="fw-semibold"><i class="bi bi-collection me-1"></i>Профили нагрузки</span>
+                <select class="form-select form-select-sm" style="width:auto;min-width:220px" id="profile-pick" aria-label="Профиль нагрузки" form="no-form">
+                    <option value="" th:text="${profiles.isEmpty()} ? 'профилей пока нет' : 'выберите профиль'"></option>
+                    <option th:each="p : ${profiles}" th:value="${p.id}" th:text="${p.name}" th:selected="${loadedProfileId != null and loadedProfileId == p.id}"></option>
+                </select>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="profile-open" th:disabled="${profiles.isEmpty()}">Открыть</button>
+                <button type="submit" class="btn btn-sm btn-outline-danger" id="profile-delete" th:disabled="${profiles.isEmpty()}" formnovalidate
+                        th:formaction="@{/scripts/{id}/load/profile/delete(id=${script.id})}">Удалить</button>
+                <span class="vr mx-1"></span>
+                <input class="form-control form-control-sm" style="width:220px" name="profileName" id="profile-name" maxlength="120"
+                       placeholder="название профиля" th:value="${loadedProfile}" aria-label="Название профиля">
+                <button type="submit" class="btn btn-sm btn-outline-success" id="profile-save" formnovalidate
+                        th:formaction="@{/scripts/{id}/load/profile(id=${script.id})}"><i class="bi bi-save me-1"></i>Сохранить как профиль</button>
+            </div>
+            <div class="form-text mt-1">Профиль — набор операций, сценариев, SLA и переменных целиком. «Открыть» подставляет его в форму, в нагрузку скрипта он попадает
+                после «Сохранить нагрузку». Профиль с тем же названием обновляется.</div>
+            <input type="hidden" name="profile" id="profile-id">
+        </div>
 
         <div class="stage-warm mb-3 is-off" id="gw-box">
             <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="gw-on" aria-label="Прогрев для всех сценариев">
@@ -666,9 +687,31 @@
     gwFromJson(); // сначала общий рубильник и время по сохранённым сценариям, затем отрисовка: она применяет их ко всем
     body.querySelectorAll('.op-row').forEach(initRow);
     refreshAll();
-    // начальная расстановка не считается правкой
+    // начальная расстановка не считается правкой, кроме открытого профиля: он ещё не сохранён в нагрузку скрипта
     dirty = false;
     if (form) form.classList.remove('is-dirty');
+    if (form && form.dataset.fromProfile) markDirty();
+    // профили: «Открыть» переходит на форму с профилем, «Удалить» просит подтверждение и передаёт выбранный профиль
+    const pick = document.getElementById('profile-pick');
+    if (pick) {
+        document.getElementById('profile-open').addEventListener('click', () => {
+            if (!pick.value) return;
+            if (dirty && !confirm('Несохранённые изменения формы будут заменены профилем. Продолжить?')) return;
+            dirty = false;
+            location.href = location.pathname + '?profile=' + encodeURIComponent(pick.value);
+        });
+        document.getElementById('profile-delete').addEventListener('click', e => {
+            const opt = pick.options[pick.selectedIndex];
+            if (!pick.value) { e.preventDefault(); return; }
+            if (!confirm('Удалить профиль «' + opt.textContent + '»?')) { e.preventDefault(); return; }
+            document.getElementById('profile-id').value = pick.value;
+        });
+        document.getElementById('profile-save').addEventListener('click', e => {
+            const name = document.getElementById('profile-name');
+            if (!name.value.trim()) { e.preventDefault(); name.focus(); name.classList.add('is-invalid'); return; }
+            name.classList.remove('is-invalid');
+        });
+    }
 })();
     </script>
 

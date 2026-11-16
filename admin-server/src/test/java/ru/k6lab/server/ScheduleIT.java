@@ -132,6 +132,70 @@ class ScheduleIT extends AbstractIT {
         assertThat(runService.snapshot(run).env()).containsEntry("BASE", "script");
     }
 
+    private long saveProfile(Script s, String name, int rate, String env) throws Exception {
+        mvc.perform(post("/scripts/" + s.getId() + "/load/profile").with(csrf()).param("profileName", name)
+                .param("ops[0].execFn", "work").param("ops[0].name", "work").param("ops[0].enabled", "true").param("ops[0].executor", "constant-arrival-rate")
+                .param("ops[0].scenarioJson", "{\"rate\":" + rate + ",\"timeUnit\":\"1s\",\"duration\":\"3m\",\"preAllocatedVUs\":2,\"maxVUs\":10}")
+                .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                .param("ops[0].expectedDurationSec", "0.3").param("holdMinutes", "1").param("levelPct", "100").param("envText", env))
+                .andExpect(status().isOk());
+        return jdbc.queryForObject("select id from load_profile where script_id = ? and name = ?", Long.class, s.getId(), name);
+    }
+
+    @Test
+    void scheduleWithAProfileRunsTheProfilesLoadAndVariablesAndKeepsTheScriptsLoad() throws Exception {
+        Script s = scriptWithLoad();           // нагрузка скрипта: work 10 оп/с, BASE=script
+        long profile = saveProfile(s, "Пик", 40, "BASE=profile\nZONE=eu");
+        Generator g = generator();
+        // профиль без своих переменных и процентов: операции, сценарий и переменные - из профиля
+        long a = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(g.getId()), null, null, Map.of(), profile, "tester");
+        makeDue(a, 1);
+        schedule.tick();
+        ScheduledRunStore.Item done = store.find(a).orElseThrow();
+        assertThat(done.status()).as(String.valueOf(done.error())).isEqualTo(ScheduledRunStore.Status.STARTED);
+        assertThat(done.profileName()).isEqualTo("Пик");
+        Run run = runService.get(done.runId());
+        assertThat(run.getK6Config().path("scenarios").path("work").path("rate").asLong()).isEqualTo(40);
+        var snap = runService.snapshot(run);
+        assertThat(snap.env()).containsEntry("BASE", "profile").containsEntry("ZONE", "eu");
+        assertThat(snap.warnings()).anyMatch(w -> w.contains("профиль нагрузки «Пик»"));
+        assertThat(run.getRequest()).containsEntry("loadProfileId", (int) profile);
+
+        // проценты применяются к операциям профиля, а явные переменные расписания важнее переменных профиля
+        Generator g2 = generator();
+        long b = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(g2.getId()), null, Map.of("BASE", "custom"),
+                Map.of("work", 150.0), profile, "tester");
+        makeDue(b, 1);
+        schedule.tick();
+        Run run2 = runService.get(store.find(b).orElseThrow().runId());
+        assertThat(run2.getK6Config().path("scenarios").path("work").path("rate").asLong()).isEqualTo(60);
+        assertThat(runService.snapshot(run2).env()).containsEntry("BASE", "custom").doesNotContainKey("ZONE");
+
+        // сохранённая нагрузка скрипта профилем не тронута
+        assertThat(load.activeOperations(s.getId()).get(0).getRatePerSec()).isEqualTo(10.0);
+        assertThat(load.toForm(s.getId()).getEnvText()).contains("BASE=script");
+    }
+
+    @Test
+    void scheduleWithAProfileIsCheckedAtPlanningAndFailsIfTheProfileIsDeleted() throws Exception {
+        Script s = scriptWithLoad();
+        long profile = saveProfile(s, "Временный", 20, "A=1");
+        assertThatThrownBy(() -> schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(generator().getId()), null, null, Map.of(), 987654L, "t"))
+                .hasMessageContaining("Профиль нагрузки не найден");
+        // интенсивность проверяется по операциям профиля
+        assertThatThrownBy(() -> schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(generator().getId()), null, null,
+                Map.of("nope", 120.0), profile, "t")).hasMessageContaining("nope");
+        long id = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(generator().getId()), null, null, Map.of(), profile, "t");
+        jdbc.update("delete from load_profile where id = ?", profile);
+        makeDue(id, 1);
+        schedule.tick();
+        ScheduledRunStore.Item item = store.find(id).orElseThrow();
+        assertThat(item.status()).isEqualTo(ScheduledRunStore.Status.FAILED);
+        assertThat(item.error()).contains("Профиль нагрузки не найден");
+        // форма запуска знает профили скрипта
+        mvc.perform(get("/scripts/" + s.getId() + "/run")).andExpect(status().isOk());
+    }
+
     @Test
     void notEnoughFreeGeneratorsAndMissedTimesAreMarkedAsErrors() throws Exception {
         Script s = scriptWithLoad();

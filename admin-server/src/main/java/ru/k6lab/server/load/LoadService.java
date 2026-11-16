@@ -33,9 +33,11 @@ public class LoadService {
     private final ScriptDataFileRepository dataFiles;
     private final SecretService secrets;
     private final AuditService audit;
+    private final LoadProfileStore profiles;
 
     public LoadService(ScriptService scripts, ScriptRepository scriptRepo, LoadOperationRepository operations,
-                       ScriptDataFileRepository dataFiles, SecretService secrets, AuditService audit) {
+                       ScriptDataFileRepository dataFiles, SecretService secrets, AuditService audit, LoadProfileStore profiles) {
+        this.profiles = profiles;
         this.scripts = scripts;
         this.scriptRepo = scriptRepo;
         this.operations = operations;
@@ -55,17 +57,27 @@ public class LoadService {
      */
     @Transactional(readOnly = true)
     public List<LoadOperation> activeOperations(Long scriptId) {
+        return activeOf(scriptId, operations(scriptId));
+    }
+
+    /** Из переданных операций (сохранённых или взятых из профиля) - те, функции которых есть в последней версии скрипта. */
+    @Transactional(readOnly = true)
+    public List<LoadOperation> activeOf(Long scriptId, List<LoadOperation> all) {
         Set<String> available = scripts.latest(scriptId).map(v -> (Set<String>) new HashSet<>(v.operationNames())).orElse(null);
-        List<LoadOperation> all = operations(scriptId);
         return available == null ? all : all.stream().filter(o -> available.contains(o.getExecFn())).toList();
     }
 
     /** Операции нагрузки, функции которых пропали из последней версии скрипта. */
     @Transactional(readOnly = true)
     public List<LoadOperation> staleOperations(Long scriptId) {
+        return staleOf(scriptId, operations(scriptId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<LoadOperation> staleOf(Long scriptId, List<LoadOperation> all) {
         Set<String> active = new HashSet<>();
-        activeOperations(scriptId).forEach(o -> active.add(o.getExecFn()));
-        return operations(scriptId).stream().filter(o -> !active.contains(o.getExecFn())).toList();
+        activeOf(scriptId, all).forEach(o -> active.add(o.getExecFn()));
+        return all.stream().filter(o -> !active.contains(o.getExecFn())).toList();
     }
 
     @Transactional(readOnly = true)
@@ -105,8 +117,16 @@ public class LoadService {
             of.setEnabled(true);
             f.getOps().add(of);
         }
+        completeWithScriptFunctions(scriptId, f);
+        f.setDataFiles(dataRows(scriptId, dataFiles(scriptId)));
+        return f;
+    }
+
+    /** Функции последней версии скрипта, которых в форме ещё нет, добавляются выключенными строками (их можно включить и описать). */
+    @Transactional(readOnly = true)
+    public void completeWithScriptFunctions(Long scriptId, LoadForm f) {
         Set<String> have = new HashSet<>();
-        saved.forEach(o -> have.add(o.getExecFn()));
+        f.getOps().forEach(o -> have.add(o.getExecFn()));
         scripts.latest(scriptId).ifPresent(v -> v.operationNames().stream().filter(n -> !have.contains(n)).forEach(n -> {
             LoadForm.OpForm of = new LoadForm.OpForm();
             of.setName(n);
@@ -115,8 +135,6 @@ public class LoadService {
             of.setEnabled(false);
             f.getOps().add(of);
         }));
-        f.setDataFiles(dataRows(scriptId, dataFiles(scriptId)));
-        return f;
     }
 
     /** Файлы данных последней версии скрипта с уже заданными режимами. */
@@ -157,9 +175,37 @@ public class LoadService {
 
     public static final int MAX_GENERATORS = 200;
 
+    /** Нагрузка, собранная из формы или профиля, но не сохранённая в скрипт: операции, переменные, режимы файлов данных; profileName - у профиля. */
+    public record BuiltLoad(List<LoadOperation> ops, Map<String, String> env, List<ScriptDataFile> dataFiles, String profileName) {
+    }
+
     @Transactional
     public void save(Long scriptId, LoadForm f) {
         Script script = scripts.get(scriptId);
+        BuiltLoad b = build(scriptId, f);
+        operations.deleteByScriptId(scriptId);
+        operations.flush();
+        operations.saveAll(b.ops());
+
+        if (f.getGeneratorCount() != null) {
+            if (f.getGeneratorCount() < 1 || f.getGeneratorCount() > MAX_GENERATORS) {
+                throw new IllegalArgumentException("Число генераторов: от 1 до " + MAX_GENERATORS);
+            }
+            script.setGeneratorCount(f.getGeneratorCount());
+        }
+        script.setEnv(b.env());
+        scriptRepo.save(script);
+
+        // режимы тестовых данных: только файлы данных последней версии
+        dataFiles.deleteByScriptId(scriptId);
+        dataFiles.flush();
+        b.dataFiles().forEach(dataFiles::save);
+        audit.record("script.load", "script", scriptId, Map.of("operations", b.ops().size()));
+    }
+
+    /** Проверяет форму нагрузки и собирает из неё операции, переменные и режимы файлов данных, ничего не сохраняя (общая часть сохранения и запуска по профилю). */
+    @Transactional(readOnly = true)
+    public BuiltLoad build(Long scriptId, LoadForm f) {
         if (f.getLevelPct() <= 0) {
             throw new IllegalArgumentException("Уровень нагрузки должен быть больше 0");
         }
@@ -217,23 +263,8 @@ public class LoadService {
         if (built.isEmpty()) {
             throw new IllegalArgumentException("Включите хотя бы одну операцию");
         }
-
-        operations.deleteByScriptId(scriptId);
-        operations.flush();
-        operations.saveAll(built);
-
-        if (f.getGeneratorCount() != null) {
-            if (f.getGeneratorCount() < 1 || f.getGeneratorCount() > MAX_GENERATORS) {
-                throw new IllegalArgumentException("Число генераторов: от 1 до " + MAX_GENERATORS);
-            }
-            script.setGeneratorCount(f.getGeneratorCount());
-        }
-        script.setEnv(env);
-        scriptRepo.save(script);
-
         // режимы тестовых данных: только файлы данных последней версии
-        dataFiles.deleteByScriptId(scriptId);
-        dataFiles.flush();
+        List<ScriptDataFile> data = new ArrayList<>();
         Set<String> dataPaths = new HashSet<>();
         scripts.latest(scriptId).ifPresent(v -> v.getFiles().stream().filter(x -> x.kind().equals("DATA")).forEach(x -> dataPaths.add(x.path())));
         for (LoadForm.DataForm d : f.getDataFiles()) {
@@ -246,9 +277,51 @@ public class LoadService {
             df.setMode(d.getMode());
             df.setHasHeader(d.isHasHeader());
             df.setConsumed(d.isConsumed());
-            dataFiles.save(df);
+            data.add(df);
         }
-        audit.record("script.load", "script", scriptId, Map.of("operations", built.size()));
+        return new BuiltLoad(built, env, data, null);
+    }
+
+    /** Нагрузка из сохранённого профиля скрипта для запуска (операции, переменные, файлы данных); ошибка понятным сообщением, если профиль удалён или не проходит проверку. */
+    @Transactional(readOnly = true)
+    public BuiltLoad fromProfile(Long scriptId, Long profileId) {
+        var p = profiles.find(scriptId, profileId).orElseThrow(() -> new IllegalArgumentException("Профиль нагрузки не найден (возможно, удалён)"));
+        try {
+            BuiltLoad b = build(scriptId, LoadJson.fromJson(p.data()));
+            return new BuiltLoad(b.ops(), b.env(), b.dataFiles(), p.name());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new IllegalArgumentException("Профиль «" + p.name() + "»: " + e.getMessage());
+        }
+    }
+
+    /** Названия включённых операций каждого профиля скрипта (для формы планирования: интенсивность задаётся по операциям выбранного профиля). */
+    @Transactional(readOnly = true)
+    public Map<Long, List<String>> profileOperationNames(Long scriptId) {
+        Map<Long, List<String>> out = new java.util.LinkedHashMap<>();
+        for (var p : profiles.list(scriptId)) {
+            try {
+                out.put(p.id(), LoadJson.fromJson(p.data()).getOps().stream().filter(LoadForm.OpForm::isEnabled)
+                        .filter(o -> !o.blank()).map(LoadForm.OpForm::getName).toList());
+            } catch (IllegalArgumentException e) {
+                out.put(p.id(), List.of());
+            }
+        }
+        return out;
+    }
+
+    /** Переменные каждого профиля текстом KEY=VALUE (для подстановки в форму планирования). */
+    @Transactional(readOnly = true)
+    public Map<Long, String> profileEnvText(Long scriptId) {
+        Map<Long, String> out = new java.util.LinkedHashMap<>();
+        for (var p : profiles.list(scriptId)) {
+            try {
+                String t = LoadJson.fromJson(p.data()).getEnvText();
+                out.put(p.id(), t == null ? "" : t);
+            } catch (IllegalArgumentException e) {
+                out.put(p.id(), "");
+            }
+        }
+        return out;
     }
 
     /** Интенсивность в оп/с для constant-arrival-rate (rate за timeUnit); для остальных исполнителей плана по оп/с нет. */

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import ru.k6lab.server.audit.AuditService;
 import ru.k6lab.server.generator.Generator;
 import ru.k6lab.server.generator.GeneratorRepository;
+import ru.k6lab.server.load.LoadService;
 import ru.k6lab.server.load.RunPlan;
 import ru.k6lab.server.load.RunPlanner;
 import ru.k6lab.server.run.Run;
@@ -49,9 +50,11 @@ public class ScheduledRunService {
     private final GeneratorRepository generators;
     private final SecretService secrets;
     private final AuditService audit;
+    private final LoadService load;
 
     public ScheduledRunService(ScheduledRunStore store, RunService runs, RunPlanner planner, ScriptService scripts,
-                               GeneratorRepository generators, SecretService secrets, AuditService audit) {
+                               GeneratorRepository generators, SecretService secrets, AuditService audit, LoadService load) {
+        this.load = load;
         this.store = store;
         this.runs = runs;
         this.planner = planner;
@@ -72,6 +75,12 @@ public class ScheduledRunService {
      */
     public long schedule(long scriptId, Instant runAt, List<Long> generatorIds, Integer count, Map<String, String> env,
                          Map<String, Double> intensityPct, String user) {
+        return schedule(scriptId, runAt, generatorIds, count, env, intensityPct, null, user);
+    }
+
+    /** То же с профилем нагрузки: операции, сценарии и переменные берутся из профиля (profileId == null - нагрузка скрипта как сохранена). */
+    public long schedule(long scriptId, Instant runAt, List<Long> generatorIds, Integer count, Map<String, String> env,
+                         Map<String, Double> intensityPct, Long profileId, String user) {
         var script = scripts.get(scriptId);
         if (runAt == null || runAt.isBefore(Instant.now().plus(MIN_LEAD))) {
             throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
@@ -86,7 +95,8 @@ public class ScheduledRunService {
                 throw new IllegalArgumentException("Генератор не найден");
             }
         }
-        RunPlan plan = planner.plan(scriptId, n);
+        LoadService.BuiltLoad built = profileId == null ? null : load.fromProfile(scriptId, profileId);
+        RunPlan plan = planner.plan(scriptId, n, built);
         if (!plan.ok()) {
             throw new IllegalArgumentException("Скрипт нельзя запустить: " + String.join("; ", plan.errors()));
         }
@@ -110,7 +120,8 @@ public class ScheduledRunService {
         if (cleanEnv != null) {
             secrets.requireExist(SecretService.referencedNames(cleanEnv));
         }
-        long id = store.create(scriptId, script.getName(), runAt, user, ids, ids.isEmpty() ? n : null, cleanEnv, pct);
+        long id = store.create(scriptId, script.getName(), runAt, user, ids, ids.isEmpty() ? n : null, cleanEnv, pct, profileId,
+                built == null ? null : built.profileName());
         audit.record("run.schedule", "script", scriptId, Map.of("scheduleId", id, "runAt", runAt.toString()));
         return id;
     }
@@ -189,7 +200,7 @@ public class ScheduledRunService {
             }
             List<RunService.GeneratorSel> sel = chosen.stream().map(g -> new RunService.GeneratorSel(g, 1)).toList();
             Run run = runs.create(new RunService.CreateRequest(item.scriptId(), sel, Run.FailurePolicy.CONTINUE, 120, List.of(),
-                    new RunService.Overrides(item.env(), item.intensity(), item.id(), item.createdBy())));
+                    new RunService.Overrides(item.env(), item.intensity(), item.id(), item.createdBy(), item.profileId(), item.profileName())));
             store.started(item.id(), run.getId());
             log.info("Запуск по расписанию #{}: создан run {}", item.id(), run.getId());
         } catch (IOException | RuntimeException e) {

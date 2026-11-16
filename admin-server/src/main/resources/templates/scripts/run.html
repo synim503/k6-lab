@@ -81,10 +81,19 @@
                 <input class="form-check-input" type="checkbox" name="generatorId" th:id="'sg' + ${g.id}" th:value="${g.id}">
                 <label class="form-check-label" th:for="'sg' + ${g.id}" th:text="${g.name}"></label></div></details>
 
+        <div class="mt-3" th:if="${!loadProfiles.isEmpty()}" id="sch-profile-box" th:attr="data-ops=${profileOpsJson},data-env=${profileEnvJson}">
+            <label class="form-label fw-semibold mb-1" for="sch-profile">Профиль нагрузки</label>
+            <select class="form-select" style="max-width:420px" name="profile" id="sch-profile">
+                <option value="">нагрузка скрипта как сохранена на момент запуска</option>
+                <option th:each="p : ${loadProfiles}" th:value="${p.id}" th:text="${p.name}"></option>
+            </select>
+            <div class="form-text">Профили сохраняются на странице «Нагрузка». С профилем запуск идёт с его операциями, сценариями и переменными; нагрузка скрипта не меняется.</div>
+        </div>
+
         <div class="fw-semibold mt-3 mb-1">Интенсивность по операциям</div>
         <div class="form-text mb-2">Процент от нагрузки, заданной в скрипте: 100 — без изменений, 150 — в полтора раза выше. Умножаются ставки и цели стадий.</div>
         <div class="text-muted small" th:if="${ops.isEmpty()}">Нагрузка не описана.</div>
-        <div class="row g-2">
+        <div class="row g-2" id="sch-ops">
             <div class="col-md-6" th:each="o : ${ops}">
                 <div class="input-group input-group-sm"><span class="input-group-text flex-grow-1 text-start" th:text="${o.name}"></span>
                     <input class="form-control" style="max-width:90px" type="number" min="1" max="10000" step="any" value="100" th:name="'pct_' + ${o.name}" aria-label="Процент интенсивности">
@@ -93,7 +102,7 @@
 
         <div class="fw-semibold mt-3 mb-1">Переменные</div>
         <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-script" value="script" checked>
-            <label class="form-check-label" for="env-script">как в скрипте на момент запуска</label></div>
+            <label class="form-check-label" for="env-script">как в скрипте на момент запуска (или как в выбранном профиле)</label></div>
         <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-custom" value="custom">
             <label class="form-check-label" for="env-custom">свои для этого запуска (полный набор вместо заданных в скрипте)</label></div>
         <textarea class="form-control font-monospace mt-2" rows="5" name="envText" id="sch-env" disabled placeholder="KEY=VALUE, по одной на строку"
@@ -130,6 +139,21 @@
             if (!at) { return; }
             at.addEventListener('input', function () { var d = new Date(at.value); iso.value = isNaN(d) ? '' : d.toISOString(); });
             var env = document.getElementById('sch-env');
+            // выбор профиля: список операций для интенсивности и переменные подставляются из профиля
+            var box = document.getElementById('sch-profile-box');
+            if (box) {
+                var opsBy = JSON.parse(box.dataset.ops || '{}'), envBy = JSON.parse(box.dataset.env || '{}');
+                document.getElementById('sch-profile').addEventListener('change', function (e) {
+                    var key = e.target.value, names = opsBy[key] || [], html = '';
+                    names.forEach(function (n) {
+                        html += '<div class="col-md-6"><div class="input-group input-group-sm"><span class="input-group-text flex-grow-1 text-start">' + n
+                            + '</span><input class="form-control" style="max-width:90px" type="number" min="1" max="10000" step="any" value="100" name="pct_' + n
+                            + '" aria-label="Процент интенсивности"><span class="input-group-text">%</span></div></div>';
+                    });
+                    document.getElementById('sch-ops').innerHTML = html;
+                    if (!document.getElementById('env-custom').checked && envBy[key] !== undefined) { env.value = envBy[key]; }
+                });
+            }
             document.querySelectorAll('input[name=envMode]').forEach(function (r) {
                 r.addEventListener('change', function () { env.disabled = document.getElementById('env-custom').checked ? false : true; });
             });
