@@ -96,7 +96,8 @@ public class RunStartController {
     public String start(@PathVariable Long id, @RequestParam(name = "generatorId", required = false) List<Long> generatorIds,
                         @RequestParam(required = false) Integer count,
                         @RequestParam(name = "httpDebug", required = false) String httpDebug,
-                        @RequestParam(name = "flag", required = false) List<String> flagIds, Model model) {
+                        @RequestParam(name = "flag", required = false) List<String> flagIds,
+                        @RequestParam(name = "profile", required = false) Long profile, Model model) {
         try {
             List<String> ids = new ArrayList<>(flagIds == null ? List.of() : flagIds);
             if ("headers".equals(httpDebug)) {
@@ -124,9 +125,15 @@ public class RunStartController {
             for (Long g : chosen) {
                 sel.add(new RunService.GeneratorSel(g, 1));
             }
+            // запуск с профилем нагрузки: операции, сценарии и переменные берутся из профиля, нагрузка скрипта не меняется
+            RunService.Overrides ov = null;
+            if (profile != null) {
+                String profileName = load.fromProfile(id, profile).profileName();
+                ov = new RunService.Overrides(null, java.util.Map.of(), null, null, profile, profileName);
+            }
             Run run;
             try {
-                run = runs.create(new RunService.CreateRequest(id, sel, Run.FailurePolicy.CONTINUE, 120, flags));
+                run = runs.create(new RunService.CreateRequest(id, sel, Run.FailurePolicy.CONTINUE, 120, flags, ov));
             } catch (IOException e) {
                 throw new IllegalStateException(e.getMessage(), e);
             }

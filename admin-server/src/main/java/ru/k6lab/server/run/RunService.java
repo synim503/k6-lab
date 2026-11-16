@@ -227,12 +227,13 @@ public class RunService {
 
     /** Предупреждения плана плюс пометка, что запуск шёл по расписанию с изменённой нагрузкой или переменными. */
     private static List<String> withScheduleNote(List<String> warnings, Overrides ov) {
-        if (ov == null || ov.scheduleId() == null) {
+        if (ov == null || (ov.scheduleId() == null && ov.profileName() == null)) {
             return warnings;
         }
         List<String> out = new ArrayList<>(warnings);
-        StringBuilder sb = new StringBuilder("Запуск по расписанию (#" + ov.scheduleId() + ")");
-        if (ov.profileName() != null) {
+        StringBuilder sb = new StringBuilder(ov.scheduleId() == null ? "Запуск с профилем нагрузки «" + ov.profileName() + "»"
+                : "Запуск по расписанию (#" + ov.scheduleId() + ")");
+        if (ov.scheduleId() != null && ov.profileName() != null) {
             sb.append(", профиль нагрузки «").append(ov.profileName()).append('»');
         }
         if (ov.scheduledBy() != null) {

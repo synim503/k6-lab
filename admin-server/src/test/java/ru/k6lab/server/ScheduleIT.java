@@ -177,6 +177,32 @@ class ScheduleIT extends AbstractIT {
     }
 
     @Test
+    void immediateRunWithAProfileUsesTheProfilesLoadAndVariables() throws Exception {
+        Script s = scriptWithLoad();
+        long profile = saveProfile(s, "Сразу", 40, "BASE=profile\nZONE=eu");
+        Generator g = generator();
+        // форма запуска показывает выбор профиля
+        mvc.perform(get("/scripts/" + s.getId() + "/run")).andExpect(status().isOk()).andExpect(content().string(containsString("id=\"run-profile\"")));
+        mvc.perform(post("/scripts/" + s.getId() + "/run").with(csrf()).param("generatorId", String.valueOf(g.getId())).param("profile", String.valueOf(profile)))
+                .andExpect(status().is3xxRedirection());
+        Run run = runService.search(s.getId(), null, 1).get(0);
+        assertThat(run.getK6Config().path("scenarios").path("work").path("rate").asLong()).isEqualTo(40);
+        var snap = runService.snapshot(run);
+        assertThat(snap.env()).containsEntry("BASE", "profile").containsEntry("ZONE", "eu");
+        assertThat(snap.warnings()).anyMatch(w -> w.contains("профилем нагрузки «Сразу»"));
+        assertThat(run.getRequest()).containsEntry("loadProfileId", (int) profile);
+        // без профиля - нагрузка скрипта
+        Generator g2 = generator();
+        mvc.perform(post("/scripts/" + s.getId() + "/run").with(csrf()).param("generatorId", String.valueOf(g2.getId())))
+                .andExpect(status().is3xxRedirection());
+        Run plain = runService.search(s.getId(), null, 1).get(0);
+        assertThat(plain.getK6Config().path("scenarios").path("work").path("rate").asLong()).isEqualTo(10);
+        // удалённый профиль - ошибка на форме, а не запуск
+        mvc.perform(post("/scripts/" + s.getId() + "/run").with(csrf()).param("generatorId", String.valueOf(generator().getId())).param("profile", "987654"))
+                .andExpect(status().isOk()).andExpect(content().string(containsString("Профиль нагрузки не найден")));
+    }
+
+    @Test
     void scheduleWithAProfileIsCheckedAtPlanningAndFailsIfTheProfileIsDeleted() throws Exception {
         Script s = scriptWithLoad();
         long profile = saveProfile(s, "Временный", 20, "A=1");
