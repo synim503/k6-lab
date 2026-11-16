@@ -258,4 +258,27 @@ class ScheduleIT extends AbstractIT {
         mvc.perform(post("/schedule/" + item.id() + "/cancel").with(csrf())).andExpect(status().is3xxRedirection());
         assertThat(store.find(item.id()).orElseThrow().status()).isEqualTo(ScheduledRunStore.Status.CANCELLED);
     }
+
+    @Test
+    void timelineShowsGeneratorsAndPendingSchedulesWithTheirDuration() throws Exception {
+        Script s = scriptWithLoad();
+        Generator g = generator();
+        Instant at = Instant.now().plusSeconds(3600);
+        long fixed = schedule.schedule(s.getId(), at, List.of(g.getId()), null, null, Map.of(), "t");
+        long pool = schedule.schedule(s.getId(), at.plusSeconds(7200), List.of(), 1, null, Map.of(), "t");
+        String json = mvc.perform(get("/scripts/" + s.getId() + "/schedule/timeline")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        var root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        assertThat(root.path("durationSec").asInt()).isGreaterThan(0);
+        assertThat(root.path("generators")).anyMatch(n -> n.path("id").asLong() == g.getId());
+        var bars = root.path("bars");
+        var fixedBar = java.util.stream.StreamSupport.stream(bars.spliterator(), false).filter(b -> b.path("scheduleId").asLong() == fixed).findFirst().orElseThrow();
+        assertThat(fixedBar.path("generatorId").asLong()).isEqualTo(g.getId());
+        assertThat(fixedBar.path("to").asLong() - fixedBar.path("from").asLong()).isGreaterThanOrEqualTo(root.path("durationSec").asLong() * 1000);
+        var poolBar = java.util.stream.StreamSupport.stream(bars.spliterator(), false).filter(b -> b.path("scheduleId").asLong() == pool).findFirst().orElseThrow();
+        assertThat(poolBar.path("generatorId").isNull()).isTrue();
+        assertThat(poolBar.path("count").asInt()).isEqualTo(1);
+        // страница запуска содержит таймлайн
+        mvc.perform(get("/scripts/" + s.getId() + "/run")).andExpect(status().isOk()).andExpect(content().string(containsString("id=\"tl\"")));
+    }
 }

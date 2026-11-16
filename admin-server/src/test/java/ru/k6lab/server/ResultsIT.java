@@ -170,6 +170,37 @@ class ResultsIT extends AbstractIT {
         mvc.perform(get("/runs/" + bare.getId() + "/metrics/history")).andExpect(status().isOk()).andExpect(content().string("[]"));
     }
 
+    @Autowired
+    ru.k6lab.server.run.RunEventBroadcaster broadcaster;
+
+    @Test
+    void historyOfARunningTestStartedBeforeTheServerRestartIsCompletedFromPrometheus() throws Exception {
+        connectProm();
+        Instant t0 = Instant.now().minusSeconds(1800);
+        prom.respond(responder(t0, 1.0));
+        Run run = finishedRun(scriptWithLoad(), t0);
+        runService.update(run.getId(), r -> {
+            r.setPlannedStartAt(t0);
+            r.setStatus(RunStatus.RUNNING);
+            r.setFinishedAt(null);
+        });
+        // в памяти только последние минуты: сервер перезапускали посреди теста
+        long memFrom = Instant.now().minusSeconds(300).toEpochMilli();
+        for (int i = 0; i < 3; i++) {
+            broadcaster.publishMetrics(run.getId(), "{\"ts\":" + (memFrom + i * 5000L) + ",\"dataTs\":" + (memFrom + i * 5000L) + ",\"rows\":[]}");
+        }
+        var points = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                mvc.perform(get("/runs/" + run.getId() + "/metrics/history")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(points.size()).as("восстановленное начало + 3 точки из памяти").isGreaterThan(10);
+        assertThat(points.get(0).path("ts").asLong()).isLessThan(t0.toEpochMilli() + 300_000);
+        assertThat(points.get(points.size() - 1).path("ts").asLong()).isEqualTo(memFrom + 10_000);
+        long prev = 0;
+        for (var p : points) {
+            assertThat(p.path("ts").asLong()).isGreaterThan(prev);
+            prev = p.path("ts").asLong();
+        }
+    }
+
     @Test
     void stepVerdictsAreComputedFromPrometheusAndPagesRender() throws Exception {
         connectProm();

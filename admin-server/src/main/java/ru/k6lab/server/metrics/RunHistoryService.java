@@ -81,6 +81,44 @@ public class RunHistoryService {
         return out;
     }
 
+    /**
+     * Полная история для страницы: точки из памяти сервера, а если они начинаются заметно позже старта теста (сервер перезапускали
+     * посреди теста), недостающее начало восстанавливается из Prometheus и стыкуется с ними.
+     */
+    public List<String> complete(Run run, List<String> memory) {
+        if (memory.isEmpty()) {
+            return rebuild(run);
+        }
+        if (run.getPlannedStartAt() == null || !settings.prometheus().configured()) {
+            return memory;
+        }
+        long first = tsOf(memory.get(0));
+        long gapMs = first - run.getPlannedStartAt().toEpochMilli();
+        if (first <= 0 || gapMs <= Math.max(60, 4L * settings.pushIntervalSec()) * 1000) {
+            return memory;
+        }
+        List<String> restored = rebuild(run);
+        List<String> out = new ArrayList<>();
+        for (String s : restored) {
+            if (tsOf(s) < first) {
+                out.add(s);
+            }
+        }
+        if (out.isEmpty()) {
+            return memory;
+        }
+        out.addAll(memory);
+        return out;
+    }
+
+    private static long tsOf(String json) {
+        try {
+            return MAPPER.readTree(json).path("ts").asLong(0);
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
     private List<String> build(Run run, SettingsService.Prometheus p) throws IOException {
         RunSnapshot snap = runService.snapshot(run);
         PromQueries.Names n = monitor.metricNames();

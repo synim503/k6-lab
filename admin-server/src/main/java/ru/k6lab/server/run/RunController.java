@@ -108,13 +108,11 @@ public class RunController {
     @org.springframework.web.bind.annotation.ResponseBody
     public String metricsHistory(@PathVariable Long id) {
         List<String> live = broadcaster.metricsHistory(id);
-        // в памяти истории нет (запуск завершён давно или сервер перезапускался) - график восстанавливается из Prometheus
-        if (live.isEmpty()) {
-            try {
-                live = history.rebuild(runService.get(id));
-            } catch (IllegalArgumentException e) {
-                live = List.of(); // запуска нет: истории тоже
-            }
+        // в памяти истории нет или она неполная (запуск завершён давно, сервер перезапускали посреди теста) - недостающее берётся из Prometheus
+        try {
+            live = history.complete(runService.get(id), live);
+        } catch (IllegalArgumentException e) {
+            // запуска в БД нет: отдаётся то, что есть в памяти (возможно, ничего)
         }
         return "[" + String.join(",", live) + "]";
     }

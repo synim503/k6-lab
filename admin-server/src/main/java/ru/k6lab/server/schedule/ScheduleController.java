@@ -23,9 +23,19 @@ import java.util.Map;
 public class ScheduleController {
 
     private final ScheduledRunService service;
+    private final ScheduleTimelineService timeline;
 
-    public ScheduleController(ScheduledRunService service) {
+    public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline) {
         this.service = service;
+        this.timeline = timeline;
+    }
+
+    /** Занятость генераторов для таймлайна выбора времени: текущие и уже запланированные запуски. */
+    @GetMapping("/scripts/{id}/schedule/timeline")
+    @org.springframework.web.bind.annotation.ResponseBody
+    public Map<String, Object> timeline(@PathVariable Long id, @RequestParam(required = false) Long profile,
+                                        @RequestParam(required = false) Integer count) {
+        return timeline.build(id, profile, count);
     }
 
     @GetMapping("/schedule")
