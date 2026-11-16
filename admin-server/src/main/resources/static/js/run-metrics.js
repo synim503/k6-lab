@@ -263,9 +263,15 @@
         if (tb) {
             var html = '';
             (all ? m.rowsAll : (m.rows || [])).forEach(function (r) {
+                // dropped: штук, доля от плана (цель × период) и интенсивность в ит/с
+                var secs = all ? (m.wholeSec || 0) : (m.windowSec || 0);
+                var dropTxt = fmt(r.dropped, 0);
+                if (r.dropped !== undefined && r.dropped !== null && secs > 0) {
+                    dropTxt += (r.target > 0 ? ' · ' + fmt(r.dropped / (r.target * secs) * 100, 1) + ' %' : '') + ' · ' + fmt(r.dropped / secs, 2) + ' ит/с';
+                }
                 html += '<tr class="' + (r.violation ? 'table-danger' : '') + '"><td>' + esc(r.op) + '</td><td>' + fmt(r.actual) + ' / ' + fmt(r.target) +
                     '</td><td>' + fmt(r.pct, 0) + ' / ' + r.sla + ' мс (p' + r.pctN + ')</td><td>' + fmt(r.err, 2) + ' / ' + r.maxErr +
-                    ' %</td><td>' + fmt(r.dropped, 0) + '</td><td class="small">' + (r.reasons || []).join(', ') + '</td></tr>';
+                    ' %</td><td>' + dropTxt + '</td><td class="small">' + (r.reasons || []).join(', ') + '</td></tr>';
             });
             tb.innerHTML = html || '<tr><td colspan="6" class="text-muted">Нет данных</td></tr>';
         }

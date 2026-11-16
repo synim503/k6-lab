@@ -21,7 +21,7 @@ public final class LoadCriteria {
                 bool(m, "percentileEnabled", d.percentileEnabled()), num(m, "slaMultiplier", d.slaMultiplier()),
                 bool(m, "errorsEnabled", d.errorsEnabled()),
                 bool(m, "rateEnabled", d.rateEnabled()), num(m, "minRatePct", d.minRatePct()),
-                bool(m, "droppedEnabled", d.droppedEnabled()),
+                bool(m, "droppedEnabled", d.droppedEnabled()), num(m, "maxDroppedPct", d.maxDroppedPct()),
                 (int) num(m, "consecutive", d.consecutive()), (int) num(m, "windowSec", d.windowSec()));
     }
 
@@ -33,6 +33,7 @@ public final class LoadCriteria {
         m.put("rateEnabled", c.rateEnabled());
         m.put("minRatePct", c.minRatePct());
         m.put("droppedEnabled", c.droppedEnabled());
+        m.put("maxDroppedPct", c.maxDroppedPct());
         m.put("consecutive", c.consecutive());
         m.put("windowSec", c.windowSec());
         return m;

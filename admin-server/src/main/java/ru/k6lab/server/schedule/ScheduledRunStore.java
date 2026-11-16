@@ -24,7 +24,7 @@ public class ScheduledRunStore {
     /** env == null - переменные как в скрипте на момент запуска; intensity - проценты по операциям (только отличные от 100). */
     public record Item(long id, long scriptId, String scriptName, Instant runAt, Instant createdAt, String createdBy, List<Long> generatorIds,
                        Integer generatorCount, Map<String, String> env, Map<String, Double> intensity, Status status, Long runId,
-                       String error, Instant finishedAt, Long profileId, String profileName) {
+                       String error, Instant finishedAt, Long profileId, String profileName, boolean shiftForward) {
 
         public boolean pending() {
             return status == Status.PENDING;
@@ -51,7 +51,8 @@ public class ScheduledRunStore {
                     read(rs.getString("intensity"), new TypeReference<Map<String, Double>>() { }),
                     Status.valueOf(rs.getString("status")), rs.getObject("run_id") == null ? null : rs.getLong("run_id"),
                     rs.getString("error"), fin == null ? null : fin.toInstant(),
-                    rs.getObject("profile_id") == null ? null : rs.getLong("profile_id"), rs.getString("profile_name"));
+                    rs.getObject("profile_id") == null ? null : rs.getLong("profile_id"), rs.getString("profile_name"),
+                    rs.getBoolean("shift_forward"));
         }
     };
 
@@ -72,10 +73,21 @@ public class ScheduledRunStore {
     }
 
     public long create(long scriptId, String scriptName, Instant runAt, String user, List<Long> generatorIds, Integer generatorCount,
-                       Map<String, String> env, Map<String, Double> intensity, Long profileId, String profileName) {
+                       Map<String, String> env, Map<String, Double> intensity, Long profileId, String profileName, boolean shiftForward) {
         return jdbc.queryForObject("insert into scheduled_run (script_id, script_name, run_at, created_by, generator_ids, generator_count, env, intensity, "
-                        + "profile_id, profile_name) values (?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?::jsonb, ?, ?) returning id", Long.class, scriptId, scriptName,
-                Timestamp.from(runAt), user, json(generatorIds), generatorCount, env == null ? null : json(env), json(intensity), profileId, profileName);
+                        + "profile_id, profile_name, shift_forward) values (?, ?, ?, ?, ?::jsonb, ?, ?::jsonb, ?::jsonb, ?, ?, ?) returning id", Long.class, scriptId, scriptName,
+                Timestamp.from(runAt), user, json(generatorIds), generatorCount, env == null ? null : json(env), json(intensity), profileId, profileName,
+                shiftForward);
+    }
+
+    /** Ожидающие записи, которые можно сдвигать вперёд. */
+    public List<Item> pendingShifting() {
+        return jdbc.query("select * from scheduled_run where status = 'PENDING' and shift_forward order by run_at", rows);
+    }
+
+    /** Переносит ожидающую запись на другое время. */
+    public boolean reschedule(long id, Instant runAt) {
+        return jdbc.update("update scheduled_run set run_at = ? where id = ? and status = 'PENDING'", Timestamp.from(runAt), id) == 1;
     }
 
     public Optional<Item> find(long id) {

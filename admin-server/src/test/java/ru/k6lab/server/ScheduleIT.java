@@ -274,18 +274,52 @@ class ScheduleIT extends AbstractIT {
     @Test
     void notEnoughFreeGeneratorsAndMissedTimesAreMarkedAsErrors() throws Exception {
         Script s = scriptWithLoad();
-        long few = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(), 999, null, Map.of(), "tester");
-        makeDue(few, 1);
+        // свободных не хватает - отказ сразу при планировании, а не в назначенный час
+        assertThatThrownBy(() -> schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(), 999, null, Map.of(), "tester"))
+                .hasMessageContaining("свободно генераторов");
         long late = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(generator().getId()), null, null, Map.of(), "tester");
         makeDue(late, 600);
         schedule.tick();
-        ScheduledRunStore.Item a = store.find(few).orElseThrow();
-        assertThat(a.status()).isEqualTo(ScheduledRunStore.Status.FAILED);
-        assertThat(a.error()).contains("свободных генераторов");
-        assertThat(a.runId()).isNull();
         ScheduledRunStore.Item b = store.find(late).orElseThrow();
         assertThat(b.status()).isEqualTo(ScheduledRunStore.Status.FAILED);
         assertThat(b.error()).contains("Пропущено");
+    }
+
+    @Test
+    void anyFreeGeneratorsAreReservedWhenPlanningAndNotGivenTwice() throws Exception {
+        Script s = scriptWithLoad();
+        generator();
+        generator();
+        Instant at = Instant.now().plus(java.time.Duration.ofDays(30));
+        long online = generators.findAll().stream().filter(g -> g.getStatus() == Generator.Status.ONLINE && !g.isMaintenance()).count();
+        long first = schedule.schedule(s.getId(), at, List.of(), 1, null, Map.of(), "t");
+        var item = store.find(first).orElseThrow();
+        assertThat(item.generatorIds()).hasSize(1).as("генератор закреплён за записью");
+        // все остальные свободные берутся, а ещё один - уже нет
+        long rest = schedule.schedule(s.getId(), at, List.of(), (int) online - 1, null, Map.of(), "t");
+        assertThat(store.find(rest).orElseThrow().generatorIds()).doesNotContainAnyElementsOf(item.generatorIds());
+        assertThatThrownBy(() -> schedule.schedule(s.getId(), at, List.of(), 1, null, Map.of(), "t")).hasMessageContaining("свободно генераторов: 0");
+        // после отмены генератор снова свободен
+        assertThat(schedule.cancel(first, "t")).isTrue();
+        assertThat(schedule.schedule(s.getId(), at, List.of(), 1, null, Map.of(), "t")).isPositive();
+    }
+
+    @Test
+    void shiftingScheduleMovesForwardWhenGeneratorIsFreeAndOthersStayPut() throws Exception {
+        Script s = scriptWithLoad();
+        Generator g = generator();
+        Generator g2 = generator();
+        Instant at = Instant.now().plus(java.time.Duration.ofDays(30));
+        long shifting = schedule.schedule(s.getId(), at, List.of(g.getId()), null, null, Map.of(), null, "t", true);
+        long fixed = schedule.schedule(s.getId(), at, List.of(g2.getId()), null, null, Map.of(), null, "t", false);
+        schedule.tick();
+        var moved = store.find(shifting).orElseThrow();
+        assertThat(moved.runAt()).isBefore(Instant.now().plusSeconds(600));
+        assertThat(moved.status()).isEqualTo(ScheduledRunStore.Status.PENDING);
+        assertThat(store.find(fixed).orElseThrow().runAt().toEpochMilli()).isCloseTo(at.toEpochMilli(), org.assertj.core.api.Assertions.within(1000L));
+        // пауза между запусками на одном генераторе: следующая запись не встаёт встык
+        Instant end = moved.runAt().plusSeconds(60);
+        assertThatThrownBy(() -> schedule.schedule(s.getId(), end, List.of(g.getId()), null, null, Map.of(), "t")).isInstanceOf(RuntimeException.class);
     }
 
     @Test
@@ -351,7 +385,8 @@ class ScheduleIT extends AbstractIT {
         assertThat(fixedBar.path("generatorId").asLong()).isEqualTo(g.getId());
         assertThat(fixedBar.path("to").asLong() - fixedBar.path("from").asLong()).isGreaterThanOrEqualTo(root.path("durationSec").asLong() * 1000);
         var poolBar = java.util.stream.StreamSupport.stream(bars.spliterator(), false).filter(b -> b.path("scheduleId").asLong() == pool).findFirst().orElseThrow();
-        assertThat(poolBar.path("generatorId").isNull()).isTrue();
+        // «любые свободные» бронируются сразу: на полосе конкретный генератор
+        assertThat(poolBar.path("generatorId").isNull()).isFalse();
         assertThat(poolBar.path("count").asInt()).isEqualTo(1);
         // страница запуска содержит таймлайн
         mvc.perform(get("/scripts/" + s.getId() + "/run")).andExpect(status().isOk()).andExpect(content().string(containsString("tl-root")));

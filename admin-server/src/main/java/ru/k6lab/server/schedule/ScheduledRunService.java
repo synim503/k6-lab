@@ -51,10 +51,13 @@ public class ScheduledRunService {
     private final SecretService secrets;
     private final AuditService audit;
     private final LoadService load;
+    private final ScheduleTimelineService timeline;
 
     public ScheduledRunService(ScheduledRunStore store, RunService runs, RunPlanner planner, ScriptService scripts,
-                               GeneratorRepository generators, SecretService secrets, AuditService audit, LoadService load) {
+                               GeneratorRepository generators, SecretService secrets, AuditService audit, LoadService load,
+                               ScheduleTimelineService timeline) {
         this.load = load;
+        this.timeline = timeline;
         this.store = store;
         this.runs = runs;
         this.planner = planner;
@@ -81,6 +84,12 @@ public class ScheduledRunService {
     /** То же с профилем нагрузки: операции, сценарии и переменные берутся из профиля (profileId == null - нагрузка скрипта как сохранена). */
     public long schedule(long scriptId, Instant runAt, List<Long> generatorIds, Integer count, Map<String, String> env,
                          Map<String, Double> intensityPct, Long profileId, String user) {
+        return schedule(scriptId, runAt, generatorIds, count, env, intensityPct, profileId, user, false);
+    }
+
+    /** shiftForward: если генераторы освободились раньше (ранняя остановка предыдущего запуска), запись переносится на более раннее время. */
+    public long schedule(long scriptId, Instant runAt, List<Long> generatorIds, Integer count, Map<String, String> env,
+                         Map<String, Double> intensityPct, Long profileId, String user, boolean shiftForward) {
         var script = scripts.get(scriptId);
         if (runAt == null || runAt.isBefore(Instant.now().plus(MIN_LEAD))) {
             throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
@@ -120,8 +129,15 @@ public class ScheduledRunService {
         if (cleanEnv != null) {
             secrets.requireExist(SecretService.referencedNames(cleanEnv));
         }
-        long id = store.create(scriptId, script.getName(), runAt, user, ids, ids.isEmpty() ? n : null, cleanEnv, pct, profileId,
-                built == null ? null : built.profileName());
+        if (!ids.isEmpty()) {
+            timeline.requireFree(ids, runAt, plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC);
+        }
+        if (ids.isEmpty()) {
+            // «любые свободные»: генераторы бронируются сразу, чтобы другие запуски и записи расписания их не заняли
+            ids = timeline.pickFree(runAt, plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC, n).stream().sorted().toList();
+        }
+        long id = store.create(scriptId, script.getName(), runAt, user, ids, null, cleanEnv, pct, profileId,
+                built == null ? null : built.profileName(), shiftForward);
         audit.record("run.schedule", "script", scriptId, Map.of("scheduleId", id, "runAt", runAt.toString()));
         return id;
     }
@@ -157,10 +173,36 @@ public class ScheduledRunService {
 
     @Scheduled(fixedDelay = 10_000, initialDelay = 20_000)
     public void tick() {
+        shiftQueue();
         for (ScheduledRunStore.Item item : store.due(Instant.now())) {
             if (store.claim(item.id())) {
                 startOne(item);
             }
+        }
+    }
+
+    /** Минимальный выигрыш, ради которого запись переносится (чтобы время не прыгало из-за секунд). */
+    static final Duration MIN_SHIFT = Duration.ofMinutes(1);
+
+    /**
+     * Сдвиг очереди: запись с флагом переносится на самое раннее время, когда её генераторы свободны
+     * (с паузой между запусками), если это раньше назначенного не меньше чем на минуту.
+     */
+    void shiftQueue() {
+        try {
+            for (ScheduledRunStore.Item item : store.pendingShifting()) {
+                Instant from = Instant.now().plus(MIN_LEAD).plusSeconds(30);
+                if (!item.runAt().isAfter(from.plus(MIN_SHIFT))) {
+                    continue;
+                }
+                Instant t = timeline.earliestStart(item, from);
+                if (t != null && Duration.between(t, item.runAt()).compareTo(MIN_SHIFT) >= 0 && store.reschedule(item.id(), t)) {
+                    log.info("Расписание #{}: сдвиг с {} на {} (генераторы освободились раньше)", item.id(), item.runAt(), t);
+                    audit.record("run.schedule_shift", "scheduled_run", item.id(), Map.of("from", item.runAt().toString(), "to", t.toString()));
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("Сдвиг очереди расписания не выполнен: {}", e.toString());
         }
     }
 

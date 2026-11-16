@@ -110,6 +110,9 @@
                 <input class="form-control" type="number" min="1" name="count" id="sch-count" th:value="${defaultCount}">
                 <div class="form-text">Свободные на момент старта. Или отметьте конкретные ниже.</div></div>
         </div>
+        <div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="shift" value="true" id="sch-shift">
+            <label class="form-check-label" for="sch-shift">Сдвигать вперёд, если генераторы освободятся раньше
+                <span class="text-muted small">(например, предыдущий тест остановлен досрочно): запуск начнётся через 5 минут после освобождения. Время станет другим, чем выбрано.</span></label></div>
         <details class="mt-2" th:unless="${generators.isEmpty()}"><summary class="text-muted">Выбрать конкретные серверы (необязательно)</summary>
             <div class="mt-2 form-check" th:each="g : ${generators}">
                 <input class="form-check-input" type="checkbox" name="generatorId" th:id="'sg' + ${g.id}" th:value="${g.id}">

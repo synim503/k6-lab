@@ -16,11 +16,11 @@ public class StopCriteriaEvaluator {
     public record Config(boolean percentileEnabled, double slaMultiplier,
                          boolean errorsEnabled,
                          boolean rateEnabled, double minRatePct,
-                         boolean droppedEnabled,
+                         boolean droppedEnabled, double maxDroppedPct,
                          int consecutive, int windowSec) {
 
         public static Config defaults(boolean enabled) {
-            return new Config(enabled, 1.5, enabled, enabled, 90.0, enabled, 3, 60);
+            return new Config(enabled, 1.5, enabled, enabled, 90.0, enabled, 1.0, 3, 60);
         }
 
         public boolean anyEnabled() {
@@ -73,9 +73,12 @@ public class StopCriteriaEvaluator {
                     stop = r;
                 }
             }
-            if (config.droppedEnabled() && s.dropped() != null) {
-                Optional<String> r = track(s.operation() + "/d", s.dropped() > 0,
-                        s.operation() + ": dropped_iterations > 0 (" + s.dropped().longValue() + ")");
+            if (config.droppedEnabled() && s.dropped() != null && s.targetRate() > 0) {
+                // доля итераций, которые k6 не успел запустить, от плана за окно (цель × окно)
+                double pct = s.dropped() / (s.targetRate() * config.windowSec()) * 100.0;
+                Optional<String> r = track(s.operation() + "/d", pct > config.maxDroppedPct(),
+                        String.format(java.util.Locale.ROOT, "%s: dropped_iterations %.1f%% от плана (> %.1f%%, %d шт)", s.operation(),
+                                pct, config.maxDroppedPct(), s.dropped().longValue()));
                 if (r.isPresent() && stop.isEmpty()) {
                     stop = r;
                 }

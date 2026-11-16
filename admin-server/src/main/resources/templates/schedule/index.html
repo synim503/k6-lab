@@ -9,7 +9,8 @@
         <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts}">К скриптам</a>
     </div>
     <div class="alert alert-secondary small">В назначенное время сервер сам создаёт запуск с заданными переменными и интенсивностью по операциям.
-        Если свободных генераторов в этот момент не хватает, запуск пропускается и помечается ошибкой с причиной (в очередь он не ставится).
+        Генераторы бронируются сразу при планировании: если на это время свободных не хватает, запись не создаётся. Забронированные генераторы
+        видны на таймлайне и недоступны для других записей на это время. Если выбранный генератор к назначенному часу стал недоступен, запуск пропускается и помечается ошибкой.
         Запланировать запуск можно на странице запуска скрипта.</div>
     <div class="card card-body mb-3 tl-root" th:attr="data-url=@{/schedule/timeline},data-run-url=@{/runs/},data-schedule-url=@{/schedule}">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
@@ -38,7 +39,8 @@
         <thead><tr><th>Когда</th><th>Скрипт</th><th>Генераторы</th><th>Интенсивность</th><th>Переменные</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         <tr th:each="s : ${items}">
-            <td><time class="local-time" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time></td>
+            <td><time class="local-time" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time>
+                <div class="small text-muted" th:if="${s.shiftForward and s.pending}" title="Время может сместиться раньше, если генераторы освободятся"><i class="bi bi-skip-forward me-1"></i>сдвигается вперёд</div></td>
             <td><a th:href="@{/scripts/{id}(id=${s.scriptId})}" th:text="${s.scriptName}"></a>
                 <div class="small text-muted" th:if="${s.profileName != null}"><i class="bi bi-collection me-1"></i><span th:text="${s.profileName}"></span></div></td>
             <td th:text="${s.generatorIds.isEmpty()} ? (${s.generatorCount} + ' (свободные)') : (${s.generatorIds.size()} + ' выбранных')"></td>

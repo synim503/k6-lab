@@ -36,6 +36,8 @@ public class LoadForm {
         private boolean rateEnabled;
         private double minRatePct = 90;
         private boolean droppedEnabled;
+        /** Порог dropped_iterations: доля от плана за окно, %. */
+        private double maxDroppedPct = 1;
         private boolean errorsEnabled;
         private boolean percentileEnabled;
         private double slaMultiplier = 1.5;
@@ -46,7 +48,7 @@ public class LoadForm {
 
         public Map<String, Object> toMap() {
             return LoadCriteria.stopToMap(new ru.k6lab.core.analysis.StopCriteriaEvaluator.Config(percentileEnabled, slaMultiplier, errorsEnabled,
-                    rateEnabled, minRatePct, droppedEnabled, consecutive, windowSec));
+                    rateEnabled, minRatePct, droppedEnabled, maxDroppedPct, consecutive, windowSec));
         }
 
         public static StopForm of(Map<String, Object> m) {
@@ -55,6 +57,7 @@ public class LoadForm {
             s.rateEnabled = c.rateEnabled();
             s.minRatePct = c.minRatePct();
             s.droppedEnabled = c.droppedEnabled();
+            s.maxDroppedPct = c.maxDroppedPct();
             s.errorsEnabled = c.errorsEnabled();
             s.percentileEnabled = c.percentileEnabled();
             s.slaMultiplier = c.slaMultiplier();
@@ -66,6 +69,9 @@ public class LoadForm {
         public void validate() {
             if (minRatePct < 1 || minRatePct > 100) {
                 throw new IllegalArgumentException("Автостоп: порог интенсивности от 1 до 100 %");
+            }
+            if (maxDroppedPct < 0 || maxDroppedPct > 100) {
+                throw new IllegalArgumentException("Автостоп: порог dropped от 0 до 100 %");
             }
             if (slaMultiplier < 1 || slaMultiplier > 100) {
                 throw new IllegalArgumentException("Автостоп: множитель SLA от 1 до 100");

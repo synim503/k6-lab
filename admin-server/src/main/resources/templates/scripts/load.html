@@ -112,7 +112,8 @@
                 <label class="form-check-label" for="stop-rate">фактическая интенсивность ниже
                     <input class="form-control form-control-sm d-inline-block mx-1" style="width:76px" type="number" min="1" max="100" step="any" th:field="*{stop.minRatePct}" aria-label="Порог интенсивности, %">% от плановой</label></div>
             <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.droppedEnabled}" id="stop-dropped">
-                <label class="form-check-label" for="stop-dropped">появились <code>dropped_iterations</code> (генератор или стенд не успевает за планом)</label></div>
+                <label class="form-check-label" for="stop-dropped">доля <code>dropped_iterations</code> (итераций, которые k6 не успел запустить) выше
+                    <input class="form-control form-control-sm d-inline-block mx-1" style="width:76px" type="number" min="0" max="100" step="any" th:field="*{stop.maxDroppedPct}" aria-label="Порог dropped, %">% от плана</label></div>
             <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.errorsEnabled}" id="stop-errors">
                 <label class="form-check-label" for="stop-errors">ошибки выше порога операции</label></div>
             <div class="form-check mb-2"><input class="form-check-input" type="checkbox" th:field="*{stop.percentileEnabled}" id="stop-pct">

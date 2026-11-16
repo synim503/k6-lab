@@ -119,13 +119,15 @@ class AnalysisTest {
 
     @Test
     void eachCriterionWorksIndependentlyAndCanBeSwitchedOff() {
-        var cfg = new StopCriteriaEvaluator.Config(false, 1.5, true, true, 90, true, 1, 60);
+        var cfg = new StopCriteriaEvaluator.Config(false, 1.5, true, true, 90, true, 1.0, 1, 60);
         var ev = new StopCriteriaEvaluator(cfg);
         // перцентиль выключен: даже огромное значение не останавливает
         assertThat(ev.evaluate(List.of(sample(99999.0, 0.0, 100.0, 0.0)))).isEmpty();
         assertThat(ev.evaluate(List.of(sample(1.0, 5.0, 100.0, 0.0)))).get().asString().contains("ошибки");
         assertThat(ev.evaluate(List.of(sample(1.0, 0.0, 80.0, 0.0)))).get().asString().contains("интенсивность");
-        assertThat(ev.evaluate(List.of(sample(1.0, 0.0, 100.0, 2.0)))).get().asString().contains("dropped_iterations");
+        // цель 100 оп/с × окно 60 с = 6000 итераций: 30 штук (0,5 %) ниже порога 1 %, 600 (10 %) выше
+        assertThat(ev.evaluate(List.of(sample(1.0, 0.0, 100.0, 30.0)))).isEmpty();
+        assertThat(ev.evaluate(List.of(sample(1.0, 0.0, 100.0, 600.0)))).get().asString().contains("dropped_iterations").contains("10.0%");
         assertThat(new StopCriteriaEvaluator(StopCriteriaEvaluator.Config.defaults(false))
                 .evaluate(List.of(sample(99999.0, 99.0, 1.0, 99.0)))).isEmpty();
         assertThat(StopCriteriaEvaluator.Config.defaults(false).anyEnabled()).isFalse();
@@ -133,7 +135,7 @@ class AnalysisTest {
 
     @Test
     void missingDataDoesNotCountAndResetClearsStreaks() {
-        var ev = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(true, 1.5, true, true, 90, true, 2, 60));
+        var ev = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(true, 1.5, true, true, 90, true, 1.0, 2, 60));
         var bad = List.of(sample(2000.0, 0.0, 100.0, 0.0));
         ev.evaluate(bad);
         assertThat(ev.evaluate(List.of(sample(null, null, null, null)))).isEmpty(); // нет данных: счётчик не сбрасывается
