@@ -190,7 +190,10 @@ class ScheduleIT extends AbstractIT {
         var snap = runService.snapshot(run);
         assertThat(snap.env()).containsEntry("BASE", "profile").containsEntry("ZONE", "eu");
         assertThat(snap.warnings()).anyMatch(w -> w.contains("профилем нагрузки «Сразу»"));
-        assertThat(run.getRequest()).containsEntry("loadProfileId", (int) profile);
+        assertThat(run.getRequest()).containsEntry("loadProfileId", (int) profile).containsEntry("loadProfileName", "Сразу");
+        // профиль виден в шапке страницы запуска
+        mvc.perform(get("/runs/" + run.getId())).andExpect(status().isOk())
+                .andExpect(content().string(containsString("профиль нагрузки:"))).andExpect(content().string(containsString("Сразу")));
         // без профиля - нагрузка скрипта
         Generator g2 = generator();
         mvc.perform(post("/scripts/" + s.getId() + "/run").with(csrf()).param("generatorId", String.valueOf(g2.getId())))
@@ -200,6 +203,52 @@ class ScheduleIT extends AbstractIT {
         // удалённый профиль - ошибка на форме, а не запуск
         mvc.perform(post("/scripts/" + s.getId() + "/run").with(csrf()).param("generatorId", String.valueOf(generator().getId())).param("profile", "987654"))
                 .andExpect(status().isOk()).andExpect(content().string(containsString("Профиль нагрузки не найден")));
+    }
+
+    @Test
+    void autoStopCriteriaAreSavedWithTheLoadAndTakenByRunsAndProfiles() throws Exception {
+        Script s = scriptWithLoad();
+        // по умолчанию автостоп выключен, страница нагрузки его показывает
+        assertThat(load.toForm(s.getId()).getStop().isRateEnabled()).isFalse();
+        mvc.perform(get("/scripts/" + s.getId() + "/load")).andExpect(status().isOk()).andExpect(content().string(containsString("Автостоп")));
+
+        LoadForm f = load.toForm(s.getId());
+        f.getStop().setRateEnabled(true);
+        f.getStop().setMinRatePct(80);
+        f.getStop().setDroppedEnabled(true);
+        f.getStop().setConsecutive(2);
+        load.save(s.getId(), f);
+        var saved = load.toForm(s.getId()).getStop();
+        assertThat(saved.isRateEnabled()).isTrue();
+        assertThat(saved.isDroppedEnabled()).isTrue();
+        assertThat(saved.isErrorsEnabled()).isFalse();
+        assertThat(saved.getMinRatePct()).isEqualTo(80.0);
+        assertThat(saved.getConsecutive()).isEqualTo(2);
+
+        Generator g = generator();
+        Run run = runService.create(new RunService.CreateRequest(s.getId(), List.of(new RunService.GeneratorSel(g.getId(), 1)),
+                Run.FailurePolicy.CONTINUE, 120));
+        assertThat(runService.snapshot(run).stopCriteria()).containsEntry("rateEnabled", true).containsEntry("droppedEnabled", true)
+                .containsEntry("errorsEnabled", false).containsEntry("consecutive", 2);
+
+        // неверные значения отклоняются сразу
+        LoadForm bad = load.toForm(s.getId());
+        bad.getStop().setWindowSec(5);
+        assertThatThrownBy(() -> load.save(s.getId(), bad)).hasMessageContaining("окно");
+
+        // профиль несёт свой автостоп, нагрузка скрипта остаётся со своим
+        mvc.perform(post("/scripts/" + s.getId() + "/load/profile").with(csrf()).param("profileName", "Строгий")
+                .param("ops[0].execFn", "work").param("ops[0].name", "work").param("ops[0].enabled", "true").param("ops[0].executor", "constant-arrival-rate")
+                .param("ops[0].scenarioJson", "{\"rate\":20,\"timeUnit\":\"1s\",\"duration\":\"3m\",\"preAllocatedVUs\":2,\"maxVUs\":10}")
+                .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                .param("ops[0].expectedDurationSec", "0.3").param("holdMinutes", "1").param("levelPct", "100")
+                .param("stop.errorsEnabled", "true").param("stop.consecutive", "5").param("stop.windowSec", "90"))
+                .andExpect(status().isOk());
+        long profile = jdbc.queryForObject("select id from load_profile where script_id = ? and name = ?", Long.class, s.getId(), "Строгий");
+        Run pr = runService.create(new RunService.CreateRequest(s.getId(), List.of(new RunService.GeneratorSel(generator().getId(), 1)),
+                Run.FailurePolicy.CONTINUE, 120, List.of(), new RunService.Overrides(null, Map.of(), null, null, profile, "Строгий")));
+        assertThat(runService.snapshot(pr).stopCriteria()).containsEntry("errorsEnabled", true).containsEntry("rateEnabled", false)
+                .containsEntry("consecutive", 5).containsEntry("windowSec", 90);
     }
 
     @Test
@@ -305,6 +354,16 @@ class ScheduleIT extends AbstractIT {
         assertThat(poolBar.path("generatorId").isNull()).isTrue();
         assertThat(poolBar.path("count").asInt()).isEqualTo(1);
         // страница запуска содержит таймлайн
-        mvc.perform(get("/scripts/" + s.getId() + "/run")).andExpect(status().isOk()).andExpect(content().string(containsString("id=\"tl\"")));
+        mvc.perform(get("/scripts/" + s.getId() + "/run")).andExpect(status().isOk()).andExpect(content().string(containsString("tl-root")));
+        // общий обзор для страницы расписания: те же полосы с подробностями (профиль, кто назначил, интенсивность)
+        mvc.perform(get("/schedule")).andExpect(status().isOk()).andExpect(content().string(containsString("tl-root")));
+        var all = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                mvc.perform(get("/schedule/timeline")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(all.has("durationSec")).isFalse();
+        var fixedAll = java.util.stream.StreamSupport.stream(all.path("bars").spliterator(), false).filter(b -> b.path("scheduleId").asLong() == fixed).findFirst().orElseThrow();
+        assertThat(fixedAll.path("by").asText()).isEqualTo("t");
+        assertThat(fixedAll.path("script").asText()).isEqualTo(s.getName());
+        assertThat(fixedAll.path("intensity").asText()).isEqualTo("как в скрипте");
+        assertThat(fixedAll.path("genNames").asText()).isNotBlank();
     }
 }

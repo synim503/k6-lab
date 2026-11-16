@@ -178,6 +178,9 @@ public class RunService {
         }
         if (ov != null && ov.profileId() != null) {
             request.put("loadProfileId", ov.profileId());
+            if (ov.profileName() != null) {
+                request.put("loadProfileName", ov.profileName());
+            }
         }
         run.setRequest(request);
         if (ov != null && ov.intensityPct() != null) {
@@ -218,7 +221,7 @@ public class RunService {
                 new RunSnapshot.ScriptInfo(script.getId(), script.getName(), v.getId(), v.getNumber(), v.getSha256(), v.getEntrypoint(),
                         v.getSource().name(), v.getCommitHash(), v.getGitBranch()),
                 ov != null && ov.env() != null ? new java.util.LinkedHashMap<>(ov.env()) : built != null ? new java.util.LinkedHashMap<>(built.env()) : script.getEnv(), ops, steps, plan.gracefulStopSec(), plan.gracefulRampDownSec(), data,
-                LoadCriteria.stopToMap(LoadCriteria.stop(script.getStopCriteria())),
+                LoadCriteria.stopToMap(LoadCriteria.stop(built != null && built.stop() != null ? built.stop() : script.getStopCriteria())),
                 LoadCriteria.successToMap(LoadCriteria.success(script.getSuccessCriteria())), false,
                 List.of(), null, withScheduleNote(plan.warnings(), ov),
                 plan.steps().isEmpty() || plan.steps().get(0).rampSec() <= 0 ? null

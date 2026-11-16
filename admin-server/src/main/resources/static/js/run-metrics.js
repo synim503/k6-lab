@@ -35,7 +35,10 @@
                 ctx.fillStyle = PHASES[ph[i]].fill;
                 ctx.fillRect(x0, area.top, Math.max(2, x1 - x0), area.bottom - area.top);
                 ctx.fillStyle = PHASES[ph[i]].text; ctx.font = '600 11px sans-serif';
-                ctx.fillText(PHASES[ph[i]].title, x0 + 6, area.top + 14);
+                // подпись только если помещается в своей полосе: узкая «Инициализация» (секунды) иначе налезает на «Прогрев»
+                if (x1 - x0 >= ctx.measureText(PHASES[ph[i]].title).width + 12) {
+                    ctx.fillText(PHASES[ph[i]].title, x0 + 6, area.top + 14);
+                }
                 ctx.restore();
                 i = j + 1;
             }

@@ -6,38 +6,13 @@
 <th:block layout:fragment="content">
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='run')}"></th:block>
     <h5 class="mb-3">Запуск</h5>
-    <style>
-        .tl { border: 1px solid var(--bs-border-color); border-radius: .375rem; padding: .25rem; font-size: .78rem; user-select: none; touch-action: none; }
-        .tl-body { position: relative; max-height: 340px; overflow-y: auto; cursor: crosshair; }
-        .tl-axis, .tl-row { display: flex; align-items: stretch; height: 24px; }
-        .tl-axis { position: sticky; top: 0; z-index: 3; background: var(--bs-body-bg); }
-        .tl-lbl { width: 140px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 6px 0 4px; color: var(--bs-secondary-color); }
-        .tl-trk { position: relative; flex: 1; min-width: 0; }
-        .tl-row .tl-trk { background: var(--bs-tertiary-bg); border-bottom: 2px solid var(--bs-body-bg); }
-        .tl-row.off .tl-trk { background: repeating-linear-gradient(45deg, var(--bs-tertiary-bg), var(--bs-tertiary-bg) 6px, var(--bs-secondary-bg) 6px, var(--bs-secondary-bg) 12px); }
-        .tl-row.off .tl-lbl { opacity: .55; }
-        .tl-tick { position: absolute; top: 3px; transform: translateX(-50%); font-size: .7rem; color: var(--bs-secondary-color); white-space: nowrap; }
-        .tl-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--bs-border-color); opacity: .7; }
-        .tl-bar { position: absolute; top: 3px; bottom: 3px; border-radius: 3px; color: #fff; padding: 0 4px; overflow: hidden; white-space: nowrap;
-            text-overflow: ellipsis; line-height: 18px; font-size: .7rem; }
-        .tl-bar.run, .tl-key.run { background: #0d6efd; }
-        .tl-bar.scheduled, .tl-key.scheduled { background: repeating-linear-gradient(45deg, #fd7e14, #fd7e14 6px, #e8590c 6px, #e8590c 12px); }
-        .tl-ov { position: absolute; left: 140px; right: 0; top: 24px; pointer-events: none; z-index: 2; }
-        .tl-sel { position: absolute; top: 0; bottom: 0; border: 2px solid; border-radius: 3px; }
-        .tl-sel.ok { background: rgba(25, 135, 84, .18); border-color: #198754; }
-        .tl-sel.bad { background: rgba(220, 53, 69, .18); border-color: #dc3545; }
-        .tl-key { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
-        .tl-key.off { background: repeating-linear-gradient(45deg, var(--bs-tertiary-bg), var(--bs-tertiary-bg) 3px, var(--bs-secondary-bg) 3px, var(--bs-secondary-bg) 6px); border: 1px solid var(--bs-border-color); }
-        .tl-key.sel { background: rgba(25, 135, 84, .25); border: 2px solid #198754; }
-    </style>
-
     <div class="alert alert-danger" th:if="${blockReason != null}" th:text="${blockReason}"></div>
     <div class="alert alert-danger" th:each="e : ${errors}">
         <span th:text="${e}"></span>
         <a class="alert-link ms-1" th:href="@{/scripts/{id}/load(id=${script.id})}">Открыть нагрузку</a></div>
     <div class="alert alert-warning py-2" th:each="w : ${warnings}" th:text="${w}"></div>
 
-    <div class="row g-3"><div class="col-lg-7">
+    <div class="row g-3"><div class="col-lg-7 order-1">
     <form class="card card-body mx-0" th:action="@{/scripts/{id}/run(id=${script.id})}" method="post">
         <div class="text-muted" th:if="${generators.isEmpty()}">Серверов нет — <a th:href="@{/generators/add}">добавьте сервер</a>.</div>
         <div th:unless="${generators.isEmpty()}">
@@ -94,36 +69,38 @@
         <div class="alert alert-danger mt-3 mb-0" th:if="${error}" th:text="${error}"></div>
     </form>
 
-    <form class="card card-body mx-0 mt-3" id="schedule" th:action="@{/scripts/{id}/schedule(id=${script.id})}" method="post">
+    </div><div class="col-12 order-3">
+    <form class="card card-body mx-0" id="schedule" th:action="@{/scripts/{id}/schedule(id=${script.id})}" method="post">
         <h6 class="mb-2"><i class="bi bi-calendar-event me-1"></i>Запланировать запуск</h6>
         <div class="form-text mb-2">Сервер сам запустит скрипт в назначенное время. Если генераторов в этот момент не хватает, запуск пропускается с ошибкой.</div>
         <div class="alert alert-info py-2 small" th:if="${!pendingSchedule.isEmpty()}">Уже запланировано:
             <span th:each="p : ${pendingSchedule}" class="me-2"><time class="local-time" th:attr="datetime=${p.runAt}" th:text="${p.runAt}"></time></span>
             <a th:href="@{/schedule}">все запуски</a></div>
-        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
-            <div class="fw-semibold">Занятость генераторов</div>
-            <div class="d-flex align-items-center gap-2">
-                <div class="btn-group btn-group-sm" role="group" id="tl-range" aria-label="Масштаб шкалы">
-                    <button type="button" class="btn btn-outline-secondary" data-h="3">3 ч</button>
-                    <button type="button" class="btn btn-outline-secondary active" data-h="6">6 ч</button>
-                    <button type="button" class="btn btn-outline-secondary" data-h="12">12 ч</button>
-                    <button type="button" class="btn btn-outline-secondary" data-h="24">24 ч</button>
-                    <button type="button" class="btn btn-outline-secondary" data-h="72">3 дня</button>
+        <div class="tl-root" th:attr="data-url=@{/scripts/{id}/schedule/timeline(id=${script.id})},data-run-url=@{/runs/},data-schedule-url=@{/schedule}">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+                <div class="fw-semibold">Занятость генераторов</div>
+                <div class="d-flex align-items-center gap-2">
+                    <div class="btn-group btn-group-sm tl-range" role="group" aria-label="Масштаб шкалы">
+                        <button type="button" class="btn btn-outline-secondary" data-h="3">3 ч</button>
+                        <button type="button" class="btn btn-outline-secondary active" data-h="6">6 ч</button>
+                        <button type="button" class="btn btn-outline-secondary" data-h="12">12 ч</button>
+                        <button type="button" class="btn btn-outline-secondary" data-h="24">24 ч</button>
+                        <button type="button" class="btn btn-outline-secondary" data-h="72">3 дня</button>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-primary tl-next"><i class="bi bi-search me-1"></i>Ближайшее свободное</button>
                 </div>
-                <button type="button" class="btn btn-sm btn-outline-primary" id="tl-next"><i class="bi bi-search me-1"></i>Ближайшее свободное</button>
             </div>
-        </div>
-        <div class="tl" id="tl" th:attr="data-url=@{/scripts/{id}/schedule/timeline(id=${script.id})}">
-            <div class="tl-body" id="tl-body"><div class="text-muted small p-2">Загрузка…</div></div>
-        </div>
-        <div class="small mt-1" id="tl-note"></div>
-        <div class="d-flex gap-3 flex-wrap text-muted mb-3 mt-1" style="font-size:.75rem">
-            <span><i class="tl-key run"></i>идёт сейчас</span>
-            <span><i class="tl-key scheduled"></i>запланирован</span>
-            <span><i class="tl-key off"></i>генератор не в сети или на обслуживании</span>
-            <span><i class="tl-key sel"></i>ваш запуск (длительность + запас на остановку)</span>
-            <span>Кликните или потяните по шкале, чтобы выбрать время старта.</span>
-        </div>
+            <div class="tl"><div class="tl-body"><div class="text-muted small p-2">Загрузка…</div></div></div>
+            <div class="tl-note small mt-1"></div>
+            <div class="d-flex gap-3 flex-wrap text-muted mb-1 mt-1" style="font-size:.75rem">
+                <span><i class="tl-key run"></i>идёт сейчас</span>
+                <span><i class="tl-key scheduled"></i>запланирован</span>
+                <span><i class="tl-key off"></i>генератор не в сети или на обслуживании</span>
+                <span><i class="tl-key sel"></i>ваш запуск (длительность + запас на остановку)</span>
+                <span><i class="tl-key now"></i>сейчас</span>
+                <span>Кликните или потяните по шкале, чтобы выбрать время старта; клик по полосе — подробности.</span>
+            </div>
+            <div class="tl-detail mb-3"></div>
         <div class="row g-3">
             <div class="col-md-6"><label class="form-label fw-semibold" for="sch-at">Когда</label>
                 <input class="form-control" type="datetime-local" id="sch-at" required>
@@ -168,7 +145,7 @@
         <div class="mt-3"><button class="btn btn-primary" th:disabled="${generators.isEmpty() or !errors.isEmpty()}"><i class="bi bi-calendar-plus me-1"></i>Запланировать</button></div>
     </form>
     </div>
-    <div class="col-lg-5">
+    <div class="col-lg-5 order-2">
         <div class="card"><div class="card-header">Что будет запущено</div>
             <div class="card-body pb-2">
                 <div class="d-flex gap-4 flex-wrap mb-2">
@@ -189,6 +166,7 @@
     </div></div>
 </th:block>
 <th:block layout:fragment="scripts">
+    <script th:src="@{/js/schedule-timeline.js}"></script>
     <script>
         // планирование: локальное время браузера -> ISO (UTC) для сервера; переменные редактируются только в режиме «свои»
         (function () {
@@ -218,200 +196,10 @@
                 var d = new Date(t.getAttribute('datetime')); if (!isNaN(d)) { t.textContent = d.toLocaleString('ru-RU'); }
             });
         })();
-        // таймлайн выбора времени: занятость генераторов текущими и запланированными запусками, выбор старта кликом по шкале
+        // таймлайн выбора времени: занятость генераторов, выбор старта кликом/перетаскиванием (общий скрипт static/js/schedule-timeline.js)
         (function () {
-            var box = document.getElementById('tl'), at = document.getElementById('sch-at');
-            if (!box || !at) { return; }
-            var body = document.getElementById('tl-body'), note = document.getElementById('tl-note');
-            var cnt = document.getElementById('sch-count'), prof = document.getElementById('sch-profile');
-            var ROW = 24, STEP = 5 * 60000, LEAD = 60000;
-            var data = null, hours = 6, w0 = 0, ov = null, dragging = false, timer = null;
-
-            function pad(n) { return n < 10 ? '0' + n : '' + n; }
-            function hm(ms) { var d = new Date(ms); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
-            function dm(ms) { var d = new Date(ms); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + hm(ms); }
-            function localVal(ms) { var d = new Date(ms); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + hm(ms); }
-            function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
-            function chosen() { var d = new Date(at.value); return isNaN(d) ? null : d.getTime(); }
-            function picks() {
-                var ids = [];
-                document.querySelectorAll('#schedule input[name=generatorId]:checked').forEach(function (c) { ids.push(Number(c.value)); });
-                return ids;
-            }
-            function need() {
-                var ids = picks();
-                if (ids.length) { return {ids: ids, n: ids.length}; }
-                var n = parseInt(cnt && cnt.value, 10);
-                return {ids: [], n: n > 0 ? n : 1};
-            }
-            function ceil5(ms) { return Math.ceil(ms / STEP) * STEP; }
-            function overlap(b, s, e) { return b.from < e && b.to > s; }
-
-            // сколько генераторов свободно на весь интервал запуска, начиная с s
-            function freeAt(s) {
-                var e = s + (data.durationSec + data.tailSec) * 1000, nd = need();
-                var free = 0, freeIds = {}, pool = 0, online = 0;
-                data.generators.forEach(function (g) {
-                    if (!g.online) { return; }
-                    online++;
-                    var n = 0;
-                    data.bars.forEach(function (b) { if (b.generatorId === g.id && overlap(b, s, e)) { n++; } });
-                    if (n < g.slots) { free++; freeIds[g.id] = 1; }
-                });
-                data.bars.forEach(function (b) { if (b.generatorId === null && overlap(b, s, e)) { pool += b.count; } });
-                var avail = Math.max(0, free - pool), ok, bad = [];
-                if (nd.ids.length) {
-                    nd.ids.forEach(function (id) { if (!freeIds[id]) { bad.push(id); } });
-                    ok = bad.length === 0;
-                } else {
-                    ok = avail >= nd.n;
-                }
-                return {ok: ok, avail: avail, need: nd.n, online: online, bad: bad, pool: pool, end: e};
-            }
-
-            function render() {
-                if (!data) { return; }
-                var span = hours * 3600000;
-                var w1 = w0 + span, rows = 0, html = '';
-                var stepMs = hours <= 3 ? 1800000 : hours <= 12 ? 3600000 : hours <= 24 ? 10800000 : 43200000;
-                var mid = new Date(w0); mid.setHours(0, 0, 0, 0);
-                var t = mid.getTime() + Math.ceil((w0 - mid.getTime()) / stepMs) * stepMs, ticks = [];
-                for (; t < w1; t += stepMs) { ticks.push(t); }
-                function pct(ms) { return (ms - w0) / span * 100; }
-                var lines = ticks.map(function (x) { return '<div class="tl-line" style="left:' + pct(x) + '%"></div>'; }).join('');
-                html += '<div class="tl-axis"><div class="tl-lbl"></div><div class="tl-trk">'
-                    + ticks.map(function (x) { return '<div class="tl-tick" style="left:' + pct(x) + '%">' + (hours > 24 ? dm(x) : hm(x)) + '</div>'; }).join('')
-                    + '</div></div>';
-                function bar(b, text) {
-                    var l = Math.max(0, pct(b.from)), r = Math.min(100, pct(b.to));
-                    if (r <= 0 || l >= 100 || r <= l) { return ''; }
-                    var title = (b.kind === 'run' ? 'Идёт сейчас' : 'Запланирован') + ': ' + b.label + '\n' + dm(b.from) + ' — ' + dm(b.to);
-                    return '<div class="tl-bar ' + b.kind + '" style="left:' + l + '%;width:' + (r - l) + '%" title="' + esc(title) + '">' + esc(text || b.label) + '</div>';
-                }
-                data.generators.forEach(function (g) {
-                    rows++;
-                    var bars = data.bars.filter(function (b) { return b.generatorId === g.id; }).map(function (b) { return bar(b); }).join('');
-                    html += '<div class="tl-row' + (g.online ? '' : ' off') + '"><div class="tl-lbl" title="' + esc(g.name) + (g.online ? '' : ' (не в сети)') + '">'
-                        + esc(g.name) + '</div><div class="tl-trk">' + lines + bars + '</div></div>';
-                });
-                data.bars.filter(function (b) { return b.generatorId === null; }).forEach(function (b) {
-                    rows++;
-                    html += '<div class="tl-row"><div class="tl-lbl" title="Любые свободные генераторы на момент старта">любые свободные ×' + b.count
-                        + '</div><div class="tl-trk">' + lines + bar(b) + '</div></div>';
-                });
-                if (!data.generators.length) { html += '<div class="text-muted small p-2">Серверов нет.</div>'; }
-                html += '<div class="tl-ov" id="tl-ov" style="height:' + (rows * ROW) + 'px"></div>';
-                var st = body.scrollTop;
-                body.innerHTML = html;
-                body.scrollTop = st;
-                ov = document.getElementById('tl-ov');
-                drawSel();
-            }
-
-            function drawSel() {
-                if (!ov || !data) { return; }
-                var s = chosen(), span = hours * 3600000;
-                ov.innerHTML = '';
-                if (s === null) {
-                    note.className = 'small mt-1 text-muted';
-                    note.textContent = 'Время не выбрано. Длительность запуска: ~' + Math.round(data.durationSec / 60) + ' мин.';
-                    return;
-                }
-                var f = freeAt(s), e = f.end;
-                var l = (s - w0) / span * 100, r = (e - w0) / span * 100;
-                if (r > 0 && l < 100) {
-                    var cl = Math.max(0, l), cr = Math.min(100, r);
-                    ov.innerHTML = '<div class="tl-sel ' + (f.ok ? 'ok' : 'bad') + '" style="left:' + cl + '%;width:' + (cr - cl) + '%"></div>';
-                }
-                var when = dm(s) + ' — ' + hm(e) + ' (~' + Math.round(data.durationSec / 60) + ' мин)';
-                if (f.ok) {
-                    note.className = 'small mt-1 text-success';
-                    note.textContent = '✓ ' + when + ': свободно ' + f.avail + ' из ' + f.online + ' генераторов в сети, нужно ' + f.need + '.';
-                } else {
-                    note.className = 'small mt-1 text-danger';
-                    var names = f.bad.map(function (id) {
-                        var g = data.generators.filter(function (x) { return x.id === id; })[0]; return g ? g.name : '#' + id;
-                    });
-                    note.textContent = '✗ ' + when + ': ' + (f.bad.length ? 'заняты или не в сети: ' + names.join(', ') : 'свободно ' + f.avail + ', нужно ' + f.need)
-                        + '. Запуск будет пропущен — выберите другое время или нажмите «Ближайшее свободное».';
-                }
-                if (r < 0 || l > 100) { note.textContent += ' (выбранное время вне шкалы)'; }
-            }
-
-            function setTime(ms) {
-                at.value = localVal(ms);
-                at.dispatchEvent(new Event('input'));
-                drawSel();
-            }
-
-            function fromEvent(ev) {
-                if (!ov) { return; }
-                var rect = ov.getBoundingClientRect();
-                var frac = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
-                var ms = Math.round((w0 + frac * hours * 3600000) / STEP) * STEP;
-                setTime(Math.max(ms, ceil5(Date.now() + LEAD)));
-            }
-
-            body.addEventListener('pointerdown', function (ev) {
-                if (ev.button !== 0 && ev.pointerType === 'mouse') { return; }
-                dragging = true;
-                try { body.setPointerCapture(ev.pointerId); } catch (x) { /* не критично */ }
-                fromEvent(ev);
-            });
-            body.addEventListener('pointermove', function (ev) { if (dragging) { fromEvent(ev); } });
-            body.addEventListener('pointerup', function () { dragging = false; });
-            body.addEventListener('pointercancel', function () { dragging = false; });
-
-            document.getElementById('tl-range').addEventListener('click', function (ev) {
-                var b = ev.target.closest('button[data-h]');
-                if (!b) { return; }
-                hours = Number(b.dataset.h);
-                document.querySelectorAll('#tl-range button').forEach(function (x) { x.classList.toggle('active', x === b); });
-                render();
-            });
-
-            document.getElementById('tl-next').addEventListener('click', function () {
-                if (!data) { return; }
-                var nd = need(), t = ceil5(Date.now() + LEAD), limit = t + 7 * 86400000;
-                for (; t < limit; t += STEP) {
-                    if (freeAt(t).ok) {
-                        setTime(t);
-                        if (t + (data.durationSec + data.tailSec) * 1000 > w0 + hours * 3600000) {
-                            note.textContent += ' Время за пределами текущей шкалы: выберите больший масштаб.';
-                        }
-                        return;
-                    }
-                }
-                note.className = 'small mt-1 text-danger';
-                note.textContent = 'В ближайшие 7 дней не нашлось времени, когда свободно ' + nd.n + ' генераторов.';
-            });
-
-            function load() {
-                var q = [];
-                if (prof && prof.value) { q.push('profile=' + encodeURIComponent(prof.value)); }
-                if (cnt && cnt.value) { q.push('count=' + encodeURIComponent(cnt.value)); }
-                fetch(box.dataset.url + (q.length ? '?' + q.join('&') : ''), {credentials: 'same-origin'})
-                    .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
-                    .then(function (d) {
-                        data = d;
-                        w0 = Math.floor(d.nowMs / 60000) * 60000;
-                        render();
-                    })
-                    .catch(function () {
-                        note.className = 'small mt-1 text-danger';
-                        note.textContent = 'Не удалось загрузить занятость генераторов.';
-                    });
-            }
-            function reloadSoon() { clearTimeout(timer); timer = setTimeout(load, 400); }
-
-            at.addEventListener('input', drawSel);
-            if (cnt) { cnt.addEventListener('input', function () { drawSel(); reloadSoon(); }); }
-            if (prof) { prof.addEventListener('change', load); }
-            document.querySelectorAll('#schedule input[name=generatorId]').forEach(function (c) {
-                c.addEventListener('change', function () { drawSel(); reloadSoon(); });
-            });
-            load();
-            setInterval(load, 30000);
+            var root = document.querySelector('.tl-root'), at = document.getElementById('sch-at');
+            if (root && at && window.K6Timeline) { K6Timeline.init(root, {at: at, cnt: document.getElementById('sch-count'), prof: document.getElementById('sch-profile')}); }
         })();
         // отмеченные хосты задают количество: поле синхронизируется и блокируется
         (function () {

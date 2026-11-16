@@ -19,10 +19,12 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
- * Данные для графического таймлайна планирования: занятость генераторов текущими запусками и уже запланированными.
+ * Данные для графического таймлайна: занятость генераторов текущими запусками и уже запланированными.
  * Запланированный запуск без выбранных серверов занимает «любые свободные» (count штук) - он показан отдельной полосой.
+ * Каждая полоса несёт подробности (скрипт, профиль, кто назначил, интенсивность, генераторы) для подсказки и панели справа.
  */
 @Service
 public class ScheduleTimelineService {
@@ -50,15 +52,26 @@ public class ScheduleTimelineService {
     }
 
     /**
-     * @param scriptId  скрипт, который планируется
+     * Для формы планирования скрипта: занятость плюс плановая длительность нового запуска.
+     *
      * @param profileId профиль нагрузки (null - нагрузка скрипта)
      * @param count     число генераторов нового запуска (для расчёта его длительности)
      */
     public Map<String, Object> build(long scriptId, Long profileId, Integer count) {
+        Map<String, Object> out = overview();
+        int mine = durationSec(scriptId, profileId, count == null ? scripts.get(scriptId).getGeneratorCount() : Math.max(1, count));
+        out.put("durationSec", mine);
+        return out;
+    }
+
+    /** Для страницы расписания: только занятость, без нового запуска. */
+    public Map<String, Object> overview() {
         long now = Instant.now().toEpochMilli();
         List<Generator> all = generators.findAll().stream().sorted(Comparator.comparing(Generator::getName)).toList();
+        Map<Long, String> names = all.stream().collect(Collectors.toMap(Generator::getId, Generator::getName, (a, b) -> a));
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("nowMs", now);
+        out.put("tailSec", TAIL_SEC);
 
         List<Map<String, Object>> gens = new ArrayList<>();
         for (Generator g : all) {
@@ -77,11 +90,19 @@ public class ScheduleTimelineService {
                     .toEpochMilli();
             long span = ConfigDuration.of(r.getK6Config()).totalSec();
             long to = Math.max(now + 30_000, from + (span + TAIL_SEC) * 1000);
-            for (RunGenerator rg : runs.generatorsOf(r.getId())) {
-                if (rg.getGeneratorId() == null || rg.getStatus().isDone()) {
-                    continue;
-                }
-                bars.add(bar("run", rg.getGeneratorId(), 1, r.getScriptName(), from, to, r.getId(), null));
+            Object pn = r.getRequest() == null ? null : r.getRequest().get("loadProfileName");
+            String profile = pn == null ? null : String.valueOf(pn);
+            List<RunGenerator> rgs = runs.generatorsOf(r.getId()).stream()
+                    .filter(rg -> rg.getGeneratorId() != null && !rg.getStatus().isDone()).toList();
+            String genNames = rgs.stream().map(RunGenerator::getGeneratorName).collect(Collectors.joining(", "));
+            for (RunGenerator rg : rgs) {
+                Map<String, Object> b = bar("run", rg.getGeneratorId(), 1, r.getScriptName(), profile, from, to, r.getId(), null);
+                b.put("by", r.getCreatedBy());
+                b.put("status", r.getStatus().name());
+                b.put("genCount", rgs.size());
+                b.put("genNames", genNames);
+                b.put("scheduled", r.getRequest() != null && r.getRequest().get("scheduleId") != null);
+                bars.add(b);
             }
         }
 
@@ -95,20 +116,25 @@ public class ScheduleTimelineService {
                     k -> durationSec(it.scriptId(), it.profileId(), n));
             long from = it.runAt().toEpochMilli();
             long to = from + (sec + TAIL_SEC) * 1000L;
-            String label = it.scriptName() + (it.profileName() == null ? "" : " · " + it.profileName());
-            if (!it.generatorIds().isEmpty()) {
-                for (Long id : it.generatorIds()) {
-                    bars.add(bar("scheduled", id, 1, label, from, to, null, it.id()));
-                }
-            } else {
-                bars.add(bar("scheduled", null, n, label, from, to, null, it.id()));
+            String intensity = it.intensity().entrySet().stream()
+                    .map(e -> e.getKey() + " " + java.math.BigDecimal.valueOf(e.getValue()).stripTrailingZeros().toPlainString() + "%")
+                    .collect(Collectors.joining(", "));
+            String genNames = it.generatorIds().isEmpty() ? "" : it.generatorIds().stream().map(id -> names.getOrDefault(id, "#" + id))
+                    .collect(Collectors.joining(", "));
+            List<Long> targets = it.generatorIds().isEmpty() ? java.util.Collections.singletonList(null) : it.generatorIds();
+            for (Long id : targets) {
+                Map<String, Object> b = bar("scheduled", id, id == null ? n : 1, it.scriptName(), it.profileName(), from, to, null, it.id());
+                b.put("by", it.createdBy());
+                b.put("status", it.status().name());
+                b.put("genCount", n);
+                b.put("genNames", genNames);
+                b.put("intensity", intensity.isEmpty() ? "как в скрипте" : intensity);
+                b.put("env", it.env() == null ? "как в скрипте" : it.env().isEmpty() ? "без переменных" : String.join(", ", it.env().keySet()));
+                b.put("durationSec", sec);
+                bars.add(b);
             }
         }
         out.put("bars", bars);
-
-        int mine = durationSec(scriptId, profileId, count == null ? scripts.get(scriptId).getGeneratorCount() : Math.max(1, count));
-        out.put("durationSec", mine);
-        out.put("tailSec", TAIL_SEC);
         return out;
     }
 
@@ -123,12 +149,15 @@ public class ScheduleTimelineService {
         }
     }
 
-    private static Map<String, Object> bar(String kind, Long generatorId, int count, String label, long from, long to, Long runId, Long scheduleId) {
+    private static Map<String, Object> bar(String kind, Long generatorId, int count, String script, String profile, long from, long to,
+                                           Long runId, Long scheduleId) {
         Map<String, Object> b = new LinkedHashMap<>();
         b.put("kind", kind);
         b.put("generatorId", generatorId);
         b.put("count", count);
-        b.put("label", label);
+        b.put("script", script);
+        b.put("profile", profile);
+        b.put("label", profile == null || profile.isBlank() ? script : script + " · " + profile);
         b.put("from", from);
         b.put("to", to);
         b.put("runId", runId);

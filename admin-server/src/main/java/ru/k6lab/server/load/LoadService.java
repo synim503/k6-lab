@@ -101,6 +101,7 @@ public class LoadService {
         f.setHoldMinutes(script.getHoldSec() / 60.0);
         f.setGeneratorCount(script.getGeneratorCount());
         f.setEnvText(LoadForm.formatKv(script.getEnv()));
+        f.setStop(LoadForm.StopForm.of(script.getStopCriteria()));
         List<LoadOperation> saved = activeOperations(scriptId);
         for (LoadOperation o : saved) {
             LoadForm.OpForm of = new LoadForm.OpForm();
@@ -176,7 +177,12 @@ public class LoadService {
     public static final int MAX_GENERATORS = 200;
 
     /** Нагрузка, собранная из формы или профиля, но не сохранённая в скрипт: операции, переменные, режимы файлов данных; profileName - у профиля. */
-    public record BuiltLoad(List<LoadOperation> ops, Map<String, String> env, List<ScriptDataFile> dataFiles, String profileName) {
+    public record BuiltLoad(List<LoadOperation> ops, Map<String, String> env, List<ScriptDataFile> dataFiles, String profileName,
+                            Map<String, Object> stop) {
+
+        public BuiltLoad(List<LoadOperation> ops, Map<String, String> env, List<ScriptDataFile> dataFiles, String profileName) {
+            this(ops, env, dataFiles, profileName, null);
+        }
     }
 
     @Transactional
@@ -194,6 +200,7 @@ public class LoadService {
             script.setGeneratorCount(f.getGeneratorCount());
         }
         script.setEnv(b.env());
+        script.setStopCriteria(b.stop() == null ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(b.stop()));
         scriptRepo.save(script);
 
         // режимы тестовых данных: только файлы данных последней версии
@@ -279,7 +286,9 @@ public class LoadService {
             df.setConsumed(d.isConsumed());
             data.add(df);
         }
-        return new BuiltLoad(built, env, data, null);
+        LoadForm.StopForm stopForm = f.getStop() == null ? new LoadForm.StopForm() : f.getStop();
+        stopForm.validate();
+        return new BuiltLoad(built, env, data, null, stopForm.toMap());
     }
 
     /** Нагрузка из сохранённого профиля скрипта для запуска (операции, переменные, файлы данных); ошибка понятным сообщением, если профиль удалён или не проходит проверку. */
@@ -288,7 +297,7 @@ public class LoadService {
         var p = profiles.find(scriptId, profileId).orElseThrow(() -> new IllegalArgumentException("Профиль нагрузки не найден (возможно, удалён)"));
         try {
             BuiltLoad b = build(scriptId, LoadJson.fromJson(p.data()));
-            return new BuiltLoad(b.ops(), b.env(), b.dataFiles(), p.name());
+            return new BuiltLoad(b.ops(), b.env(), b.dataFiles(), p.name(), b.stop());
         } catch (IllegalArgumentException | IllegalStateException e) {
             throw new IllegalArgumentException("Профиль «" + p.name() + "»: " + e.getMessage());
         }

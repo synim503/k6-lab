@@ -21,7 +21,6 @@
                     <option value="" th:text="${profiles.isEmpty()} ? 'профилей пока нет' : 'выберите профиль'"></option>
                     <option th:each="p : ${profiles}" th:value="${p.id}" th:text="${p.name}" th:selected="${loadedProfileId != null and loadedProfileId == p.id}"></option>
                 </select>
-                <button type="button" class="btn btn-sm btn-outline-primary" id="profile-open" th:disabled="${profiles.isEmpty()}">Открыть</button>
                 <button type="submit" class="btn btn-sm btn-outline-danger" id="profile-delete" th:disabled="${profiles.isEmpty()}" formnovalidate
                         th:formaction="@{/scripts/{id}/load/profile/delete(id=${script.id})}">Удалить</button>
                 <span class="vr mx-1"></span>
@@ -30,7 +29,7 @@
                 <button type="submit" class="btn btn-sm btn-outline-success" id="profile-save" formnovalidate
                         th:formaction="@{/scripts/{id}/load/profile(id=${script.id})}"><i class="bi bi-save me-1"></i>Сохранить как профиль</button>
             </div>
-            <div class="form-text mt-1">Профиль — набор операций, сценариев, SLA и переменных целиком. «Открыть» подставляет его в форму, в нагрузку скрипта он попадает
+            <div class="form-text mt-1">Профиль — набор операций, сценариев, SLA и переменных целиком. Выбор профиля в списке сразу подставляет его в форму, в нагрузку скрипта он попадает
                 после «Сохранить нагрузку». Профиль с тем же названием обновляется.</div>
             <input type="hidden" name="profile" id="profile-id">
         </div>
@@ -104,6 +103,27 @@
             <div class="form-text">По одной строке: <code>КЛЮЧ=значение</code>. Секреты: <code>${secret:NAME}</code> подставляются только на агенте и маскируются во всех логах.
                 Доступные секреты: <span th:each="n : ${secretNames}" class="badge text-bg-light me-1" th:text="${n}"></span>
                 <a th:href="@{/secrets}">управление секретами</a></div></div></div>
+
+        <div class="sect-title"><h5>Автостоп</h5><span class="hint">остановить тест, если он пошёл не по плану</span></div>
+        <div class="card"><div class="card-body">
+            <div class="form-text mb-2 mt-0">Сервер проверяет показатели каждые 15 секунд на основном участке (после прогрева). Если условие нарушено подряд указанное число проверок,
+                тест останавливается с причиной в запуске. Для каждой операции считается отдельно. Условия не включены, пока вы их не отметите.</div>
+            <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.rateEnabled}" id="stop-rate">
+                <label class="form-check-label" for="stop-rate">фактическая интенсивность ниже
+                    <input class="form-control form-control-sm d-inline-block mx-1" style="width:76px" type="number" min="1" max="100" step="any" th:field="*{stop.minRatePct}" aria-label="Порог интенсивности, %">% от плановой</label></div>
+            <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.droppedEnabled}" id="stop-dropped">
+                <label class="form-check-label" for="stop-dropped">появились <code>dropped_iterations</code> (генератор или стенд не успевает за планом)</label></div>
+            <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.errorsEnabled}" id="stop-errors">
+                <label class="form-check-label" for="stop-errors">ошибки выше порога операции</label></div>
+            <div class="form-check mb-2"><input class="form-check-input" type="checkbox" th:field="*{stop.percentileEnabled}" id="stop-pct">
+                <label class="form-check-label" for="stop-pct">время ответа выше SLA в
+                    <input class="form-control form-control-sm d-inline-block mx-1" style="width:76px" type="number" min="1" max="100" step="any" th:field="*{stop.slaMultiplier}" aria-label="Множитель SLA">раз(а)</label></div>
+            <div class="d-flex flex-wrap gap-3 align-items-center small">
+                <label>проверок подряд <input class="form-control form-control-sm d-inline-block ms-1" style="width:70px" type="number" min="1" max="100" th:field="*{stop.consecutive}"></label>
+                <label>окно, с <input class="form-control form-control-sm d-inline-block ms-1" style="width:80px" type="number" min="15" max="3600" th:field="*{stop.windowSec}"></label>
+                <span class="text-muted">При значениях по умолчанию остановка срабатывает примерно через минуту после начала нарушения.</span>
+            </div>
+        </div></div>
 
         <div th:if="${!form.dataFiles.isEmpty()}">
             <div class="sect-title"><h5>Тестовые данные</h5><span class="hint">как делить файлы данных между генераторами</span></div>
@@ -694,12 +714,18 @@
     // профили: «Открыть» переходит на форму с профилем, «Удалить» просит подтверждение и передаёт выбранный профиль
     const pick = document.getElementById('profile-pick');
     if (pick) {
-        document.getElementById('profile-open').addEventListener('click', () => {
+        // выбор профиля в списке открывает его сразу
+        const openProfile = () => {
             if (!pick.value) return;
-            if (dirty && !confirm('Несохранённые изменения формы будут заменены профилем. Продолжить?')) return;
+            if (dirty && !confirm('Несохранённые изменения формы будут заменены профилем. Продолжить?')) {
+                pick.value = pick.dataset.current || '';
+                return;
+            }
             dirty = false;
             location.href = location.pathname + '?profile=' + encodeURIComponent(pick.value);
-        });
+        };
+        pick.dataset.current = pick.value;
+        pick.addEventListener('change', openProfile);
         document.getElementById('profile-delete').addEventListener('click', e => {
             const opt = pick.options[pick.selectedIndex];
             if (!pick.value) { e.preventDefault(); return; }

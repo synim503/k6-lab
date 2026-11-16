@@ -15,6 +15,10 @@
         <strong th:text="${snap.script.name}"></strong> v<span th:text="${snap.script.versionNumber}"></span>
         <span th:if="${snap.script.commit}" th:text="'(' + ${#strings.substring(snap.script.commit, 0, 8)} + ')'"></span> ·
         при потере генератора: <span th:text="${run.failurePolicy.title}"></span>
+        <th:block th:if="${run.request != null and run.request.get('loadProfileId') != null}">
+            · профиль нагрузки: <span class="badge text-bg-primary" th:text="${run.request.get('loadProfileName') != null} ? ${run.request.get('loadProfileName')} : ('#' + ${run.request.get('loadProfileId')})"></span></th:block>
+        <th:block th:if="${run.request != null and run.request.get('scheduleId') != null}">
+            · <i class="bi bi-calendar-event"></i> по расписанию</th:block>
         <th:block th:if="${run.request != null and run.request.get('k6Flags') != null}">
             · флаги k6: <span class="badge text-bg-warning" th:each="f : ${run.request.get('k6Flags')}" th:text="${f}"></span></th:block>
     </div>

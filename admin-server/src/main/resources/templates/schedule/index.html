@@ -11,6 +11,28 @@
     <div class="alert alert-secondary small">В назначенное время сервер сам создаёт запуск с заданными переменными и интенсивностью по операциям.
         Если свободных генераторов в этот момент не хватает, запуск пропускается и помечается ошибкой с причиной (в очередь он не ставится).
         Запланировать запуск можно на странице запуска скрипта.</div>
+    <div class="card card-body mb-3 tl-root" th:attr="data-url=@{/schedule/timeline},data-run-url=@{/runs/},data-schedule-url=@{/schedule}">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+            <h6 class="m-0"><i class="bi bi-bar-chart-steps me-1"></i>Занятость генераторов</h6>
+            <div class="btn-group btn-group-sm tl-range" role="group" aria-label="Масштаб шкалы">
+                <button type="button" class="btn btn-outline-secondary" data-h="3">3 ч</button>
+                <button type="button" class="btn btn-outline-secondary" data-h="6">6 ч</button>
+                <button type="button" class="btn btn-outline-secondary active" data-h="12">12 ч</button>
+                <button type="button" class="btn btn-outline-secondary" data-h="24">24 ч</button>
+                <button type="button" class="btn btn-outline-secondary" data-h="72">3 дня</button>
+            </div>
+        </div>
+        <div class="tl"><div class="tl-body"><div class="text-muted small p-2">Загрузка…</div></div></div>
+        <div class="tl-note small mt-1"></div>
+        <div class="d-flex gap-3 flex-wrap text-muted mt-1" style="font-size:.75rem">
+            <span><i class="tl-key run"></i>идёт сейчас</span>
+            <span><i class="tl-key scheduled"></i>запланирован</span>
+            <span><i class="tl-key off"></i>генератор не в сети или на обслуживании</span>
+            <span><i class="tl-key now"></i>сейчас</span>
+            <span>Запись «любые свободные ×N» займёт N свободных генераторов на момент старта. Клик по полосе — подробности: скрипт, профиль, интенсивность, переменные, кто назначил.</span>
+        </div>
+        <div class="tl-detail"></div>
+    </div>
     <div class="card empty-state" th:if="${items.isEmpty()}"><i class="bi bi-calendar-x"></i>Запланированных запусков нет.</div>
     <div class="card" th:unless="${items.isEmpty()}"><table class="table table-sm align-middle mb-0">
         <thead><tr><th>Когда</th><th>Скрипт</th><th>Генераторы</th><th>Интенсивность</th><th>Переменные</th><th>Статус</th><th></th></tr></thead>
@@ -42,6 +64,13 @@
         </tr></tbody></table></div>
 </th:block>
 <th:block layout:fragment="scripts">
+    <script th:src="@{/js/schedule-timeline.js}"></script>
+    <script>
+        (function () {
+            var root = document.querySelector('.tl-root');
+            if (root && window.K6Timeline) { K6Timeline.init(root, {hours: 12}); }
+        })();
+    </script>
     <script>
         // время показывается в часовом поясе браузера
         document.querySelectorAll('time.local-time').forEach(function (t) {

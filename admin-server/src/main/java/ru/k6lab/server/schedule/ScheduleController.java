@@ -38,6 +38,13 @@ public class ScheduleController {
         return timeline.build(id, profile, count);
     }
 
+    /** Занятость генераторов для таймлайна страницы расписания. */
+    @GetMapping("/schedule/timeline")
+    @org.springframework.web.bind.annotation.ResponseBody
+    public Map<String, Object> overview() {
+        return timeline.overview();
+    }
+
     @GetMapping("/schedule")
     public String list(Model model) {
         model.addAttribute("items", service.recent());

@@ -27,6 +27,57 @@ public class LoadForm {
     private Integer generatorCount;
     private String envText;
     private List<DataForm> dataFiles = new ArrayList<>();
+    /** Автостоп: сервер останавливает тест, когда он «пошёл по одному месту» (интенсивность ниже цели, dropped, ошибки, время ответа). */
+    private StopForm stop = new StopForm();
+
+    @Getter
+    @Setter
+    public static class StopForm {
+        private boolean rateEnabled;
+        private double minRatePct = 90;
+        private boolean droppedEnabled;
+        private boolean errorsEnabled;
+        private boolean percentileEnabled;
+        private double slaMultiplier = 1.5;
+        /** Сколько проверок подряд (раз в 15 с) должно нарушаться, чтобы остановить тест. */
+        private int consecutive = 4;
+        /** Окно, по которому считаются показатели, секунд. */
+        private int windowSec = 60;
+
+        public Map<String, Object> toMap() {
+            return LoadCriteria.stopToMap(new ru.k6lab.core.analysis.StopCriteriaEvaluator.Config(percentileEnabled, slaMultiplier, errorsEnabled,
+                    rateEnabled, minRatePct, droppedEnabled, consecutive, windowSec));
+        }
+
+        public static StopForm of(Map<String, Object> m) {
+            var c = LoadCriteria.stop(m);
+            StopForm s = new StopForm();
+            s.rateEnabled = c.rateEnabled();
+            s.minRatePct = c.minRatePct();
+            s.droppedEnabled = c.droppedEnabled();
+            s.errorsEnabled = c.errorsEnabled();
+            s.percentileEnabled = c.percentileEnabled();
+            s.slaMultiplier = c.slaMultiplier();
+            s.consecutive = m == null || !m.containsKey("consecutive") ? 4 : c.consecutive();
+            s.windowSec = c.windowSec();
+            return s;
+        }
+
+        public void validate() {
+            if (minRatePct < 1 || minRatePct > 100) {
+                throw new IllegalArgumentException("Автостоп: порог интенсивности от 1 до 100 %");
+            }
+            if (slaMultiplier < 1 || slaMultiplier > 100) {
+                throw new IllegalArgumentException("Автостоп: множитель SLA от 1 до 100");
+            }
+            if (consecutive < 1 || consecutive > 100) {
+                throw new IllegalArgumentException("Автостоп: число проверок подряд от 1 до 100");
+            }
+            if (windowSec < 15 || windowSec > 3600) {
+                throw new IllegalArgumentException("Автостоп: окно от 15 до 3600 секунд");
+            }
+        }
+    }
 
     @Getter
     @Setter
