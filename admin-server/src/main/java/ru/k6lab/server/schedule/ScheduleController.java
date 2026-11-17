@@ -57,18 +57,20 @@ public class ScheduleController {
      * процент интенсивности - полями pct_ИМЯОПЕРАЦИИ, переменные - текстом KEY=VALUE, если выбран режим «свои».
      */
     @PostMapping("/scripts/{id}/schedule")
-    public String create(@PathVariable Long id, @RequestParam String runAt, @RequestParam(required = false) Integer count,
+    public String create(@PathVariable Long id, @RequestParam(required = false) String runAt, @RequestParam(required = false) Integer count,
                          @RequestParam(name = "generatorId", required = false) List<Long> generatorIds,
                          @RequestParam(required = false) Long profile,
                          @RequestParam(defaultValue = "false") boolean shift,
                          @RequestParam(defaultValue = "script") String envMode, @RequestParam(required = false) String envText,
                          @RequestParam Map<String, String> all, Principal user, RedirectAttributes ra) {
         try {
-            Instant at;
-            try {
-                at = Instant.parse(runAt.trim());
-            } catch (DateTimeParseException e) {
-                throw new IllegalArgumentException("Укажите дату и время запуска");
+            Instant at = null; // время не выбрано - ближайшее доступное
+            if (runAt != null && !runAt.isBlank()) {
+                try {
+                    at = Instant.parse(runAt.trim());
+                } catch (DateTimeParseException e) {
+                    throw new IllegalArgumentException("Укажите дату и время запуска");
+                }
             }
             Map<String, String> env = "custom".equals(envMode) ? LoadForm.parseKv(envText) : null;
             Map<String, Double> pct = new LinkedHashMap<>();

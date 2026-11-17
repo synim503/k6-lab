@@ -86,6 +86,12 @@ public class LoadController {
         return "scripts/load";
     }
 
+    /** Страница после POST сохранения профиля живёт по этому адресу: обновление или закладка по GET ведут обратно на форму нагрузки. */
+    @GetMapping("/load/profile")
+    public String profileBack(@PathVariable Long id, @RequestParam(required = false) Long profile) {
+        return "redirect:/scripts/" + id + "/load" + (profile == null ? "" : "?profile=" + profile);
+    }
+
     /**
      * Сохраняет текущее состояние формы (в том числе ещё не сохранённое в нагрузку) как профиль; профиль с таким именем обновляется.
      * Форма остаётся открытой со всеми правками. Полная проверка нагрузки выполняется, когда профиль сохраняют в нагрузку скрипта.

@@ -91,7 +91,7 @@ public class ScheduledRunService {
     public long schedule(long scriptId, Instant runAt, List<Long> generatorIds, Integer count, Map<String, String> env,
                          Map<String, Double> intensityPct, Long profileId, String user, boolean shiftForward) {
         var script = scripts.get(scriptId);
-        if (runAt == null || runAt.isBefore(Instant.now().plus(MIN_LEAD))) {
+        if (runAt != null && runAt.isBefore(Instant.now().plus(MIN_LEAD))) {
             throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
         }
         List<Long> ids = generatorIds == null ? List.of() : generatorIds.stream().distinct().sorted().toList();
@@ -129,12 +129,16 @@ public class ScheduledRunService {
         if (cleanEnv != null) {
             secrets.requireExist(SecretService.referencedNames(cleanEnv));
         }
-        if (!ids.isEmpty()) {
-            timeline.requireFree(ids, runAt, plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC);
+        int dur = plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC;
+        if (runAt == null) {
+            // время не выбрано: самое раннее, когда нужные генераторы свободны на весь запуск
+            runAt = timeline.earliestSlot(ids, n, dur, Instant.now().plus(MIN_LEAD).plusSeconds(30));
         }
-        if (ids.isEmpty()) {
+        if (!ids.isEmpty()) {
+            timeline.requireFree(ids, runAt, dur);
+        } else {
             // «любые свободные»: генераторы бронируются сразу, чтобы другие запуски и записи расписания их не заняли
-            ids = timeline.pickFree(runAt, plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC, n).stream().sorted().toList();
+            ids = timeline.pickFree(runAt, dur, n).stream().sorted().toList();
         }
         long id = store.create(scriptId, script.getName(), runAt, user, ids, null, cleanEnv, pct, profileId,
                 built == null ? null : built.profileName(), shiftForward);

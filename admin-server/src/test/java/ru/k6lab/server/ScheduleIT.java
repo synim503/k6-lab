@@ -323,6 +323,21 @@ class ScheduleIT extends AbstractIT {
     }
 
     @Test
+    void withoutATimeTheNearestAvailableSlotIsTaken() throws Exception {
+        Script s = scriptWithLoad();
+        Generator g = generator();
+        long a = schedule.schedule(s.getId(), null, List.of(g.getId()), null, null, Map.of(), "t");
+        var first = store.find(a).orElseThrow();
+        assertThat(first.runAt()).isBefore(Instant.now().plusSeconds(180)).isAfter(Instant.now().plusSeconds(30));
+        // тот же генератор: следующая запись без времени встаёт после первой с паузой
+        long b = schedule.schedule(s.getId(), null, List.of(g.getId()), null, null, Map.of(), "t");
+        assertThat(store.find(b).orElseThrow().runAt()).isAfter(first.runAt().plusSeconds(300));
+        // форма без времени тоже работает
+        mvc.perform(post("/scripts/" + s.getId() + "/schedule").with(csrf()).param("runAt", "").param("generatorId", String.valueOf(g.getId())))
+                .andExpect(status().is3xxRedirection()).andExpect(redirectedUrl("/schedule"));
+    }
+
+    @Test
     void pendingScheduleCanBeCancelledAndNeverStarts() throws Exception {
         Script s = scriptWithLoad();
         long id = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(generator().getId()), null, null, Map.of(), "tester");

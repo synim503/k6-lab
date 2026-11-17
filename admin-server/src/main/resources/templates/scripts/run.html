@@ -103,9 +103,9 @@
             <div class="tl-detail mb-3"></div>
         <div class="row g-3">
             <div class="col-md-6"><label class="form-label fw-semibold" for="sch-at">Когда</label>
-                <input class="form-control" type="datetime-local" id="sch-at" required>
+                <input class="form-control" type="datetime-local" id="sch-at">
                 <input type="hidden" name="runAt" id="sch-iso">
-                <div class="form-text">Время вашего часового пояса.</div></div>
+                <div class="form-text">Время вашего часового пояса. Если не выбрано — запуск встанет на ближайшее время, когда свободны нужные генераторы.</div></div>
             <div class="col-md-6"><label class="form-label fw-semibold" for="sch-count">Генераторов</label>
                 <input class="form-control" type="number" min="1" name="count" id="sch-count" th:value="${defaultCount}">
                 <div class="form-text">Свободные на момент старта. Или отметьте конкретные ниже.</div></div>

@@ -145,6 +145,39 @@ public class ScheduleTimelineService {
      *
      * @throws IllegalArgumentException если свободных генераторов на это время не хватает
      */
+    /**
+     * Самое раннее время не раньше notBefore, когда свободны выбранные генераторы (ids) или любые n штук (ids пусты) на весь запуск с паузой.
+     * Кандидаты: сам notBefore и моменты окончания существующих полос (с учётом паузы).
+     */
+    public Instant earliestSlot(List<Long> ids, int n, int durationSec, Instant notBefore) {
+        List<Long> cand = new ArrayList<>();
+        cand.add(notBefore.toEpochMilli());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> bars = (List<Map<String, Object>>) overview().get("bars");
+        for (Map<String, Object> b : bars) {
+            long to = (long) b.get("to");
+            if (to > notBefore.toEpochMilli()) {
+                cand.add(to);
+            }
+        }
+        cand.sort(Long::compare);
+        for (long t : cand) {
+            Instant at = Instant.ofEpochMilli(t);
+            try {
+                if (ids.isEmpty()) {
+                    pickFree(at, durationSec, n);
+                } else {
+                    requireFree(ids, at, durationSec);
+                }
+                return at;
+            } catch (IllegalArgumentException busy) {
+                // этот момент занят - пробуем следующий
+            }
+        }
+        throw new IllegalArgumentException("Не удалось найти время, когда свободно нужное число генераторов (нужно " + (ids.isEmpty() ? n : ids.size())
+                + "): проверьте, что генераторы в сети");
+    }
+
     public void requireFree(List<Long> ids, Instant runAt, int durationSec) {
         long start = runAt.toEpochMilli();
         long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;

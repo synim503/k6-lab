@@ -166,13 +166,19 @@
         applySelection();
     }
 
+    // подпись точки: дата и время (тест может идти через полночь, а старые запуски открывают спустя дни)
+    function stamp(ms) {
+        var d = new Date(ms), p = function (n) { return (n < 10 ? '0' : '') + n; };
+        return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + d.toTimeString().substring(0, 8);
+    }
+
     var lastTs = 0;   // точки не дублируются: live-поток при подключении повторяет последнюю
     function onMetrics(m, quiet) {
         if (m.phase === 'init') {
             // k6 ещё инициализирует скрипт: данных нет, но время идёт - точка с пустыми значениями и меткой «Инициализация»
             if (m.ts && m.ts <= lastTs) { return; }
             lastTs = m.ts || lastTs;
-            var ti = new Date(m.ts).toTimeString().substring(0, 8);
+            var ti = stamp(m.ts);
             pre.push({ label: ti, phase: 'init' });
             Object.keys(charts).forEach(function (k) {
                 var c = charts[k];
@@ -188,7 +194,7 @@
         if (m.ts && m.ts <= lastTs) { return; }
         lastTs = m.ts || lastTs;
         // подпись по времени самих данных: метрики приходят с задержкой, и «сейчас» на графике было бы неверным
-        var t = new Date(m.dataTs || m.ts).toTimeString().substring(0, 8);
+        var t = stamp(m.dataTs || m.ts);
         var any = Object.keys(charts)[0];
         var idx = any ? charts[any].data.labels.length : pre.length;
         // вкладка «Системные метрики»: VU по всем генераторам (задействованные и максимум) и dropped по операциям
@@ -300,7 +306,7 @@
             if (points.length) {
                 Object.keys(charts).forEach(function (k) { charts[k].update('none'); renderLegend(charts[k]); });
                 var last = points[points.length - 1];
-                renderCurrent(last, new Date(last.dataTs || last.ts).toTimeString().substring(0, 8));
+                renderCurrent(last, stamp(last.dataTs || last.ts));
             }
             startLive();
         });

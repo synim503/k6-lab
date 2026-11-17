@@ -97,6 +97,18 @@ class LoadProfileIT extends AbstractIT {
     }
 
     @Test
+    void openingAProfileWorksFromThePageShownAfterSavingOne() throws Exception {
+        Script s = script();
+        // после сохранения страница показывается по адресу POST: список профилей должен вести на форму нагрузки, а не на /load/profile
+        mvc.perform(saveProfile(s, "Пик", 40, "A=1")).andExpect(status().isOk())
+                .andExpect(content().string(containsString("data-open-url=\"/scripts/" + s.getId() + "/load\"")));
+        long id = profiles.list(s.getId()).get(0).id();
+        // старая ссылка вида /load/profile?profile=N больше не даёт 405
+        mvc.perform(get("/scripts/" + s.getId() + "/load/profile").param("profile", String.valueOf(id)))
+                .andExpect(status().is3xxRedirection()).andExpect(redirectedUrl("/scripts/" + s.getId() + "/load?profile=" + id));
+    }
+
+    @Test
     void invalidProfileIsRejectedAndOneCanBeDeleted() throws Exception {
         Script s = script();
         mvc.perform(saveProfile(s, "  ", 40, "A=1")).andExpect(status().isOk()).andExpect(content().string(containsString("Название профиля")));
