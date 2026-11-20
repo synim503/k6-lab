@@ -47,10 +47,12 @@ public class LoadController {
     private final K6Tool k6;
     private final AdminHelper helper;
     private final LoadProfileStore profiles;
+    private final ProfileImportService profileImport;
 
     public LoadController(ScriptService scripts, LoadService load, RunPlanner planner, SecretService secrets, K6Tool k6,
-                          AdminHelper helper, LoadProfileStore profiles) {
+                          AdminHelper helper, LoadProfileStore profiles, ProfileImportService profileImport) {
         this.profiles = profiles;
+        this.profileImport = profileImport;
         this.scripts = scripts;
         this.load = load;
         this.planner = planner;
@@ -120,6 +122,31 @@ public class LoadController {
         }
         fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()));
         return "scripts/load";
+    }
+
+    /** Импорт профилей скрипта из JSON (текстом или файлом); всё или ничего. */
+    @PostMapping("/load/profiles/import")
+    public String importProfiles(@PathVariable Long id, @RequestParam(required = false) String json,
+                                 @RequestParam(required = false) org.springframework.web.multipart.MultipartFile file,
+                                 java.security.Principal user, RedirectAttributes ra) {
+        try {
+            String body = file != null && !file.isEmpty() ? new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8) : json;
+            var done = profileImport.importProfiles(id, body, user == null ? "system" : user.getName());
+            long upd = done.stream().filter(ProfileImportService.Imported::updated).count();
+            ra.addFlashAttribute("info", "Импортировано профилей: " + done.size() + (upd > 0 ? " (обновлено существующих: " + upd + ")" : ""));
+        } catch (IllegalArgumentException | IllegalStateException | java.io.IOException e) {
+            ra.addFlashAttribute("error", "Импорт профилей не выполнен, ничего не сохранено. " + e.getMessage());
+            ra.addFlashAttribute("importJson", json);
+        }
+        return "redirect:/scripts/" + id + "/load";
+    }
+
+    /** Профили скрипта в формате импорта. */
+    @GetMapping(value = "/load/profiles.json", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> exportProfiles(@PathVariable Long id) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("profiles-" + id + ".json").build().toString())
+                .body(profileImport.export(id));
     }
 
     @PostMapping("/load/profile/delete")

@@ -39,6 +39,14 @@ public class CustomChartService {
         return promql.replace("{run_id}", String.valueOf(runId)).replace("{range}", rangeSec + "s");
     }
 
+    /** Подпись ряда: задана легенда - она (если запрос вернул несколько рядов, к ней добавляются метки); иначе метки результата. */
+    static String seriesName(String legend, String labels, int seriesInQuery) {
+        if (legend == null || legend.isBlank()) {
+            return labels;
+        }
+        return seriesInQuery > 1 && !"значение".equals(labels) ? legend.strip() + " " + labels : legend.strip();
+    }
+
     public List<ChartRenderer.Img> charts(Run run) {
         List<ChartTemplateStore.Template> templates = store.enabled(run.getScriptId());
         Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
@@ -54,17 +62,35 @@ public class CustomChartService {
         List<ChartRenderer.Img> out = new ArrayList<>();
         long t0 = start.getEpochSecond();
         for (ChartTemplateStore.Template t : templates) {
+            Map<String, List<RunSeriesService.Pt>> series = new LinkedHashMap<>();
+            // несколько запросов на одном графике: сбой одного не отменяет остальные
+            for (ChartTemplateStore.Query q : t.queries()) {
+                if (q.promql() == null || q.promql().isBlank()) {
+                    continue;
+                }
+                try {
+                    Map<String, List<PrometheusClient.Point>> raw = prom.rangeAll(p, expand(q.promql(), run.getId(), window), start, end, step);
+                    raw.forEach((name, pts) -> {
+                        String label = seriesName(q.legend(), name, raw.size());
+                        List<RunSeriesService.Pt> mapped = pts.stream().filter(pt -> pt.ts() >= t0)
+                                .map(pt -> new RunSeriesService.Pt((pt.ts() - t0) / 60.0, pt.value())).toList();
+                        String key = label;
+                        for (int i = 2; series.containsKey(key); i++) {
+                            key = label + " #" + i;
+                        }
+                        series.put(key, mapped);
+                    });
+                } catch (IOException | RuntimeException e) {
+                    log.warn("Run {}: запрос свого графика «{}» не выполнен: {}", run.getId(), t.name(), e.toString());
+                }
+            }
             try {
-                Map<String, List<PrometheusClient.Point>> raw = prom.rangeAll(p, expand(t.promql(), run.getId(), window), start, end, step);
-                Map<String, List<RunSeriesService.Pt>> series = new LinkedHashMap<>();
-                raw.forEach((name, pts) -> series.put(name, pts.stream().filter(pt -> pt.ts() >= t0)
-                        .map(pt -> new RunSeriesService.Pt((pt.ts() - t0) / 60.0, pt.value())).toList()));
                 ChartRenderer.Img img = ChartRenderer.custom(t.name(), t.unit(), series);
                 if (img != null) {
                     out.add(img);
                 }
-            } catch (IOException | RuntimeException | LinkageError e) {
-                log.warn("Run {}: свой график «{}» не построен: {}", run.getId(), t.name(), e.toString());
+            } catch (RuntimeException | LinkageError e) {
+                log.warn("Run {}: свой график «{}» не нарисован: {}", run.getId(), t.name(), e.toString());
             }
         }
         return out;

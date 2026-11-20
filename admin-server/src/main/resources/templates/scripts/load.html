@@ -12,6 +12,22 @@
         <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
         Они убраны из списка и не участвуют в запуске. Если вернуть версию с этими функциями (откат), их нагрузка вернётся, пока вы не сохранили форму.</div>
 
+    <details class="card card-body mb-3 py-2" th:attr="open=${importJson != null} ? 'open'">
+        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-upload me-1"></i>Импорт и экспорт профилей (JSON)</summary>
+        <form class="mt-2" th:action="@{/scripts/{id}/load/profiles/import(id=${script.id})}" method="post" enctype="multipart/form-data">
+            <div class="small text-muted mb-2">Массив профилей или <code>{"profiles": [...]}</code>. Каждый профиль — <code>name</code> и конфиг нагрузки в том же формате,
+                что «JSON» ниже (<code>operations</code>, <code>env</code>, <code>stop</code>…). Профиль с существующим именем обновляется. Все профили проверяются как при запуске;
+                если хотя бы один не проходит, не сохраняется ни один. Образец формата — кнопка «Скачать профили».</div>
+            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="6" th:text="${importJson}"
+                      placeholder="[{&quot;name&quot;: &quot;Максимум&quot;, &quot;operations&quot;: [{&quot;name&quot;: &quot;work&quot;, &quot;execFn&quot;: &quot;work&quot;, &quot;ratePerSec&quot;: 40}], &quot;env&quot;: {&quot;BASE&quot;: &quot;x&quot;}}]"></textarea>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
+                <button class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать</button>
+                <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}/load/profiles.json(id=${script.id})}"><i class="bi bi-download me-1"></i>Скачать профили</a>
+            </div>
+        </form>
+    </details>
+
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post" th:attr="data-from-profile=${formDirty != null ? 'true' : null}">
 
         <div class="card card-body mb-3 py-2" id="profiles-box">

@@ -7,22 +7,29 @@
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='charts')}"></th:block>
 
     <div class="alert alert-secondary small">Свои графики попадают в HTML, PDF и Word-отчёт каждого запуска этого скрипта, после стандартных.
-        Вставьте PromQL и дайте графику имя. В запросе можно использовать <code>{run_id}</code> (метка <code>test_run_id</code> запуска)
+        Вставьте PromQL и дайте графику имя; запросов на одном графике может быть несколько (например, CPU и память сервера на одной шкале). В запросе можно использовать <code>{run_id}</code> (метка <code>test_run_id</code> запуска)
         и <code>{range}</code> (окно для rate/increase, например 45s). Ряды рисуются по меткам результата, в легенде — Last / Mean / Max.
         Пример: <code>sum(rate(http_reqs_total{test_run_id="{run_id}"}[{range}]))</code></div>
 
-    <form class="card card-body mb-3" th:action="@{/scripts/{id}/charts(id=${script.id})}" method="post">
-        <div class="row g-2">
+    <form class="card card-body mb-3" th:action="@{/scripts/{id}/charts(id=${script.id})}" method="post" id="chart-form">
+        <div class="row g-2 mb-1">
             <div class="col-md-4"><label class="form-label small mb-1">Имя графика</label>
                 <input class="form-control form-control-sm" name="name" maxlength="120" required placeholder="Например: CPU сервера приложений"></div>
             <div class="col-md-2"><label class="form-label small mb-1">Единицы</label>
                 <input class="form-control form-control-sm" name="unit" maxlength="32" placeholder="%, мс, оп/с"></div>
-            <div class="col-12"><label class="form-label small mb-1">PromQL</label>
-                <textarea class="form-control form-control-sm font-monospace" name="promql" rows="3" required
-                          placeholder='100 - avg(rate(node_cpu_seconds_total{mode="idle"}[{range}])) * 100'></textarea></div>
         </div>
-        <div class="mt-2"><button class="btn btn-primary btn-sm"><i class="bi bi-plus-lg me-1"></i>Добавить график</button>
-            <span class="text-muted small ms-2">График с уже существующим именем будет обновлён.</span></div>
+        <label class="form-label small mb-1">Запросы на графике (каждый рисуется своими линиями)</label>
+        <div id="chart-queries">
+            <div class="row g-2 mb-2 chart-q">
+                <div class="col-md-8"><textarea class="form-control form-control-sm font-monospace" name="promql" rows="2" required
+                          placeholder="100 - avg(rate(node_cpu_seconds_total{mode=&quot;idle&quot;}[{range}])) * 100"></textarea></div>
+                <div class="col-md-3"><input class="form-control form-control-sm" name="legend" maxlength="120" placeholder="Подпись в легенде (необязательно)"></div>
+                <div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger chart-q-del" title="Убрать запрос">&times;</button></div>
+            </div>
+        </div>
+        <div class="mt-1"><button type="button" class="btn btn-outline-secondary btn-sm" id="chart-q-add"><i class="bi bi-plus-lg me-1"></i>Ещё запрос</button>
+            <button class="btn btn-primary btn-sm ms-2"><i class="bi bi-save me-1"></i>Сохранить график</button>
+            <span class="text-muted small ms-2">График с уже существующим именем будет обновлён. Если запрос возвращает несколько рядов, к подписи добавляются их метки.</span></div>
     </form>
 
     <div class="card empty-state" th:if="${templates.isEmpty()}"><i class="bi bi-graph-up"></i>Своих графиков пока нет.</div>
@@ -30,7 +37,8 @@
         <thead><tr><th>Имя</th><th>Единицы</th><th>PromQL</th><th></th></tr></thead>
         <tbody><tr th:each="t : ${templates}" th:classappend="${!t.enabled} ? 'text-muted'">
             <td th:text="${t.name}"></td><td th:text="${t.unit}"></td>
-            <td><code class="small" style="white-space:pre-wrap" th:text="${t.promql}"></code></td>
+            <td><div th:each="q : ${t.queries}" class="mb-1"><code class="small" style="white-space:pre-wrap" th:text="${q.promql}"></code>
+                <span class="badge text-bg-light border ms-1" th:if="${!#strings.isEmpty(q.legend)}" th:text="${q.legend}"></span></div></td>
             <td class="text-end text-nowrap">
                 <form class="d-inline" th:action="@{/scripts/{id}/charts/{tid}/toggle(id=${script.id},tid=${t.id})}" method="post">
                     <input type="hidden" name="enabled" th:value="${!t.enabled}">
@@ -38,6 +46,24 @@
                 <form class="d-inline" th:action="@{/scripts/{id}/charts/{tid}/delete(id=${script.id},tid=${t.id})}" method="post"
                       onsubmit="return confirm('Удалить график?')"><button class="btn btn-sm btn-outline-danger">Удалить</button></form></td>
         </tr></tbody></table></div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script>
+        (function () {
+            var box = document.getElementById('chart-queries');
+            document.getElementById('chart-q-add').addEventListener('click', function () {
+                var row = box.querySelector('.chart-q').cloneNode(true);
+                row.querySelectorAll('textarea,input').forEach(function (e) { e.value = ''; });
+                box.appendChild(row);
+            });
+            box.addEventListener('click', function (e) {
+                var b = e.target.closest('.chart-q-del');
+                if (!b) { return; }
+                if (box.querySelectorAll('.chart-q').length > 1) { b.closest('.chart-q').remove(); }
+                else { box.querySelectorAll('textarea,input').forEach(function (x) { x.value = ''; }); }
+            });
+        })();
+    </script>
 </th:block>
 </body>
 </html>

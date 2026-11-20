@@ -12,6 +12,20 @@
         Генераторы бронируются сразу при планировании: если на это время свободных не хватает, запись не создаётся. Забронированные генераторы
         видны на таймлайне и недоступны для других записей на это время. Если выбранный генератор к назначенному часу стал недоступен, запуск пропускается и помечается ошибкой.
         Запланировать запуск можно на странице запуска скрипта.</div>
+    <details class="card card-body mb-3" th:attr="open=${importProfilesJson != null} ? 'open'">
+        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-collection me-1"></i>Импорт профилей нагрузки (JSON)</summary>
+        <form class="mt-2" th:action="@{/schedule/import-profiles}" method="post" enctype="multipart/form-data">
+            <div class="small text-muted mb-2">Профили для разных скриптов одним файлом: массив или <code>{"profiles": [...]}</code>. У каждого — <code>script</code> (имя скрипта),
+                <code>name</code> (имя профиля) и конфиг нагрузки (<code>operations</code>, <code>env</code>, <code>stop</code>…). Профили с существующим именем обновляются.
+                После этого тесты с этими профилями можно импортировать ниже. Образец формата — «Скачать профили» на странице «Нагрузка» скрипта (там без <code>script</code>).</div>
+            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="6" th:text="${importProfilesJson}"
+                      placeholder="[{&quot;script&quot;: &quot;Платежи&quot;, &quot;name&quot;: &quot;Максимум&quot;, &quot;operations&quot;: [{&quot;name&quot;: &quot;pay&quot;, &quot;execFn&quot;: &quot;pay&quot;, &quot;ratePerSec&quot;: 40}]}]"></textarea>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
+                <button class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать профили</button>
+            </div>
+        </form>
+    </details>
     <details class="card card-body mb-3" th:attr="open=${importJson != null} ? 'open'">
         <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-upload me-1"></i>Импорт списка тестов (JSON)</summary>
         <form class="mt-2" th:action="@{/schedule/import}" method="post" enctype="multipart/form-data">

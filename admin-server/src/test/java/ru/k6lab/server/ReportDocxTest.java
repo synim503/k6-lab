@@ -46,4 +46,22 @@ class ReportDocxTest {
         javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 .parse(new ByteArrayInputStream(document.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
+
+    @Test
+    void legendNamesOfSeveralQueries() {
+        // подпись задана и ряд один - она; рядов несколько - подпись и метки; подписи нет - метки
+        org.assertj.core.api.Assertions.assertThat(callName("память", "значение", 1)).isEqualTo("память");
+        org.assertj.core.api.Assertions.assertThat(callName("CPU", "instance=a", 2)).isEqualTo("CPU instance=a");
+        org.assertj.core.api.Assertions.assertThat(callName("", "instance=a", 2)).isEqualTo("instance=a");
+    }
+
+    private static String callName(String legend, String labels, int n) {
+        try {
+            var m = ru.k6lab.server.result.CustomChartService.class.getDeclaredMethod("seriesName", String.class, String.class, int.class);
+            m.setAccessible(true);
+            return (String) m.invoke(null, legend, labels, n);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
 }

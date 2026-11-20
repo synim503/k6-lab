@@ -25,11 +25,30 @@ public class ScheduleController {
     private final ScheduledRunService service;
     private final ScheduleTimelineService timeline;
     private final ScheduleImportService importer;
+    private final ru.k6lab.server.load.ProfileImportService profileImport;
 
-    public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline, ScheduleImportService importer) {
+    public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline, ScheduleImportService importer,
+                              ru.k6lab.server.load.ProfileImportService profileImport) {
         this.service = service;
         this.timeline = timeline;
         this.importer = importer;
+        this.profileImport = profileImport;
+    }
+
+    /** Общий импорт профилей разных скриптов: у каждого профиля в JSON указан script. */
+    @PostMapping("/schedule/import-profiles")
+    public String importProfiles(@RequestParam(required = false) String json,
+                                 @RequestParam(required = false) org.springframework.web.multipart.MultipartFile file,
+                                 Principal user, RedirectAttributes ra) {
+        try {
+            String body = file != null && !file.isEmpty() ? new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8) : json;
+            var done = profileImport.importProfiles(null, body, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", "Импортировано профилей: " + done.size());
+        } catch (IllegalArgumentException | IllegalStateException | java.io.IOException e) {
+            ra.addFlashAttribute("error", "Импорт профилей не выполнен, ничего не сохранено. " + e.getMessage());
+            ra.addFlashAttribute("importProfilesJson", json);
+        }
+        return "redirect:/schedule";
     }
 
     /** Импорт списка тестов (скрипт + профиль) из JSON: текстом или файлом; все тесты планируются сразу. */
