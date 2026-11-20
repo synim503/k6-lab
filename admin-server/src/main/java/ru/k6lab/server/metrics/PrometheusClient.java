@@ -124,23 +124,32 @@ public class PrometheusClient {
         return out;
     }
 
-    /**
-     * Все ряды произвольного запроса: имя ряда - его метки без __name__ («k=v, k2=v2»), у ряда без меток - «значение».
-     * Для своих графиков отчёта, где PromQL вводит пользователь.
-     */
-    public Map<String, List<Point>> rangeAll(SettingsService.Prometheus p, String promql, Instant start, Instant end, int stepSec)
-            throws IOException {
+    /** Ряд произвольного запроса: метки (без __name__) и точки. */
+    public record Series(Map<String, String> labels, List<Point> points) {
+
+        /** Метки одной строкой «k=v, k2=v2»; у ряда без меток - «значение». */
+        public String labelText() {
+            if (labels.isEmpty()) {
+                return "значение";
+            }
+            List<String> parts = new ArrayList<>();
+            labels.forEach((k, v) -> parts.add(k + "=" + v));
+            return String.join(", ", parts);
+        }
+    }
+
+    /** Все ряды произвольного запроса с метками. Для своих графиков отчёта, где PromQL вводит пользователь. */
+    public List<Series> rangeSeries(SettingsService.Prometheus p, String promql, Instant start, Instant end, int stepSec) throws IOException {
         JsonNode data = call(p, "/api/v1/query_range", "query=" + enc(promql) + "&start=" + start.getEpochSecond() + "&end="
                 + end.getEpochSecond() + "&step=" + Math.max(1, stepSec));
-        Map<String, List<Point>> out = new LinkedHashMap<>();
+        List<Series> out = new ArrayList<>();
         for (JsonNode r : data.path("result")) {
-            List<String> parts = new ArrayList<>();
+            Map<String, String> labels = new LinkedHashMap<>();
             r.path("metric").fields().forEachRemaining(e -> {
                 if (!"__name__".equals(e.getKey())) {
-                    parts.add(e.getKey() + "=" + e.getValue().asText());
+                    labels.put(e.getKey(), e.getValue().asText());
                 }
             });
-            String name = parts.isEmpty() ? "значение" : String.join(", ", parts);
             List<Point> pts = new ArrayList<>();
             for (JsonNode v : r.path("values")) {
                 double d = parse(v.path(1).asText());
@@ -149,7 +158,7 @@ public class PrometheusClient {
                 }
             }
             if (!pts.isEmpty()) {
-                out.put(out.containsKey(name) ? name + " #" + (out.size() + 1) : name, pts);
+                out.add(new Series(labels, pts));
             }
         }
         return out;

@@ -41,6 +41,8 @@ class ProfileImportIT extends AbstractIT {
     @Autowired
     ChartTemplateStore charts;
     @Autowired
+    ru.k6lab.server.result.ChartVariableStore vars;
+    @Autowired
     MockMvc mvc;
 
     private static final String SCRIPT = """
@@ -140,5 +142,34 @@ class ProfileImportIT extends AbstractIT {
         assertThat(charts.list(s.getId()).get(1).queries()).hasSize(1);
         assertThat(charts.list(s.getId()).get(1).queries().get(0).promql()).isEqualTo(q1);
         mvc.perform(get("/scripts/" + s.getId() + "/charts")).andExpect(status().isOk()).andExpect(content().string(containsString("Ещё запрос")));
+
+        // импорт дашборда Grafana: панель -> график с запросами и подписью; повторный импорт обновляет, а не дублирует
+        String dash = "{\"title\": \"d\", \"panels\": [{\"type\": \"timeseries\", \"title\": \"Задержка SUT\", "
+                + "\"fieldConfig\": {\"defaults\": {\"unit\": \"ms\"}}, \"targets\": [{\"expr\": \"avg(app_latency{run=\\\"$__all\\\",a=\\\"b\\\"})\", \"legendFormat\": \"avg\"}]}]}";
+        for (int i = 0; i < 2; i++) {
+            mvc.perform(post("/scripts/" + s.getId() + "/charts/import-grafana").with(csrf()).param("json", dash)).andExpect(status().is3xxRedirection());
+        }
+        var imported = charts.list(s.getId()).stream().filter(c -> c.name().equals("Задержка SUT")).toList();
+        assertThat(imported).hasSize(1);
+        assertThat(imported.get(0).unit()).isEqualTo("мс");
+        assertThat(imported.get(0).queries().get(0).legend()).isEqualTo("avg");
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/import-grafana").with(csrf()).param("json", "{\"x\": 1}")).andExpect(status().is3xxRedirection());
+        assertThat(charts.list(s.getId())).hasSize(3);
+
+        // переменные дашборда стали переменными скрипта; правка руками не затирается повторным импортом
+        String dash2 = "{\"title\": \"d\", \"templating\": {\"list\": [{\"name\": \"inst\", \"current\": {\"value\": \"app-1\"}}]}, \"panels\": ["
+                + "{\"type\": \"timeseries\", \"title\": \"С переменной\", \"targets\": [{\"expr\": \"up{instance=\\\"$inst\\\"}\"}]}]}";
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/import-grafana").with(csrf()).param("json", dash2)).andExpect(status().is3xxRedirection());
+        assertThat(vars.map(s.getId())).containsEntry("inst", "app-1");
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/variables").with(csrf()).param("name", "$inst").param("value", "app-2|app-3"))
+                .andExpect(status().is3xxRedirection());
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/import-grafana").with(csrf()).param("json", dash2)).andExpect(status().is3xxRedirection());
+        assertThat(vars.map(s.getId())).containsEntry("inst", "app-2|app-3");
+        mvc.perform(get("/scripts/" + s.getId() + "/charts")).andExpect(status().isOk()).andExpect(content().string(containsString("app-2|app-3")));
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/variables").with(csrf()).param("name", "1bad").param("value", "x")).andExpect(status().is3xxRedirection());
+        assertThat(vars.map(s.getId())).doesNotContainKey("1bad");
+        long vid = vars.list(s.getId()).get(0).id();
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/variables/" + vid + "/delete").with(csrf())).andExpect(status().is3xxRedirection());
+        assertThat(vars.map(s.getId())).isEmpty();
     }
 }

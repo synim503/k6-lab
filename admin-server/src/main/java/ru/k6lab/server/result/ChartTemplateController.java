@@ -17,16 +17,49 @@ public class ChartTemplateController {
 
     private final ScriptService scripts;
     private final ChartTemplateStore store;
+    private final GrafanaDashboardImport grafana;
+    private final ChartVariableStore variables;
 
-    public ChartTemplateController(ScriptService scripts, ChartTemplateStore store) {
+    public ChartTemplateController(ScriptService scripts, ChartTemplateStore store, GrafanaDashboardImport grafana, ChartVariableStore variables) {
+        this.variables = variables;
         this.scripts = scripts;
         this.store = store;
+        this.grafana = grafana;
+    }
+
+    /** Импорт дашборда Grafana: каждая панель с запросами Prometheus становится графиком отчёта (график с тем же именем обновляется). */
+    @PostMapping("/scripts/{id}/charts/import-grafana")
+    public String importGrafana(@PathVariable Long id, @RequestParam(required = false) String json,
+                                @RequestParam(required = false) org.springframework.web.multipart.MultipartFile file,
+                                Principal user, RedirectAttributes ra) {
+        scripts.get(id);
+        try {
+            String body = file != null && !file.isEmpty() ? new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8) : json;
+            var res = grafana.parse(body);
+            if (res.panels().isEmpty()) {
+                throw new IllegalArgumentException("В дашборде нет панелей с запросами Prometheus"
+                        + (res.skipped().isEmpty() ? "" : ". Пропущено: " + String.join("; ", res.skipped())));
+            }
+            String by = user == null ? "system" : user.getName();
+            res.panels().forEach(pn -> store.save(id, pn.name(), pn.queries(), pn.unit().isEmpty() ? null : pn.unit(), by));
+            // переменные дашборда становятся переменными скрипта; уже заданные (и правленые руками) не затираются
+            long newVars = res.variables().entrySet().stream().filter(e -> variables.addIfAbsent(id, e.getKey(), e.getValue())).count();
+            ra.addFlashAttribute("info", "Из дашборда" + (res.dashboardTitle().isBlank() ? "" : " «" + res.dashboardTitle() + "»")
+                    + " создано графиков: " + res.panels().size()
+                    + (res.variables().isEmpty() ? "" : ", переменных: " + res.variables().size() + (newVars < res.variables().size() ? " (новых " + newVars + ", остальные уже были)" : ""))
+                    + (res.skipped().isEmpty() ? "" : ". Пропущено панелей: " + res.skipped().size() + " (" + String.join("; ", res.skipped()) + ")"));
+        } catch (IllegalArgumentException | java.io.IOException e) {
+            ra.addFlashAttribute("error", "Импорт дашборда не выполнен. " + e.getMessage());
+            ra.addFlashAttribute("grafanaJson", json);
+        }
+        return "redirect:/scripts/" + id + "/charts";
     }
 
     @GetMapping("/scripts/{id}/charts")
     public String page(@PathVariable Long id, Model model) {
         model.addAttribute("script", scripts.get(id));
         model.addAttribute("templates", store.list(id));
+        model.addAttribute("variables", variables.list(id));
         return "scripts/charts";
     }
 
@@ -57,6 +90,28 @@ public class ChartTemplateController {
             store.save(id, n, queries, unit == null || unit.isBlank() ? null : unit.strip(), user == null ? "system" : user.getName());
             ra.addFlashAttribute("info", "График «" + n + "» сохранён (запросов: " + queries.size() + ")");
         }
+        return "redirect:/scripts/" + id + "/charts";
+    }
+
+    private static final java.util.regex.Pattern VAR_NAME = java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,63}");
+
+    /** Задать или изменить значение переменной графиков. */
+    @PostMapping("/scripts/{id}/charts/variables")
+    public String saveVariable(@PathVariable Long id, @RequestParam String name, @RequestParam(defaultValue = "") String value, RedirectAttributes ra) {
+        scripts.get(id);
+        String n = name == null ? "" : name.strip().replaceFirst("^\\$", "");
+        if (!VAR_NAME.matcher(n).matches()) {
+            ra.addFlashAttribute("error", "Имя переменной: буквы, цифры и _, не с цифры (в запросе пишется $имя)");
+        } else {
+            variables.save(id, n, value == null ? "" : value.strip());
+            ra.addFlashAttribute("info", "Переменная $" + n + " сохранена");
+        }
+        return "redirect:/scripts/" + id + "/charts";
+    }
+
+    @PostMapping("/scripts/{id}/charts/variables/{vid}/delete")
+    public String deleteVariable(@PathVariable Long id, @PathVariable Long vid) {
+        variables.delete(id, vid);
         return "redirect:/scripts/" + id + "/charts";
     }
 

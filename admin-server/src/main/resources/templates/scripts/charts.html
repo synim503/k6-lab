@@ -11,6 +11,23 @@
         и <code>{range}</code> (окно для rate/increase, например 45s). Ряды рисуются по меткам результата, в легенде — Last / Mean / Max.
         Пример: <code>sum(rate(http_reqs_total{test_run_id="{run_id}"}[{range}]))</code></div>
 
+    <details class="card card-body mb-3" th:attr="open=${grafanaJson != null} ? 'open'">
+        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-upload me-1"></i>Импорт дашборда Grafana</summary>
+        <form class="mt-2" th:action="@{/scripts/{id}/charts/import-grafana(id=${script.id})}" method="post" enctype="multipart/form-data">
+            <div class="small text-muted mb-2">Вставьте JSON дашборда (Grafana → Dashboard settings → JSON Model или Share → Export → Export as JSON) или загрузите файл.
+                Каждая панель с запросами Prometheus станет графиком отчёта: имя — заголовок панели, подписи — <code>legendFormat</code>, единицы — из панели.
+                Переменная теста (<code>$testid</code>, <code>$run_id</code>…) заменяется на <code>{run_id}</code>, <code>$__interval</code> / <code>$__rate_interval</code> — на <code>{range}</code>,
+                остальные переменные — их текущим значением (для «All» — любое). Панели не с Prometheus и без запросов пропускаются; график с тем же именем обновляется.
+                Если ваш дашборд привязывает запуск по другой метке, поправьте запросы ниже в списке.</div>
+            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="6" th:text="${grafanaJson}" placeholder='{"title": "k6", "panels": [...]}'></textarea>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
+                <button class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать панели</button>
+                <span class="text-muted small">Если выбран файл, используется он, а не текст.</span>
+            </div>
+        </form>
+    </details>
+
     <form class="card card-body mb-3" th:action="@{/scripts/{id}/charts(id=${script.id})}" method="post" id="chart-form">
         <div class="row g-2 mb-1">
             <div class="col-md-4"><label class="form-label small mb-1">Имя графика</label>
@@ -31,6 +48,29 @@
             <button class="btn btn-primary btn-sm ms-2"><i class="bi bi-save me-1"></i>Сохранить график</button>
             <span class="text-muted small ms-2">График с уже существующим именем будет обновлён. Если запрос возвращает несколько рядов, к подписи добавляются их метки.</span></div>
     </form>
+
+    <div class="card card-body mb-3">
+        <h6 class="mb-1"><i class="bi bi-braces me-1"></i>Переменные</h6>
+        <div class="small text-muted mb-2">В запросах переменная пишется как <code>$имя</code> или <code>${имя}</code>, при построении отчёта подставляется её значение.
+            Значение <code>{run_id}</code> — идентификатор запуска (так задаётся переменная теста), <code>{range}</code> — окно для rate/increase. Для регулярных выражений
+            (<code>=~</code>) значение может быть <code>.*</code> или <code>a|b</code>. При импорте дашборда Grafana сюда попадают его переменные; уже заданные не перезаписываются.</div>
+        <table class="table table-sm align-middle mb-2" th:unless="${variables.isEmpty()}">
+            <thead><tr><th style="width:220px">Переменная</th><th>Значение</th><th></th></tr></thead>
+            <tbody><tr th:each="v : ${variables}">
+                <td><code th:text="'$' + ${v.name}"></code></td>
+                <td><form class="d-flex gap-2 m-0" th:action="@{/scripts/{id}/charts/variables(id=${script.id})}" method="post">
+                    <input type="hidden" name="name" th:value="${v.name}">
+                    <input class="form-control form-control-sm font-monospace" name="value" th:value="${v.value}" placeholder="значение">
+                    <button class="btn btn-sm btn-outline-primary">Сохранить</button></form></td>
+                <td class="text-end"><form class="m-0" th:action="@{/scripts/{id}/charts/variables/{vid}/delete(id=${script.id},vid=${v.id})}" method="post"
+                      onsubmit="return confirm('Удалить переменную?')"><button class="btn btn-sm btn-outline-danger">Удалить</button></form></td>
+            </tr></tbody></table>
+        <form class="d-flex gap-2 flex-wrap m-0" th:action="@{/scripts/{id}/charts/variables(id=${script.id})}" method="post">
+            <input class="form-control form-control-sm" style="width:200px" name="name" maxlength="64" required placeholder="имя (например instance)">
+            <input class="form-control form-control-sm font-monospace" style="width:320px" name="value" placeholder="значение (например app-1 или {run_id})">
+            <button class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Добавить / изменить</button>
+        </form>
+    </div>
 
     <div class="card empty-state" th:if="${templates.isEmpty()}"><i class="bi bi-graph-up"></i>Своих графиков пока нет.</div>
     <div class="card" th:unless="${templates.isEmpty()}"><table class="table table-sm align-middle mb-0">
