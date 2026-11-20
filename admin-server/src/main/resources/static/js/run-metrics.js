@@ -228,12 +228,19 @@
             c.data.datasets.forEach(function (d) { while (d.data.length <= idx) { d.data.push(null); } });
         });
         compact();
-        Object.keys(charts).forEach(function (k) {
-            if (!quiet) { charts[k].update('none'); renderLegend(charts[k]); }
-        });
-        if (quiet) { return; }
+        lastMsg = m; lastT = t;
+        // вкладка в фоне: данные копим, но не рисуем (Chrome всё равно душит такую вкладку, а работа копится); перерисуем при возврате
+        if (quiet || document.hidden) { stale = !quiet; return; }
+        Object.keys(charts).forEach(function (k) { charts[k].update('none'); renderLegend(charts[k]); });
         renderCurrent(m, t);
     }
+    var stale = false;
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden || !stale) { return; }
+        stale = false;
+        Object.keys(charts).forEach(function (k) { charts[k].update('none'); renderLegend(charts[k]); });
+        if (lastMsg) { renderCurrent(lastMsg, lastT); }
+    });
 
     // период таблицы, как в Grafana: последняя минута (окно расчёта) или весь тест; выбор запоминается в браузере
     var range = 'window', lastMsg = null, lastT = '';

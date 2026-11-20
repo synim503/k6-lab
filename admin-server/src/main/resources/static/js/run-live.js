@@ -65,19 +65,27 @@
         var added = document.createDocumentFragment();
         var addedCount = 0;
         batch.forEach(function (l) { noteGen(l.g); lines.push(l); if (visible(l)) { added.appendChild(fmt(l)); addedCount++; } });
+        var drop = 0;
         if (lines.length > MAX) {
-            lines.splice(0, lines.length - MAX);
-            // в буфере режем сразу, на экране - когда не выделяют текст
-            dirty = true;
-            if (!selecting()) { render(); return; }
+            // в буфере режем сразу; на экране убираем столько же видимых строк с начала, не пересобирая весь список
+            // (полная перерисовка тысяч строк на каждую порцию и вешала вкладку при долгом тесте)
+            var cut = lines.splice(0, lines.length - MAX);
+            cut.forEach(function (l) { if (visible(l)) { drop++; } });
         }
         if (addedCount) {
             // дописываем новые узлы: существующие (и выделение в них) остаются нетронутыми
             log.appendChild(added);
-            if (autoscroll && !selecting()) { log.scrollTop = log.scrollHeight; }
         }
+        if (drop && !selecting()) {
+            while (drop-- > 0 && log.firstChild) { log.removeChild(log.firstChild); }
+            drop = 0;
+        } else if (drop) {
+            dirty = true; // выделяют текст: лишнее на экране уберём, когда выделение снимут
+        }
+        if (autoscroll && !selecting()) { log.scrollTop = log.scrollHeight; }
         counter.textContent = lines.length + ' строк в буфере';
     }
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { render(); } });
     document.addEventListener('selectionchange', function () { if (dirty && !selecting()) { render(); } });
     [genSel, levelSel].forEach(function (e) { e.addEventListener('change', render); });
     search.addEventListener('input', render);
@@ -99,7 +107,7 @@
     // более раннего мог прийти позже и затереть свежие значения старыми, поэтому в полёте не больше одного, а пропущенное обновление повторяется после ответа.
     var inflight = false, again = false;
     function refreshStatus() {
-        if (!window.htmx) { return; }
+        if (!window.htmx || document.hidden) { return; } // в фоновой вкладке не обновляем: при возврате сработает ближайший таймер
         if (inflight) { again = true; return; }
         inflight = true;
         var finish = function () { inflight = false; if (again) { again = false; refreshStatus(); } };
