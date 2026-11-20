@@ -16,6 +16,7 @@
         <ul class="script-tabs" role="tablist">
             <li><a class="nav-link" th:classappend="${active == 'overview'} ? 'active'" th:href="@{/scripts/{id}(id=${script.id})}"><i class="bi bi-grid"></i>Обзор</a></li>
             <li><a class="nav-link" th:classappend="${active == 'load'} ? 'active'" th:href="@{/scripts/{id}/load(id=${script.id})}"><i class="bi bi-speedometer2"></i>Нагрузка</a></li>
+            <li><a class="nav-link" th:classappend="${active == 'charts'} ? 'active'" th:href="@{/scripts/{id}/charts(id=${script.id})}"><i class="bi bi-graph-up"></i>Графики отчёта</a></li>
             <li><a class="nav-link" id="tab-link-versions" th:classappend="${active == 'versions'} ? 'active'" th:href="@{/scripts/{id}(id=${script.id})} + '#versions'"><i class="bi bi-clock-history"></i>Версии</a></li>
             <li sec:authorize="hasRole('ADMIN')"><a class="nav-link" th:classappend="${active == 'debug'} ? 'active'" th:href="@{/scripts/sandbox(script=${script.id})}"><i class="bi bi-bug"></i>Отладка</a></li>
         </ul>

@@ -24,10 +24,28 @@ public class ScheduleController {
 
     private final ScheduledRunService service;
     private final ScheduleTimelineService timeline;
+    private final ScheduleImportService importer;
 
-    public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline) {
+    public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline, ScheduleImportService importer) {
         this.service = service;
         this.timeline = timeline;
+        this.importer = importer;
+    }
+
+    /** Импорт списка тестов (скрипт + профиль) из JSON: текстом или файлом; все тесты планируются сразу. */
+    @PostMapping("/schedule/import")
+    public String importTests(@RequestParam(required = false) String json,
+                              @RequestParam(required = false) org.springframework.web.multipart.MultipartFile file,
+                              Principal user, RedirectAttributes ra) {
+        try {
+            String body = file != null && !file.isEmpty() ? new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8) : json;
+            var created = importer.importTests(body, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", "Запланировано тестов: " + created.size());
+        } catch (IllegalArgumentException | IllegalStateException | java.io.IOException e) {
+            ra.addFlashAttribute("error", "Импорт не выполнен, ничего не запланировано. " + e.getMessage());
+            ra.addFlashAttribute("importJson", json);
+        }
+        return "redirect:/schedule";
     }
 
     /** Занятость генераторов для таймлайна выбора времени: текущие и уже запланированные запуски. */

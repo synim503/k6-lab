@@ -76,6 +76,17 @@ public class RunResultController {
         return b.body(body);
     }
 
+    private static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+    /** Отчёт в Word: имя файла «сценарий - профиль». */
+    @GetMapping(value = "/report.docx", produces = DOCX)
+    public ResponseEntity<byte[]> docx(@PathVariable Long id) {
+        String name = ReportService.title(runService.get(id)).replaceAll("[\\\\/:*?\"<>|\\r\\n]", "_");
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType(DOCX))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(name + " (запуск " + id + ").docx", StandardCharsets.UTF_8).build().toString())
+                .body(reports.renderDocx(id));
+    }
+
     @GetMapping(value = "/report.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> pdf(@PathVariable Long id) {
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_PDF)

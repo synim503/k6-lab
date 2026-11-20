@@ -22,10 +22,49 @@ import java.util.List;
 public final class ChartRenderer {
 
     private static final Logger log = LoggerFactory.getLogger(ChartRenderer.class);
-    private static final Color[] COLORS = {new Color(0x0d6efd), new Color(0x198754), new Color(0xdc3545), new Color(0xfd7e14),
-            new Color(0x6f42c1), new Color(0x20c997), new Color(0x6c757d), new Color(0xd63384)};
+    // палитра и оформление - как у тёмной темы Grafana
+    private static final Color[] COLORS = {new Color(0x73BF69), new Color(0xFADE2A), new Color(0x5794F2), new Color(0xFF9830),
+            new Color(0xF2495C), new Color(0xB877D9), new Color(0x8AB8FF), new Color(0xFF780A)};
+    private static final Color BG = new Color(0x181B1F);
+    private static final Color GRID = new Color(0x2C3235);
+    private static final Color TEXT = new Color(0xCCCCDC);
+    private static final Color RED = new Color(0xF2495C);
 
     public record Img(String title, String dataUri) {
+
+        /** PNG-байты (для docx). */
+        public byte[] png() {
+            int i = dataUri.indexOf(',');
+            return Base64.getDecoder().decode(dataUri.substring(i + 1));
+        }
+    }
+
+    /** График по произвольному запросу пользователя: ряды по меткам, в легенде Last / Mean / Max, ось X - время от начала теста. */
+    public static Img custom(String title, String unit, java.util.Map<String, List<RunSeriesService.Pt>> series) {
+        XYChart c = chart(title, unit == null ? "" : unit, "Минуты от начала теста");
+        int i = 0;
+        for (var e : series.entrySet()) {
+            if (e.getValue().isEmpty()) {
+                continue;
+            }
+            timeLine(c, e.getKey(), e.getValue(), COLORS[i++ % COLORS.length], false);
+        }
+        return series.isEmpty() || c.getSeriesMap().isEmpty() ? null : img(title, c);
+    }
+
+    private static String num(double v) {
+        double a = Math.abs(v);
+        return String.format(java.util.Locale.ROOT, a >= 100 ? "%.0f" : a >= 10 ? "%.1f" : "%.2f", v);
+    }
+
+    /** Имя ряда со сводкой для легенды: Last, Mean, Max (как таблица легенды в Grafana). */
+    private static String legend(String name, List<RunSeriesService.Pt> pts) {
+        double sum = 0, max = Double.NEGATIVE_INFINITY;
+        for (var p : pts) {
+            sum += p.v();
+            max = Math.max(max, p.v());
+        }
+        return name + "  ·  last " + num(pts.get(pts.size() - 1).v()) + "  mean " + num(sum / pts.size()) + "  max " + num(max);
     }
 
     private static volatile Font base;
@@ -86,7 +125,7 @@ public final class ChartRenderer {
                 continue;
             }
             line(c, "p" + pn, x, y, COLORS[0], true);
-            line(c, "SLA", List.of(min(x), max(x)), List.of(sla, sla), COLORS[2], false);
+            line(c, "SLA", List.of(min(x), max(x)), List.of(sla, sla), RED, false);
             out.add(img(c.getTitle(), c));
         }
         XYChart rate = chart("Выполнение плана по интенсивности", "% от цели");
@@ -159,7 +198,7 @@ public final class ChartRenderer {
             timeLine(c, "p" + s.pctN(), s.pct(), COLORS[0], false);
             double last = s.pct().get(s.pct().size() - 1).min();
             timeLine(c, "SLA", List.of(new RunSeriesService.Pt(s.pct().get(0).min(), s.slaMs()), new RunSeriesService.Pt(last, s.slaMs())),
-                    COLORS[2], true);
+                    RED, true);
             markWarmup(c, warm);
             out.add(img(c.getTitle(), c));
         }
@@ -198,14 +237,15 @@ public final class ChartRenderer {
         }
         timeLine(c, String.format(java.util.Locale.ROOT, "Прогрев до %.1f мин", warmupMin),
                 List.of(new RunSeriesService.Pt(warmupMin, 0), new RunSeriesService.Pt(warmupMin, max <= 0 ? 1 : max * 1.05)),
-                new Color(245, 158, 11), true);
+                new Color(0xFF9830), true);
     }
 
     private static void timeLine(XYChart c, String name, List<RunSeriesService.Pt> pts, Color color, boolean dashed) {
         // у ряда с единственной точкой линии нет: рисуем маркер, остальные ряды - линией без маркеров
         List<Double> x = pts.stream().map(RunSeriesService.Pt::min).toList();
         List<Double> y = pts.stream().map(RunSeriesService.Pt::v).toList();
-        XYSeries s = c.addSeries(name, x, y);
+        XYSeries s = c.addSeries(dashed || pts.isEmpty() ? name : legend(name, pts), x, y);
+        s.setLineWidth(dashed ? 1.3f : 1.8f);
         s.setLineColor(color);
         s.setMarkerColor(color);
         s.setMarker(pts.size() == 1 ? SeriesMarkers.CIRCLE : SeriesMarkers.NONE);
@@ -219,15 +259,29 @@ public final class ChartRenderer {
     }
 
     private static XYChart chart(String title, String yTitle, String xTitle) {
-        XYChart c = new XYChartBuilder().width(760).height(300).title(title).xAxisTitle(xTitle).yAxisTitle(yTitle).build();
+        XYChart c = new XYChartBuilder().width(1000).height(380).title(title).xAxisTitle(xTitle).yAxisTitle(yTitle).build();
         var st = c.getStyler();
-        st.setLegendPosition(Styler.LegendPosition.OutsideE);
-        st.setChartTitleFont(font(Font.BOLD, 14));
+        st.setLegendPosition(Styler.LegendPosition.OutsideS);
+        st.setLegendLayout(Styler.LegendLayout.Vertical);
+        st.setChartTitleFont(font(Font.BOLD, 15));
         st.setLegendFont(font(Font.PLAIN, 11));
         st.setAxisTitleFont(font(Font.PLAIN, 11));
         st.setAxisTickLabelsFont(font(Font.PLAIN, 10));
         st.setYAxisMin(0.0);
         st.setPlotGridLinesVisible(true);
+        st.setPlotGridVerticalLinesVisible(false);
+        st.setPlotGridLinesColor(GRID);
+        st.setPlotGridLinesStroke(new java.awt.BasicStroke(1f));
+        st.setChartBackgroundColor(BG);
+        st.setPlotBackgroundColor(BG);
+        st.setPlotBorderVisible(false);
+        st.setChartTitleBoxVisible(false);
+        st.setChartFontColor(TEXT);
+        st.setAxisTickLabelsColor(TEXT);
+        st.setAxisTickMarksColor(GRID);
+        st.setLegendBackgroundColor(BG);
+        st.setLegendBorderColor(BG);
+        st.setChartPadding(12);
         return c;
     }
 

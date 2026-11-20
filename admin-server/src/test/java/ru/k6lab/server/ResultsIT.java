@@ -237,6 +237,9 @@ class ResultsIT extends AbstractIT {
         byte[] pdf = mvc.perform(get("/runs/" + run.getId() + "/report.pdf")).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
         assertThat(new String(pdf, 0, 5, StandardCharsets.ISO_8859_1)).isEqualTo("%PDF-");
         assertThat(pdf.length).isGreaterThan(5_000);
+        var docxResp = mvc.perform(get("/runs/" + run.getId() + "/report.docx")).andExpect(status().isOk()).andReturn().getResponse();
+        assertThat(docxResp.getContentAsByteArray()).startsWith((byte) 'P', (byte) 'K');
+        assertThat(docxResp.getHeader("Content-Disposition")).contains(".docx");
 
         mvc.perform(post("/runs/" + run.getId() + "/conclusion").with(csrf()).param("conclusion", "Деградация").param("comment", "ок"))
                 .andExpect(status().is3xxRedirection());

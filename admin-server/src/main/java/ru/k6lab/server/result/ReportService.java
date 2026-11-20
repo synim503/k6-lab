@@ -25,18 +25,24 @@ public class ReportService {
     private final RunService runService;
     private final StepResultService results;
     private final RunSeriesService seriesService;
+    private final CustomChartService customCharts;
 
-    public ReportService(SpringTemplateEngine engine, RunService runService, StepResultService results, RunSeriesService seriesService) {
+    public ReportService(SpringTemplateEngine engine, RunService runService, StepResultService results, RunSeriesService seriesService,
+                         CustomChartService customCharts) {
         this.engine = engine;
         this.runService = runService;
         this.results = results;
         this.seriesService = seriesService;
+        this.customCharts = customCharts;
     }
 
-    public String renderHtml(long runId) {
-        Run run = runService.get(runId);
-        RunSnapshot snap = runService.snapshot(run);
-        ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
+    /** Название отчёта: «сценарий - профиль» (без профиля - только сценарий). */
+    public static String title(Run run) {
+        Object profile = run.getRequest() == null ? null : run.getRequest().get("loadProfileName");
+        return profile == null || profile.toString().isBlank() ? run.getScriptName() : run.getScriptName() + " - " + profile;
+    }
+
+    private List<ChartRenderer.Img> charts(Run run, RunSnapshot snap, ResultData data) {
         List<ChartRenderer.Img> charts = List.of();
         try {
             // графики по времени от начала теста; если рядов нет - по ступеням (имеют смысл при двух и более ступенях)
@@ -44,10 +50,91 @@ public class ReportService {
             if (charts.isEmpty()) {
                 charts = ChartRenderer.charts(data);
             }
+            List<ChartRenderer.Img> custom = customCharts.charts(run);
+            if (!custom.isEmpty()) {
+                charts = new java.util.ArrayList<>(charts);
+                charts.addAll(custom);
+            }
         } catch (RuntimeException | LinkageError e) {
             // графики - украшение: без них отчёт всё равно полезен (например, нет AWT на сервере)
         }
+        return charts;
+    }
+
+    public byte[] renderDocx(long runId) {
+        Run run = runService.get(runId);
+        RunSnapshot snap = runService.snapshot(run);
+        ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
+        ReportFormat f = new ReportFormat();
+        try {
+            DocxBuilder d = new DocxBuilder().title("Отчёт о нагрузочном тесте: " + title(run));
+            d.muted("Запуск #" + run.getId() + " · статус: " + f.runStatus(run.getStatus().name()) + " · начало " + f.dt(run.getStartedAt())
+                    + " · окончание " + f.dt(run.getFinishedAt()) + " · отчёт сформирован " + f.dt(Instant.now()));
+            d.h1("Итог");
+            if (run.getConclusion() != null) {
+                d.text("Вывод инженера: " + run.getConclusion());
+            }
+            if (run.getConclusionComment() != null) {
+                d.text(run.getConclusionComment());
+            }
+            if (run.getStopReason() != null) {
+                d.text("Тест остановлен: " + run.getStopReason());
+            }
+            if (!data.prometheusOk() && data.error() != null) {
+                d.bold(data.error());
+            }
+            d.h1("Конфигурация");
+            d.text("Скрипт: " + snap.script().name() + " v" + snap.script().versionNumber());
+            d.text("Генераторы: " + String.join(", ", snap.generators().stream().map(g -> g.name() + " (вес " + g.weight() + ")").toList()));
+            List<List<String>> ops = new java.util.ArrayList<>();
+            for (var o : snap.operations()) {
+                if (o.enabled()) {
+                    ops.add(List.of(o.name(), String.format(Locale.ROOT, "%.3f", o.ratePerSec()),
+                            "p" + o.slaPercentile() + " ≤ " + Math.round(o.slaThresholdMs()) + " мс", String.format(Locale.ROOT, "%.2f", o.maxErrorPct()) + " %"));
+                }
+            }
+            d.table(List.of("Операция", "Интенсивность, оп/с", "SLA", "Допустимые ошибки"), ops, null);
+            d.h1("Результаты по ступеням");
+            for (ResultData.StepRow s : data.steps()) {
+                d.h2("Ступень " + s.stepNo() + " — " + f.n(s.levelPct(), 1) + " % от модели: " + f.status(s.status()));
+                if (!s.reasons().isEmpty()) {
+                    d.text(String.join("; ", s.reasons()));
+                }
+                if (s.ops().isEmpty()) {
+                    continue;
+                }
+                List<List<String>> rows = new java.util.ArrayList<>();
+                java.util.Set<Integer> bad = new java.util.HashSet<>();
+                for (ResultData.OpRow o : s.ops()) {
+                    if (!o.ok()) {
+                        bad.add(rows.size());
+                    }
+                    rows.add(List.of(o.operation(), f.n(o.targetRate(), 2), f.n(o.actualRate(), 2), f.n(o.p50(), 0), f.n(o.p90(), 0),
+                            f.n(o.p95(), 0), f.n(o.p99(), 0), "p" + o.slaPercentile() + " ≤ " + Math.round(o.slaMs()),
+                            f.n(o.errorPct(), 2) + " / " + String.format(Locale.ROOT, "%.2f", o.maxErrorPct()), f.n(o.dropped(), 0)));
+                }
+                d.table(List.of("Операция", "План, оп/с", "Факт, оп/с", "p50, мс", "p90, мс", "p95, мс", "p99, мс", "SLA", "Ошибки, %", "Dropped"), rows, bad);
+            }
+            List<ChartRenderer.Img> charts = charts(run, snap, data);
+            if (!charts.isEmpty()) {
+                d.h1("Графики");
+                for (ChartRenderer.Img c : charts) {
+                    d.image(c.png(), c.title());
+                }
+            }
+            return d.build();
+        } catch (IOException e) {
+            throw new IllegalStateException("Не удалось сформировать docx: " + e.getMessage(), e);
+        }
+    }
+
+    public String renderHtml(long runId) {
+        Run run = runService.get(runId);
+        RunSnapshot snap = runService.snapshot(run);
+        ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
+        List<ChartRenderer.Img> charts = charts(run, snap, data);
         Context ctx = new Context(new Locale("ru"));
+        ctx.setVariable("title", title(run));
         ctx.setVariable("run", run);
         ctx.setVariable("snap", snap);
         ctx.setVariable("data", data);

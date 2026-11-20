@@ -416,4 +416,38 @@ class ScheduleIT extends AbstractIT {
         assertThat(fixedAll.path("intensity").asText()).isEqualTo("как в скрипте");
         assertThat(fixedAll.path("genNames").asText()).isNotBlank();
     }
+
+    @Autowired
+    ru.k6lab.server.schedule.ScheduleImportService importer;
+
+    @Test
+    void importedTestsWithProfilesAreQueuedOneAfterAnotherAndAnErrorSchedulesNothing() throws Exception {
+        Script s = scriptWithLoad();
+        saveProfile(s, "Максимум", 40, "");
+        saveProfile(s, "Стабильность", 20, "");
+        Generator g = generator();
+        String json = "{\"tests\": [{\"script\": \"" + s.getName() + "\", \"profile\": \"Максимум\", \"generators\": [\"" + g.getName() + "\"]},"
+                + "{\"script\": \"" + s.getName() + "\", \"profile\": \"Стабильность\", \"generators\": [" + g.getId() + "]}]}";
+        var created = importer.importTests(json, "tester");
+        assertThat(created).hasSize(2);
+        ScheduledRunStore.Item first = store.find(created.get(0).scheduleId()).orElseThrow();
+        ScheduledRunStore.Item second = store.find(created.get(1).scheduleId()).orElseThrow();
+        assertThat(first.profileName()).isEqualTo("Максимум");
+        assertThat(second.profileName()).isEqualTo("Стабильность");
+        assertThat(first.shiftForward()).isTrue();
+        // один генератор: второй тест встаёт после первого с паузой
+        assertThat(second.runAt()).isAfter(first.runAt().plusSeconds(60));
+
+        int pendingBefore = schedule.pendingOf(s.getId()).size();
+        assertThat(pendingBefore).isEqualTo(2);
+        String bad = "[{\"script\": \"" + s.getName() + "\", \"profile\": \"Максимум\", \"generators\": [" + g.getId() + "]},"
+                + "{\"script\": \"" + s.getName() + "\", \"profile\": \"Нет такого\"}]";
+        assertThatThrownBy(() -> importer.importTests(bad, "tester")).hasMessageContaining("Тест №2").hasMessageContaining("Нет такого");
+        // первый тест из неудачного импорта отменён: ожидающих записей скрипта по-прежнему две
+        assertThat(schedule.pendingOf(s.getId())).hasSize(pendingBefore);
+        assertThatThrownBy(() -> importer.importTests("не json", "tester")).isInstanceOf(IllegalArgumentException.class);
+
+        mvc.perform(post("/schedule/import").with(csrf()).param("json", "[]")).andExpect(status().is3xxRedirection());
+        mvc.perform(get("/schedule")).andExpect(status().isOk()).andExpect(content().string(containsString("Импорт списка тестов")));
+    }
 }

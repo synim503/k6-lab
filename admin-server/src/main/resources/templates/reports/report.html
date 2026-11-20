@@ -2,7 +2,7 @@
 <html lang="ru" xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8"/>
-    <title th:text="'Отчёт: ' + ${run.scriptName} + ' (запуск #' + ${run.id} + ')'">Отчёт</title>
+    <title th:text="'Отчёт: ' + ${title} + ' (запуск #' + ${run.id} + ')'">Отчёт</title>
     <style>
         @page { size: A4 landscape; margin: 14mm; }
         body { font-family: 'DejaVu Sans', Arial, sans-serif; font-size: 10px; color: #212529; }
@@ -22,12 +22,12 @@
         .box { border: 1px solid #ced4da; padding: 6px 8px; margin: 6px 0; background: #f8f9fa; }
         .reasons { margin: 2px 0; padding-left: 16px; color: #842029; }
         .step-block { page-break-inside: avoid; }
-        img.chart { width: 100%; max-width: 760px; margin: 4px 0; }
+        img.chart { width: 100%; max-width: 900px; margin: 6px 0; }
         pre { white-space: pre-wrap; font-size: 8px; background: #f8f9fa; border: 1px solid #ced4da; padding: 4px; }
     </style>
 </head>
 <body>
-<h1 th:text="'Отчёт о нагрузочном тесте: ' + ${run.scriptName}">Отчёт</h1>
+<h1 th:text="'Отчёт о нагрузочном тесте: ' + ${title}">Отчёт</h1>
 <div class="muted">
     Запуск #<span th:text="${run.id}"></span> · статус: <b th:text="${fmt.runStatus(run.status.name())}"></b>
     · начало <span th:text="${fmt.dt(run.startedAt)}"></span> · окончание <span th:text="${fmt.dt(run.finishedAt)}"></span>

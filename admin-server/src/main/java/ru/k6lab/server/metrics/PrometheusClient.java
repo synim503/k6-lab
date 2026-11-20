@@ -124,6 +124,37 @@ public class PrometheusClient {
         return out;
     }
 
+    /**
+     * Все ряды произвольного запроса: имя ряда - его метки без __name__ («k=v, k2=v2»), у ряда без меток - «значение».
+     * Для своих графиков отчёта, где PromQL вводит пользователь.
+     */
+    public Map<String, List<Point>> rangeAll(SettingsService.Prometheus p, String promql, Instant start, Instant end, int stepSec)
+            throws IOException {
+        JsonNode data = call(p, "/api/v1/query_range", "query=" + enc(promql) + "&start=" + start.getEpochSecond() + "&end="
+                + end.getEpochSecond() + "&step=" + Math.max(1, stepSec));
+        Map<String, List<Point>> out = new LinkedHashMap<>();
+        for (JsonNode r : data.path("result")) {
+            List<String> parts = new ArrayList<>();
+            r.path("metric").fields().forEachRemaining(e -> {
+                if (!"__name__".equals(e.getKey())) {
+                    parts.add(e.getKey() + "=" + e.getValue().asText());
+                }
+            });
+            String name = parts.isEmpty() ? "значение" : String.join(", ", parts);
+            List<Point> pts = new ArrayList<>();
+            for (JsonNode v : r.path("values")) {
+                double d = parse(v.path(1).asText());
+                if (Double.isFinite(d)) {
+                    pts.add(new Point(v.path(0).asDouble(), d));
+                }
+            }
+            if (!pts.isEmpty()) {
+                out.put(out.containsKey(name) ? name + " #" + (out.size() + 1) : name, pts);
+            }
+        }
+        return out;
+    }
+
     /** Время первой точки запроса на отрезке (по шагам); empty, если данных ещё нет. Шаг растёт с длиной отрезка, чтобы не превысить лимит точек. */
     public Optional<Instant> firstTimestamp(SettingsService.Prometheus p, String promql, Instant start, Instant end) throws IOException {
         long range = Math.max(1, end.getEpochSecond() - start.getEpochSecond());

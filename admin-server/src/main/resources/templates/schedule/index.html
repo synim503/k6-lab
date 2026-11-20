@@ -12,6 +12,26 @@
         Генераторы бронируются сразу при планировании: если на это время свободных не хватает, запись не создаётся. Забронированные генераторы
         видны на таймлайне и недоступны для других записей на это время. Если выбранный генератор к назначенному часу стал недоступен, запуск пропускается и помечается ошибкой.
         Запланировать запуск можно на странице запуска скрипта.</div>
+    <details class="card card-body mb-3" th:attr="open=${importJson != null} ? 'open'">
+        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-upload me-1"></i>Импорт списка тестов (JSON)</summary>
+        <form class="mt-2" th:action="@{/schedule/import}" method="post" enctype="multipart/form-data">
+            <div class="small text-muted mb-2">Каждый тест — скрипт и профиль нагрузки; после импорта все тесты сразу планируются на ближайшее свободное время
+                (генераторы бронируются, пауза между запусками на одних генераторах 5 минут) и запускаются сами. Если хотя бы один тест не прошёл проверку,
+                не запланировано ничего. Необязательные поля: <code>runAt</code> (дата со смещением), <code>generators</code> (имена или id), <code>count</code>,
+                <code>env</code>, <code>shift</code> (по умолчанию true).</div>
+            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="8" th:text="${importJson}"
+                      placeholder='[
+  {"script": "Платежи", "profile": "Максимальная"},
+  {"script": "Платежи", "profile": "Стабильность 4ч", "runAt": "2026-11-21T22:00:00+03:00"},
+  {"script": "Каталог", "profile": "Базовая", "count": 2}
+]'></textarea>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
+                <button class="btn btn-primary btn-sm"><i class="bi bi-calendar-plus me-1"></i>Запланировать</button>
+                <span class="text-muted small">Если выбран файл, используется он, а не текст.</span>
+            </div>
+        </form>
+    </details>
     <div class="card card-body mb-3 tl-root" th:attr="data-url=@{/schedule/timeline},data-run-url=@{/runs/},data-schedule-url=@{/schedule}">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
             <h6 class="m-0"><i class="bi bi-bar-chart-steps me-1"></i>Занятость генераторов</h6>

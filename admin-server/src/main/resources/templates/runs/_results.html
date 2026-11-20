@@ -9,6 +9,7 @@
             <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id})}" target="_blank">HTML-отчёт</a>
             <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id},download=true)}">Скачать HTML</a>
             <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.pdf(id=${run.id})}">PDF</a>
+            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.docx(id=${run.id})}">Word (docx)</a>
         </div>
 
         <div class="alert alert-warning" th:if="${data == null}">Итоги ещё не рассчитаны (метрики поступают в Prometheus с задержкой). Нажмите «Пересчитать итоги» через несколько секунд.</div>
