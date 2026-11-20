@@ -26,9 +26,11 @@ public class ReportService {
     private final StepResultService results;
     private final RunSeriesService seriesService;
     private final CustomChartService customCharts;
+    private final ChartStyleService chartStyle;
 
     public ReportService(SpringTemplateEngine engine, RunService runService, StepResultService results, RunSeriesService seriesService,
-                         CustomChartService customCharts) {
+                         CustomChartService customCharts, ChartStyleService chartStyle) {
+        this.chartStyle = chartStyle;
         this.engine = engine;
         this.runService = runService;
         this.results = results;
@@ -42,7 +44,19 @@ public class ReportService {
         return profile == null || profile.toString().isBlank() ? run.getScriptName() : run.getScriptName() + " - " + profile;
     }
 
-    private List<ChartRenderer.Img> charts(Run run, RunSnapshot snap, ResultData data) {
+    /** Абсолютное время на графиках: abs == null - как в настройках. */
+    private boolean absolute(Boolean abs) {
+        return abs != null ? abs : chartStyle.absoluteTime();
+    }
+
+    private List<ChartRenderer.Img> charts(Run run, RunSnapshot snap, ResultData data, Boolean abs) {
+        Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
+        Instant end = run.getFinishedAt() != null ? run.getFinishedAt() : Instant.now();
+        ChartRenderer.TimeBase tb = absolute(abs) && start != null ? new ChartRenderer.TimeBase(start.toEpochMilli(), end.toEpochMilli()) : null;
+        return ChartRenderer.withTime(tb, () -> ChartRenderer.with(chartStyle.get(), () -> buildCharts(run, snap, data)));
+    }
+
+    private List<ChartRenderer.Img> buildCharts(Run run, RunSnapshot snap, ResultData data) {
         List<ChartRenderer.Img> charts = List.of();
         try {
             // графики по времени от начала теста; если рядов нет - по ступеням (имеют смысл при двух и более ступенях)
@@ -62,6 +76,10 @@ public class ReportService {
     }
 
     public byte[] renderDocx(long runId) {
+        return renderDocx(runId, null);
+    }
+
+    public byte[] renderDocx(long runId, Boolean abs) {
         Run run = runService.get(runId);
         RunSnapshot snap = runService.snapshot(run);
         ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
@@ -115,7 +133,7 @@ public class ReportService {
                 }
                 d.table(List.of("Операция", "План, оп/с", "Факт, оп/с", "p50, мс", "p90, мс", "p95, мс", "p99, мс", "SLA", "Ошибки, %", "Dropped"), rows, bad);
             }
-            List<ChartRenderer.Img> charts = charts(run, snap, data);
+            List<ChartRenderer.Img> charts = charts(run, snap, data, abs);
             if (!charts.isEmpty()) {
                 d.h1("Графики");
                 for (ChartRenderer.Img c : charts) {
@@ -129,11 +147,16 @@ public class ReportService {
     }
 
     public String renderHtml(long runId) {
+        return renderHtml(runId, null);
+    }
+
+    public String renderHtml(long runId, Boolean abs) {
         Run run = runService.get(runId);
         RunSnapshot snap = runService.snapshot(run);
         ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
-        List<ChartRenderer.Img> charts = charts(run, snap, data);
+        List<ChartRenderer.Img> charts = charts(run, snap, data, abs);
         Context ctx = new Context(new Locale("ru"));
+        ctx.setVariable("timeAbs", absolute(abs));
         ctx.setVariable("title", title(run));
         ctx.setVariable("run", run);
         ctx.setVariable("snap", snap);
@@ -146,7 +169,11 @@ public class ReportService {
     }
 
     public byte[] renderPdf(long runId) {
-        String html = renderHtml(runId);
+        return renderPdf(runId, null);
+    }
+
+    public byte[] renderPdf(long runId, Boolean abs) {
+        String html = renderHtml(runId, abs);
         var jsoup = Jsoup.parse(html);
         org.w3c.dom.Document doc = new W3CDom().fromJsoup(jsoup);
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {

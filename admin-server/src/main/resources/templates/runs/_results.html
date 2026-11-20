@@ -6,10 +6,15 @@
     <div th:if="${terminal}">
         <div class="d-flex flex-wrap gap-2 mb-3">
             <form th:action="@{/runs/{id}/results/recompute(id=${run.id})}" method="post"><button class="btn btn-sm btn-outline-secondary">Пересчитать итоги</button></form>
-            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id})}" target="_blank">HTML-отчёт</a>
-            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.html(id=${run.id},download=true)}">Скачать HTML</a>
-            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.pdf(id=${run.id})}">PDF</a>
-            <a class="btn btn-sm btn-outline-primary" th:href="@{/runs/{id}/report.docx(id=${run.id})}">Word (docx)</a>
+            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.html(id=${run.id})}" target="_blank">HTML-отчёт</a>
+            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.html(id=${run.id},download=true)}">Скачать HTML</a>
+            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.pdf(id=${run.id})}">PDF</a>
+            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.docx(id=${run.id})}">Word (docx)</a>
+            <select class="form-select form-select-sm" style="width:auto" id="rep-time" title="Ось времени на графиках отчёта" aria-label="Ось времени на графиках"
+                    onchange="document.querySelectorAll('.rep-link').forEach(function (a) { var u = new URL(a.getAttribute('data-base') || a.getAttribute('href'), location.origin); a.setAttribute('data-base', a.getAttribute('data-base') || a.getAttribute('href')); if (this.value) { u.searchParams.set('time', this.value); } a.setAttribute('href', u.pathname + u.search); }, this)">
+                <option value="">Время: по настройкам</option>
+                <option value="rel">Время: от начала теста</option>
+                <option value="abs">Время: абсолютное</option></select>
         </div>
 
         <div class="alert alert-warning" th:if="${data == null}">Итоги ещё не рассчитаны (метрики поступают в Prometheus с задержкой). Нажмите «Пересчитать итоги» через несколько секунд.</div>

@@ -105,6 +105,118 @@ class ReportDocxTest {
         org.assertj.core.api.Assertions.assertThat((String) m.invoke(null, "up{id=\"{run_id}\"}[{range}]", 7L, 30L, Map.of())).isEqualTo("up{id=\"7\"}[30s]");
     }
 
+    private static Map<String, List<RunSeriesService.Pt>> manySeries(int count) {
+        Map<String, List<RunSeriesService.Pt>> m = new LinkedHashMap<>();
+        for (int i = 1; i <= count; i++) {
+            m.put("host-" + i + ".example:9100", List.of(new RunSeriesService.Pt(0.5, i), new RunSeriesService.Pt(1, i * 2), new RunSeriesService.Pt(1.5, i)));
+        }
+        return m;
+    }
+
+    private static java.awt.image.BufferedImage render(ru.k6lab.server.result.ChartStyle st, int series) throws Exception {
+        var img = ChartRenderer.with(st, () -> ChartRenderer.custom("График", "%", manySeries(series)));
+        return javax.imageio.ImageIO.read(new ByteArrayInputStream(img.png()));
+    }
+
+    @Test
+    void chartGrowsWithLegendInsteadOfSqueezingThePlotAndFollowsTheStyle() throws Exception {
+        var d = ru.k6lab.server.result.ChartStyle.DEFAULT;
+        var few = render(d, 2);
+        var sixteen = render(d, 16);
+        // образцы для просмотра глазами: target/chart-samples
+        java.nio.file.Path dir = java.nio.file.Path.of("target", "chart-samples");
+        java.nio.file.Files.createDirectories(dir);
+        javax.imageio.ImageIO.write(sixteen, "png", dir.resolve("dark-16.png").toFile());
+        javax.imageio.ImageIO.write(render(ru.k6lab.server.result.ChartStyle.of("LIGHT", 1000, 320, "BOTTOM", true, 20), 16), "png", dir.resolve("light-16.png").toFile());
+        javax.imageio.ImageIO.write(render(ru.k6lab.server.result.ChartStyle.of("DARK", 1000, 320, "RIGHT", true, 20), 16), "png", dir.resolve("right-16.png").toFile());
+        // 16 рядов: легенда добавила высоту, область графика не сжалась (раньше легенда съедала весь график)
+        org.assertj.core.api.Assertions.assertThat(sixteen.getWidth()).isEqualTo(d.width());
+        org.assertj.core.api.Assertions.assertThat(sixteen.getHeight()).isGreaterThanOrEqualTo(d.height() + 16 * 17);
+        org.assertj.core.api.Assertions.assertThat(sixteen.getHeight()).isGreaterThan(few.getHeight());
+        // лимит легенды: из 40 рядов в легенде не больше 10, и график не вырастает на все 40 строк
+        var capped = render(ru.k6lab.server.result.ChartStyle.of("DARK", 1000, 320, "BOTTOM", true, 10), 40);
+        org.assertj.core.api.Assertions.assertThat(capped.getHeight()).isLessThan(d.height() + 40 * 17);
+        org.assertj.core.api.Assertions.assertThat(capped.getHeight()).isGreaterThanOrEqualTo(d.height() + 10 * 17);
+        // без легенды - высота ровно заданная; справа - шире; размеры берутся из настроек
+        var none = render(ru.k6lab.server.result.ChartStyle.of("DARK", 900, 300, "NONE", true, 20), 16);
+        org.assertj.core.api.Assertions.assertThat(none.getWidth()).isEqualTo(900);
+        org.assertj.core.api.Assertions.assertThat(none.getHeight()).isEqualTo(300);
+        // слева: легенда рисуется отдельной панелью, ширина больше, фон у левого края - фон темы, а на уровне первой строки есть цветная линия
+        var left = render(ru.k6lab.server.result.ChartStyle.of("DARK", 1000, 320, "LEFT", true, 20), 16);
+        org.assertj.core.api.Assertions.assertThat(left.getWidth()).isGreaterThan(1000 + 200);
+        org.assertj.core.api.Assertions.assertThat(left.getRGB(1, 1) & 0xFFFFFF).isEqualTo(0x181B1F);
+        boolean swatch = false;
+        for (int x = 12; x < 40 && !swatch; x++) {
+            for (int y = 10; y < 30; y++) {
+                if ((left.getRGB(x, y) & 0xFFFFFF) != 0x181B1F) {
+                    swatch = true;
+                    break;
+                }
+            }
+        }
+        org.assertj.core.api.Assertions.assertThat(swatch).as("образец линии первой строки легенды").isTrue();
+        javax.imageio.ImageIO.write(left, "png", java.nio.file.Path.of("target", "chart-samples", "left-16.png").toFile());
+        var right = render(ru.k6lab.server.result.ChartStyle.of("DARK", 1000, 320, "RIGHT", true, 20), 16);
+        org.assertj.core.api.Assertions.assertThat(right.getWidth()).isGreaterThan(1000);
+        // тема: фон светлый или тёмный
+        int dark = render(d, 3).getRGB(2, 2) & 0xFFFFFF;
+        int light = render(ru.k6lab.server.result.ChartStyle.of("LIGHT", 1000, 320, "BOTTOM", true, 20), 3).getRGB(2, 2) & 0xFFFFFF;
+        org.assertj.core.api.Assertions.assertThat(dark).isEqualTo(0x181B1F);
+        org.assertj.core.api.Assertions.assertThat(light).isEqualTo(0xFFFFFF);
+        // границы настроек: слишком большие и маленькие значения приводятся к допустимым, мусор - к значениям по умолчанию
+        var clamped = ru.k6lab.server.result.ChartStyle.of("???", 99999, 5, "???", false, 0);
+        org.assertj.core.api.Assertions.assertThat(clamped.width()).isEqualTo(ru.k6lab.server.result.ChartStyle.MAX_WIDTH);
+        org.assertj.core.api.Assertions.assertThat(clamped.height()).isEqualTo(ru.k6lab.server.result.ChartStyle.MIN_HEIGHT);
+        org.assertj.core.api.Assertions.assertThat(clamped.maxLegend()).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThat(clamped.theme()).isEqualTo(d.theme());
+        org.assertj.core.api.Assertions.assertThat(clamped.legend()).isEqualTo(d.legend());
+    }
+
+    @Test
+    void bigByteValuesAreScaledToKilobytesMegabytesAndGigabytes() {
+        Map<String, List<RunSeriesService.Pt>> traffic = new LinkedHashMap<>();
+        traffic.put("ens192 - Receive", List.of(new RunSeriesService.Pt(1, 196_924_819), new RunSeriesService.Pt(2, 340_116_260)));
+        traffic.put("lo", List.of(new RunSeriesService.Pt(1, 0), new RunSeriesService.Pt(2, 5)));
+        var mb = ChartRenderer.scaleUnits("Б", traffic);
+        org.assertj.core.api.Assertions.assertThat(mb.unit()).isEqualTo("МБ");
+        org.assertj.core.api.Assertions.assertThat(mb.series().get("ens192 - Receive").get(1).v()).isCloseTo(324.36, org.assertj.core.api.Assertions.within(0.01));
+        org.assertj.core.api.Assertions.assertThat(mb.series().get("lo").get(1).v()).isCloseTo(5 / 1048576.0, org.assertj.core.api.Assertions.within(1e-9));
+        // скорость, гигабайты и килобайты; малые значения и другие единицы не трогаются
+        org.assertj.core.api.Assertions.assertThat(ChartRenderer.scaleUnits("Б/с", Map.of("x", List.of(new RunSeriesService.Pt(1, 5_000_000))))
+                .unit()).isEqualTo("МБ/с");
+        org.assertj.core.api.Assertions.assertThat(ChartRenderer.scaleUnits("B", Map.of("x", List.of(new RunSeriesService.Pt(1, 3.5e9)))).unit()).isEqualTo("ГБ");
+        org.assertj.core.api.Assertions.assertThat(ChartRenderer.scaleUnits("Б", Map.of("x", List.of(new RunSeriesService.Pt(1, 5000)))).unit()).isEqualTo("КБ");
+        org.assertj.core.api.Assertions.assertThat(ChartRenderer.scaleUnits("Б", Map.of("x", List.of(new RunSeriesService.Pt(1, 900)))).unit()).isEqualTo("Б");
+        org.assertj.core.api.Assertions.assertThat(ChartRenderer.scaleUnits("%", Map.of("x", List.of(new RunSeriesService.Pt(1, 5e9)))).unit()).isEqualTo("%");
+        org.assertj.core.api.Assertions.assertThat(ChartRenderer.scaleUnits("бит", Map.of("x", List.of(new RunSeriesService.Pt(1, 5e9)))).unit()).isEqualTo("бит");
+    }
+
+    @Test
+    void absoluteTimeAxisIsDrawnAndItsFormatDependsOnDurationAndDate() throws Exception {
+        var zone = java.time.ZoneId.systemDefault();
+        long noon = java.time.LocalDate.of(2026, 11, 20).atTime(12, 0).atZone(zone).toInstant().toEpochMilli();
+        var m = ChartRenderer.class.getDeclaredMethod("datePattern", ChartRenderer.TimeBase.class);
+        m.setAccessible(true);
+        org.assertj.core.api.Assertions.assertThat((String) m.invoke(null, new ChartRenderer.TimeBase(noon, noon + 5 * 60_000L))).isEqualTo("HH:mm:ss");
+        org.assertj.core.api.Assertions.assertThat((String) m.invoke(null, new ChartRenderer.TimeBase(noon, noon + 60 * 60_000L))).isEqualTo("HH:mm");
+        org.assertj.core.api.Assertions.assertThat((String) m.invoke(null, new ChartRenderer.TimeBase(noon, noon + 14 * 3600_000L))).isEqualTo("dd.MM HH:mm");
+        // график с осью времени строится (ряды, пороговая линия), размер соответствует стилю
+        var img = ChartRenderer.withTime(new ChartRenderer.TimeBase(noon, noon + 3 * 60_000L), () -> ChartRenderer.with(
+                ru.k6lab.server.result.ChartStyle.DEFAULT, () -> ChartRenderer.custom("График", "%", manySeries(3))));
+        org.assertj.core.api.Assertions.assertThat(img).isNotNull();
+        var png = javax.imageio.ImageIO.read(new ByteArrayInputStream(img.png()));
+        org.assertj.core.api.Assertions.assertThat(png.getWidth()).isEqualTo(ru.k6lab.server.result.ChartStyle.DEFAULT.width());
+        javax.imageio.ImageIO.write(png, "png", java.nio.file.Path.of("target", "chart-samples", "abs-time.png").toFile());
+    }
+
+    @Test
+    void chartTitleShowsVariableValues() throws Exception {
+        var m = ru.k6lab.server.result.CustomChartService.class.getDeclaredMethod("title", String.class, Map.class);
+        m.setAccessible(true);
+        org.assertj.core.api.Assertions.assertThat((String) m.invoke(null, "Утилизация cpu job $job, ${inst}, id $testid",
+                Map.of("job", "abyss", "inst", ".*", "testid", "{run_id}"))).isEqualTo("Утилизация cpu job abyss, все, id $testid");
+    }
+
     @Test
     void legendNamesOfSeveralQueries() {
         // подпись задана и ряд один - она; рядов несколько - подпись и метки; подписи нет - метки; {{метка}} подставляется как в Grafana

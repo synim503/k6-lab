@@ -286,6 +286,39 @@ class ScheduleIT extends AbstractIT {
     }
 
     @Test
+    void pausedSchedulerStartsNothingKeepsOverdueEntriesAndResumeMovesThemToTheNearestFreeTime() throws Exception {
+        Script s = scriptWithLoad();
+        Generator g = generator();
+        long id = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(g.getId()), null, null, Map.of(), "tester");
+        try {
+            mvc.perform(post("/schedule/pause").with(csrf())).andExpect(status().is3xxRedirection());
+            assertThat(schedule.paused()).isTrue();
+            mvc.perform(get("/schedule")).andExpect(status().isOk()).andExpect(content().string(containsString("Планировщик на паузе")))
+                    .andExpect(content().string(containsString("Снять с паузы")));
+            // время прошло намного дольше допустимого опоздания: без паузы запись была бы пропущена с ошибкой, на паузе - ждёт
+            makeDue(id, 600);
+            schedule.tick();
+            ScheduledRunStore.Item waiting = store.find(id).orElseThrow();
+            assertThat(waiting.status()).as(String.valueOf(waiting.error())).isEqualTo(ScheduledRunStore.Status.PENDING);
+
+            mvc.perform(post("/schedule/resume").with(csrf())).andExpect(status().is3xxRedirection());
+            assertThat(schedule.paused()).isFalse();
+            // просроченная запись не пропущена, а перенесена на ближайшее свободное время
+            ScheduledRunStore.Item moved = store.find(id).orElseThrow();
+            assertThat(moved.status()).isEqualTo(ScheduledRunStore.Status.PENDING);
+            assertThat(moved.runAt()).isAfter(Instant.now().plusSeconds(30));
+            // дальше работает как обычно: в назначенное время запись стартует
+            makeDue(id, 1);
+            schedule.tick();
+            ScheduledRunStore.Item done = store.find(id).orElseThrow();
+            assertThat(done.status()).as(String.valueOf(done.error())).isEqualTo(ScheduledRunStore.Status.STARTED);
+            mvc.perform(get("/schedule")).andExpect(status().isOk()).andExpect(content().string(containsString("Поставить на паузу")));
+        } finally {
+            schedule.resume("test"); // настройка общая для всех тестов: пауза не должна остаться
+        }
+    }
+
+    @Test
     void anyFreeGeneratorsAreReservedWhenPlanningAndNotGivenTwice() throws Exception {
         Script s = scriptWithLoad();
         generator();

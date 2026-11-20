@@ -121,6 +121,20 @@ public class ChartTemplateController {
         return "redirect:/scripts/" + id + "/charts";
     }
 
+    /** Удалить отмеченные галочками графики. */
+    @PostMapping("/scripts/{id}/charts/delete-selected")
+    public String deleteSelected(@PathVariable Long id, @RequestParam(name = "ids", required = false) java.util.List<Long> ids, RedirectAttributes ra) {
+        int n = store.deleteMany(id, ids);
+        ra.addFlashAttribute(n > 0 ? "info" : "error", n > 0 ? "Удалено графиков: " + n : "Не выбрано ни одного графика");
+        return "redirect:/scripts/" + id + "/charts";
+    }
+
+    @PostMapping("/scripts/{id}/charts/delete-all")
+    public String deleteAll(@PathVariable Long id, RedirectAttributes ra) {
+        ra.addFlashAttribute("info", "Удалено графиков: " + store.deleteAll(id));
+        return "redirect:/scripts/" + id + "/charts";
+    }
+
     @PostMapping("/scripts/{id}/charts/{tid}/delete")
     public String delete(@PathVariable Long id, @PathVariable Long tid, RedirectAttributes ra) {
         store.delete(id, tid);

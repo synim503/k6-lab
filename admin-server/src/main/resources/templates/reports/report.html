@@ -22,7 +22,8 @@
         .box { border: 1px solid #ced4da; padding: 6px 8px; margin: 6px 0; background: #f8f9fa; }
         .reasons { margin: 2px 0; padding-left: 16px; color: #842029; }
         .step-block { page-break-inside: avoid; }
-        img.chart { width: 100%; max-width: 900px; margin: 6px 0; }
+        img.chart { width: 100%; height: auto; margin: 6px 0; }
+        @media print { .noprint { display: none; } }
         pre { white-space: pre-wrap; font-size: 8px; background: #f8f9fa; border: 1px solid #ced4da; padding: 4px; }
     </style>
 </head>
@@ -73,6 +74,9 @@
 <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
 
 <h2 th:if="${!charts.isEmpty()}">Графики</h2>
+<div class="noprint muted" th:if="${!charts.isEmpty()}">Время на графиках:
+    <a th:href="'/runs/' + ${run.id} + '/report.html?time=rel'" th:style="${!timeAbs} ? 'font-weight:bold'">минуты от начала теста</a> ·
+    <a th:href="'/runs/' + ${run.id} + '/report.html?time=abs'" th:style="${timeAbs} ? 'font-weight:bold'">абсолютное время</a></div>
 <div th:each="c : ${charts}"><img class="chart" th:src="${c.dataUri}" th:alt="${c.title}"/></div>
 
 <h2>Генераторы (справочно)</h2>

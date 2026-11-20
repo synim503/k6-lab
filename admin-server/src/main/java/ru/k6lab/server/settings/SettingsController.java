@@ -28,10 +28,12 @@ public class SettingsController {
     private final AgentSessionRegistry registry;
     private final AppProperties props;
     private final ru.k6lab.server.run.RunOrchestrator orchestrator;
+    private final ru.k6lab.server.result.ChartStyleService chartStyle;
 
     public SettingsController(SettingsService settings, PrometheusDiagnostics diagnostics, MetricNamesService names,
                               GeneratorRepository generators, AgentSessionRegistry registry, AppProperties props,
-                              ru.k6lab.server.run.RunOrchestrator orchestrator) {
+                              ru.k6lab.server.run.RunOrchestrator orchestrator, ru.k6lab.server.result.ChartStyleService chartStyle) {
+        this.chartStyle = chartStyle;
         this.settings = settings;
         this.diagnostics = diagnostics;
         this.names = names;
@@ -57,6 +59,8 @@ public class SettingsController {
         model.addAttribute("logLines", settings.logLinesPerSecond());
         model.addAttribute("logDays", settings.logRetentionDays());
         model.addAttribute("metricsDays", settings.metricsRetentionDays());
+        model.addAttribute("chartStyle", chartStyle.get());
+        model.addAttribute("timeAbs", chartStyle.absoluteTime());
         model.addAttribute("agentPort", props.getAgentPort());
         model.addAttribute("requireDiagnostics", props.isRequireDiagnostics());
         List<Generator> connected = generators.findAll().stream().filter(g -> registry.isConnected(g.getId())).toList();
@@ -132,6 +136,39 @@ public class SettingsController {
             ra.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/settings";
+    }
+
+    /** Оформление графиков отчёта: тема, размеры, легенда. */
+    @PostMapping("/report-charts")
+    public String saveReportCharts(@RequestParam String theme, @RequestParam int width, @RequestParam int height, @RequestParam String legend,
+                                   @RequestParam(defaultValue = "false") boolean stats, @RequestParam int maxLegend,
+                                   @RequestParam(defaultValue = "rel") String timeAxis, RedirectAttributes ra) {
+        chartStyle.save(theme, width, height, legend, stats, maxLegend, "abs".equals(timeAxis));
+        ra.addFlashAttribute("info", "Оформление графиков отчёта сохранено");
+        return "redirect:/settings#charts";
+    }
+
+    @PostMapping("/report-charts/reset")
+    public String resetReportCharts(RedirectAttributes ra) {
+        chartStyle.reset();
+        ra.addFlashAttribute("info", "Оформление графиков сброшено к значениям по умолчанию");
+        return "redirect:/settings#charts";
+    }
+
+    /** Пример графика с текущими настройками (на тестовых данных): чтобы подобрать вид, не запуская тест. */
+    @GetMapping(value = "/report-charts/preview.png", produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
+    @org.springframework.web.bind.annotation.ResponseBody
+    public byte[] previewReportChart() {
+        java.util.Map<String, java.util.List<ru.k6lab.server.result.RunSeriesService.Pt>> series = new java.util.LinkedHashMap<>();
+        for (int s = 1; s <= 6; s++) {
+            java.util.List<ru.k6lab.server.result.RunSeriesService.Pt> pts = new java.util.ArrayList<>();
+            for (int i = 0; i <= 40; i++) {
+                pts.add(new ru.k6lab.server.result.RunSeriesService.Pt(i * 0.5, 15 + s * 8 + 12 * Math.sin(i / 4.0 + s) + i * 0.6));
+            }
+            series.put("omltd-app-0" + s + ".example:9100", pts);
+        }
+        return ru.k6lab.server.result.ChartRenderer.with(chartStyle.get(),
+                () -> ru.k6lab.server.result.ChartRenderer.custom("Пример: утилизация CPU", "%", series)).png();
     }
 
     @PostMapping("/limits")

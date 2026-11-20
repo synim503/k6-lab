@@ -63,6 +63,17 @@ public class CustomChartService {
         return seriesInQuery > 1 && !labels.isEmpty() ? legend.strip() + " " + labelText : legend.strip();
     }
 
+    /** Заголовок графика: переменные ($job) заменяются значениями; «любое» (.*) - словом «все», служебные значения ({run_id}) не подставляются. */
+    static String title(String name, Map<String, String> vars) {
+        Map<String, String> shown = new LinkedHashMap<>();
+        vars.forEach((k, v) -> {
+            if (v != null && !v.contains("{")) {
+                shown.put(k, ".*".equals(v) ? "все" : v);
+            }
+        });
+        return GrafanaDashboardImport.substitute(name, shown);
+    }
+
     public List<ChartRenderer.Img> charts(Run run) {
         List<ChartTemplateStore.Template> templates = store.enabled(run.getScriptId());
         Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
@@ -102,7 +113,7 @@ public class CustomChartService {
                 }
             }
             try {
-                ChartRenderer.Img img = ChartRenderer.custom(t.name(), t.unit(), series);
+                ChartRenderer.Img img = ChartRenderer.custom(title(t.name(), vars), t.unit(), series);
                 if (img != null) {
                     out.add(img);
                 }

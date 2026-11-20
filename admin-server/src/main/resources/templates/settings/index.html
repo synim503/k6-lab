@@ -10,7 +10,7 @@
             <div class="sub mt-1">Связь с Prometheus, какие метрики собираются, хранение данных и логи агентов.</div></div>
     </div>
     <nav class="section-nav" aria-label="Разделы настроек">
-        <a href="#prom">Prometheus</a><a href="#diag">Диагностика</a><a href="#allow">Метрики агентов</a><a href="#names">Имена метрик</a><a href="#limits">Хранение и логи</a>
+        <a href="#prom">Prometheus</a><a href="#diag">Диагностика</a><a href="#allow">Метрики агентов</a><a href="#names">Имена метрик</a><a href="#limits">Хранение и логи</a><a href="#charts">Графики отчёта</a>
     </nav>
     <div class="row g-3">
         <div class="col-lg-6">
@@ -105,6 +105,40 @@
                 <div class="form-text mt-2">Результаты и отчёты хранятся без ограничения срока.</div>
             </div></div>
 
+            <div class="card mt-3" id="charts"><div class="card-header">Графики отчёта</div><div class="card-body">
+                <div class="small text-muted mb-2">Оформление графиков в HTML, PDF и Word-отчётах. Высота — это высота самого графика: легенда снизу добавляется к ней,
+                    поэтому график не сжимается, даже если в нём много рядов. Если рядов больше лимита легенды, в ней остаются ряды с наибольшим максимумом.</div>
+                <form class="row g-2 align-items-end" th:action="@{/settings/report-charts}" method="post">
+                    <div class="col-md-2"><label class="form-label small mb-1">Тема</label>
+                        <select class="form-select form-select-sm" name="theme">
+                            <option value="DARK" th:selected="${chartStyle.theme().name() == 'DARK'}">Тёмная (как Grafana)</option>
+                            <option value="LIGHT" th:selected="${chartStyle.theme().name() == 'LIGHT'}">Светлая (для печати)</option></select></div>
+                    <div class="col-md-2"><label class="form-label small mb-1">Ширина, px</label>
+                        <input class="form-control form-control-sm" type="number" name="width" min="600" max="2000" step="50" th:value="${chartStyle.width()}"></div>
+                    <div class="col-md-2"><label class="form-label small mb-1">Высота графика, px</label>
+                        <input class="form-control form-control-sm" type="number" name="height" min="200" max="800" step="20" th:value="${chartStyle.height()}"></div>
+                    <div class="col-md-2"><label class="form-label small mb-1">Легенда</label>
+                        <select class="form-select form-select-sm" name="legend">
+                            <option value="BOTTOM" th:selected="${chartStyle.legend().name() == 'BOTTOM'}">Снизу</option>
+                            <option value="LEFT" th:selected="${chartStyle.legend().name() == 'LEFT'}">Слева</option>
+                            <option value="RIGHT" th:selected="${chartStyle.legend().name() == 'RIGHT'}">Справа</option>
+                            <option value="NONE" th:selected="${chartStyle.legend().name() == 'NONE'}">Скрыть</option></select></div>
+                    <div class="col-md-2"><label class="form-label small mb-1">Рядов в легенде, до</label>
+                        <input class="form-control form-control-sm" type="number" name="maxLegend" min="1" max="100" th:value="${chartStyle.maxLegend()}"></div>
+                    <div class="col-md-2"><label class="form-label small mb-1">Ось времени</label>
+                        <select class="form-select form-select-sm" name="timeAxis">
+                            <option value="rel" th:selected="${!timeAbs}">Минуты от начала теста</option>
+                            <option value="abs" th:selected="${timeAbs}">Абсолютное время</option></select></div>
+                    <div class="col-md-2"><div class="form-check mb-1"><input class="form-check-input" type="checkbox" id="chart-stats" name="stats" value="true" th:checked="${chartStyle.stats()}">
+                        <label class="form-check-label small" for="chart-stats">Last / Mean / Max в легенде</label></div></div>
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-primary btn-sm">Сохранить</button>
+                        <button class="btn btn-outline-secondary btn-sm" th:formaction="@{/settings/report-charts/reset}" formnovalidate
+                                onclick="return confirm('Сбросить оформление графиков к значениям по умолчанию?')">Сбросить</button></div>
+                </form>
+                <div class="mt-3 small text-muted">Предпросмотр на тестовых данных (обновляется после сохранения):</div>
+                <img class="img-fluid border rounded mt-1" th:src="@{/settings/report-charts/preview.png}" alt="Предпросмотр графика" style="max-width:100%">
+            </div></div>
             <div class="card mt-3"><div class="card-header">Агенты</div><div class="card-body">
                 Порт подключения агентов: <b th:text="${agentPort}"></b> (отдельный коннектор, без TLS — используйте изолированную сеть).
             </div></div>

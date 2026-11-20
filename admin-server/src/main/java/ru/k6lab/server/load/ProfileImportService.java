@@ -105,6 +105,7 @@ public class ProfileImportService {
             throw new IllegalArgumentException("«" + name + "»: нет включённых операций");
         }
         load.completeWithScriptFunctions(script.getId(), f);
+        requireFunctionsExist(script, f, name);
         try {
             // полная проверка как при запуске и планировании (в том числе что функции операций есть в скрипте):
             // ошибку видно при импорте, а не в назначенный час
@@ -117,6 +118,24 @@ public class ProfileImportService {
             throw new IllegalArgumentException("«" + name + "»: " + e.getMessage());
         }
         return new Ready(script, name, LoadJson.toJson(LoadJson.fromJson(LoadJson.toJson(f))));
+    }
+
+    /**
+     * Функции операций должны быть в последней версии скрипта. Без этой проверки, если не нашлась ни одна функция, сервер писал бы общее
+     * «Не описана нагрузка»; здесь называем ненайденные функции и перечисляем доступные.
+     */
+    private void requireFunctionsExist(Script script, LoadForm f, String profile) {
+        var version = scripts.latest(script.getId()).orElse(null);
+        if (version == null) {
+            return;
+        }
+        java.util.Set<String> available = scripts.operationNames(version);
+        List<String> missing = f.getOps().stream().filter(LoadForm.OpForm::isEnabled)
+                .map(o -> o.getExecFn() == null ? "" : o.getExecFn().trim()).filter(fn -> !fn.isEmpty() && !available.contains(fn)).distinct().toList();
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException("«" + profile + "»: в скрипте «" + script.getName() + "» (v" + version.getNumber() + ") нет функции "
+                    + String.join(", ", missing) + ". Доступные функции: " + (available.isEmpty() ? "нет" : String.join(", ", available)));
+        }
     }
 
     /** Профили скрипта в формате импорта (для переноса между стендами и правки руками). */

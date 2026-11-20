@@ -244,6 +244,19 @@ public class ScheduleTimelineService {
      * Свои полосы записи не учитываются. null - раньше назначенного времени освободиться нечему.
      */
     public Instant earliestStart(ScheduledRunStore.Item it, Instant notBefore) {
+        return earliestStart(it, notBefore, true);
+    }
+
+    /**
+     * Самое раннее время не раньше notBefore, когда генераторы записи свободны на весь её интервал, без ограничения назначенным временем
+     * (для просроченных записей после снятия паузы). Если генераторы не назначены - notBefore.
+     */
+    public Instant earliestFreeStart(ScheduledRunStore.Item it, Instant notBefore) {
+        Instant t = earliestStart(it, notBefore, false);
+        return t == null ? notBefore : t;
+    }
+
+    private Instant earliestStart(ScheduledRunStore.Item it, Instant notBefore, boolean onlyBeforeRunAt) {
         if (it.generatorIds().isEmpty()) {
             return null;
         }
@@ -269,7 +282,7 @@ public class ScheduleTimelineService {
         }
         candidates.sort(Long::compare);
         for (long t : candidates) {
-            if (t >= it.runAt().toEpochMilli()) {
+            if (onlyBeforeRunAt && t >= it.runAt().toEpochMilli()) {
                 return null;
             }
             boolean ok = true;

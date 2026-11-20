@@ -67,8 +67,9 @@ public class RunResultController {
     }
 
     @GetMapping(value = "/report.html", produces = MediaType.TEXT_HTML_VALUE)
-    public ResponseEntity<byte[]> html(@PathVariable Long id, @RequestParam(defaultValue = "false") boolean download) {
-        byte[] body = reports.renderHtml(id).getBytes(StandardCharsets.UTF_8);
+    public ResponseEntity<byte[]> html(@PathVariable Long id, @RequestParam(defaultValue = "false") boolean download,
+                                       @RequestParam(required = false) String time) {
+        byte[] body = reports.renderHtml(id, absTime(time)).getBytes(StandardCharsets.UTF_8);
         ResponseEntity.BodyBuilder b = ResponseEntity.ok().contentType(new MediaType("text", "html", StandardCharsets.UTF_8));
         if (download) {
             b.header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("run-" + id + "-report.html").build().toString());
@@ -76,21 +77,26 @@ public class RunResultController {
         return b.body(body);
     }
 
+    /** Ось времени графиков: abs - часы, rel - минуты от начала теста, не задано - как в настройках. */
+    private static Boolean absTime(String time) {
+        return time == null || time.isBlank() ? null : "abs".equalsIgnoreCase(time.trim());
+    }
+
     private static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     /** Отчёт в Word: имя файла «сценарий - профиль». */
     @GetMapping(value = "/report.docx", produces = DOCX)
-    public ResponseEntity<byte[]> docx(@PathVariable Long id) {
+    public ResponseEntity<byte[]> docx(@PathVariable Long id, @RequestParam(required = false) String time) {
         String name = ReportService.title(runService.get(id)).replaceAll("[\\\\/:*?\"<>|\\r\\n]", "_");
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(DOCX))
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(name + " (запуск " + id + ").docx", StandardCharsets.UTF_8).build().toString())
-                .body(reports.renderDocx(id));
+                .body(reports.renderDocx(id, absTime(time)));
     }
 
     @GetMapping(value = "/report.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
-    public ResponseEntity<byte[]> pdf(@PathVariable Long id) {
+    public ResponseEntity<byte[]> pdf(@PathVariable Long id, @RequestParam(required = false) String time) {
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("run-" + id + "-report.pdf").build().toString())
-                .body(reports.renderPdf(id));
+                .body(reports.renderPdf(id, absTime(time)));
     }
 }

@@ -15,6 +15,7 @@ import ru.k6lab.server.run.Run;
 import ru.k6lab.server.run.RunService;
 import ru.k6lab.server.script.ScriptService;
 import ru.k6lab.server.secret.SecretService;
+import ru.k6lab.server.settings.SettingsService;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -52,10 +53,15 @@ public class ScheduledRunService {
     private final AuditService audit;
     private final LoadService load;
     private final ScheduleTimelineService timeline;
+    private final SettingsService settings;
+
+    /** Ключ настройки: значение «1» - планировщик на паузе. */
+    public static final String PAUSED_KEY = "schedule.paused";
 
     public ScheduledRunService(ScheduledRunStore store, RunService runs, RunPlanner planner, ScriptService scripts,
                                GeneratorRepository generators, SecretService secrets, AuditService audit, LoadService load,
-                               ScheduleTimelineService timeline) {
+                               ScheduleTimelineService timeline, SettingsService settings) {
+        this.settings = settings;
         this.load = load;
         this.timeline = timeline;
         this.store = store;
@@ -175,8 +181,44 @@ public class ScheduledRunService {
         return store.pendingOfScript(scriptId);
     }
 
+    /** Планировщик на паузе: новые запуски по расписанию не стартуют (идущие тесты доходят до конца), записи ждут. */
+    public boolean paused() {
+        return "1".equals(settings.get(PAUSED_KEY, ""));
+    }
+
+    public void pause(String user) {
+        if (!paused()) {
+            settings.set(PAUSED_KEY, "1");
+            audit.record("schedule.pause", "schedule", 0L, Map.of("by", String.valueOf(user)));
+        }
+    }
+
+    /**
+     * Снимает паузу. Записи, время которых прошло за паузу, не пропускаются как «просроченные»: каждая переносится на самое раннее
+     * время, когда её генераторы свободны (с паузой между запусками), в прежнем порядке. Остальные остаются на своём времени.
+     */
+    public int resume(String user) {
+        if (!paused()) {
+            return 0;
+        }
+        settings.delete(PAUSED_KEY);
+        int moved = 0;
+        Instant notBefore = Instant.now().plus(MIN_LEAD).plusSeconds(30);
+        for (ScheduledRunStore.Item item : store.due(notBefore.plus(MIN_SHIFT))) {
+            Instant t = timeline.earliestFreeStart(item, notBefore);
+            if (store.reschedule(item.id(), t)) {
+                moved++;
+            }
+        }
+        audit.record("schedule.resume", "schedule", 0L, Map.of("by", String.valueOf(user), "moved", moved));
+        return moved;
+    }
+
     @Scheduled(fixedDelay = 10_000, initialDelay = 20_000)
     public void tick() {
+        if (paused()) {
+            return; // на паузе: ничего не стартуем и не помечаем просроченным
+        }
         shiftQueue();
         for (ScheduledRunStore.Item item : store.due(Instant.now())) {
             if (store.claim(item.id())) {

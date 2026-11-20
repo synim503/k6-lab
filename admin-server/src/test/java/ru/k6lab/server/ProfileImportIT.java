@@ -104,7 +104,8 @@ class ProfileImportIT extends AbstractIT {
         // одна ошибка - не сохраняется ни один профиль
         int before = profiles.list(s.getId()).size();
         String bad = "[{\"name\": \"Новый\", \"operations\": [" + op("work", 7) + "]}, {\"name\": \"Плохой\", \"operations\": [" + op("nope", "missingFn", 7) + "]}]";
-        assertThatThrownBy(() -> importer.importProfiles(s.getId(), bad, "tester")).hasMessageContaining("Профиль №2");
+        assertThatThrownBy(() -> importer.importProfiles(s.getId(), bad, "tester")).hasMessageContaining("Профиль №2")
+                .hasMessageContaining("missingFn").hasMessageContaining("Доступные функции").hasMessageContaining("work");
         assertThat(profiles.list(s.getId())).hasSize(before);
         assertThatThrownBy(() -> importer.importProfiles(s.getId(), "[{\"operations\": []}]", "tester")).hasMessageContaining("name");
         assertThatThrownBy(() -> importer.importProfiles(s.getId(), "не json", "tester")).isInstanceOf(IllegalArgumentException.class);
@@ -171,5 +172,18 @@ class ProfileImportIT extends AbstractIT {
         long vid = vars.list(s.getId()).get(0).id();
         mvc.perform(post("/scripts/" + s.getId() + "/charts/variables/" + vid + "/delete").with(csrf())).andExpect(status().is3xxRedirection());
         assertThat(vars.map(s.getId())).isEmpty();
+
+        // удаление графиков: выбранные и все
+        var all = charts.list(s.getId());
+        assertThat(all.size()).isGreaterThanOrEqualTo(3);
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/delete-selected").with(csrf())
+                .param("ids", String.valueOf(all.get(0).id())).param("ids", String.valueOf(all.get(1).id()))).andExpect(status().is3xxRedirection());
+        assertThat(charts.list(s.getId())).hasSize(all.size() - 2).extracting(ChartTemplateStore.Template::id)
+                .doesNotContain(all.get(0).id(), all.get(1).id());
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/delete-selected").with(csrf())).andExpect(status().is3xxRedirection()); // ничего не выбрано
+        assertThat(charts.list(s.getId())).hasSize(all.size() - 2);
+        mvc.perform(get("/scripts/" + s.getId() + "/charts")).andExpect(status().isOk()).andExpect(content().string(containsString("Удалить выбранные")));
+        mvc.perform(post("/scripts/" + s.getId() + "/charts/delete-all").with(csrf())).andExpect(status().is3xxRedirection());
+        assertThat(charts.list(s.getId())).isEmpty();
     }
 }

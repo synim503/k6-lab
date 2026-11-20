@@ -33,7 +33,7 @@
             <div class="col-md-4"><label class="form-label small mb-1">Имя графика</label>
                 <input class="form-control form-control-sm" name="name" maxlength="120" required placeholder="Например: CPU сервера приложений"></div>
             <div class="col-md-2"><label class="form-label small mb-1">Единицы</label>
-                <input class="form-control form-control-sm" name="unit" maxlength="32" placeholder="%, мс, оп/с"></div>
+                <input class="form-control form-control-sm" name="unit" maxlength="32" placeholder="%, мс, оп/с, Б" title="Если единицы Б или Б/с, большие значения автоматически переводятся в КБ, МБ, ГБ"></div>
         </div>
         <label class="form-label small mb-1">Запросы на графике (каждый рисуется своими линиями)</label>
         <div id="chart-queries">
@@ -73,23 +73,67 @@
     </div>
 
     <div class="card empty-state" th:if="${templates.isEmpty()}"><i class="bi bi-graph-up"></i>Своих графиков пока нет.</div>
-    <div class="card" th:unless="${templates.isEmpty()}"><table class="table table-sm align-middle mb-0">
-        <thead><tr><th>Имя</th><th>Единицы</th><th>PromQL</th><th></th></tr></thead>
-        <tbody><tr th:each="t : ${templates}" th:classappend="${!t.enabled} ? 'text-muted'">
-            <td th:text="${t.name}"></td><td th:text="${t.unit}"></td>
-            <td><div th:each="q : ${t.queries}" class="mb-1"><code class="small" style="white-space:pre-wrap" th:text="${q.promql}"></code>
-                <span class="badge text-bg-light border ms-1" th:if="${!#strings.isEmpty(q.legend)}" th:text="${q.legend}"></span></div></td>
-            <td class="text-end text-nowrap">
-                <form class="d-inline" th:action="@{/scripts/{id}/charts/{tid}/toggle(id=${script.id},tid=${t.id})}" method="post">
-                    <input type="hidden" name="enabled" th:value="${!t.enabled}">
-                    <button class="btn btn-sm btn-outline-secondary" th:text="${t.enabled} ? 'Выключить' : 'Включить'"></button></form>
-                <form class="d-inline" th:action="@{/scripts/{id}/charts/{tid}/delete(id=${script.id},tid=${t.id})}" method="post"
-                      onsubmit="return confirm('Удалить график?')"><button class="btn btn-sm btn-outline-danger">Удалить</button></form></td>
-        </tr></tbody></table></div>
+    <form class="card" th:unless="${templates.isEmpty()}" id="chart-list" method="post" th:action="@{/scripts/{id}/charts/delete-selected(id=${script.id})}">
+        <div class="d-flex flex-wrap align-items-center gap-2 p-2 border-bottom">
+            <span class="fw-semibold small"><span th:text="${templates.size()}"></span> граф.</span>
+            <input class="form-control form-control-sm" style="width:220px" type="search" id="chart-filter" placeholder="Поиск по имени и запросу" aria-label="Поиск">
+            <button class="btn btn-sm btn-outline-danger ms-auto" id="chart-del-sel" disabled
+                    onclick="return confirm('Удалить выбранные графики (' + document.querySelectorAll('.chart-sel:checked').length + ')?')">
+                <i class="bi bi-trash me-1"></i>Удалить выбранные <span id="chart-sel-n"></span></button>
+            <button class="btn btn-sm btn-outline-danger" th:formaction="@{/scripts/{id}/charts/delete-all(id=${script.id})}" formnovalidate
+                    onclick="return confirm('Удалить ВСЕ графики этого скрипта?')">Удалить все</button>
+        </div>
+        <table class="table table-sm table-hover align-middle mb-0 chart-tbl" style="font-size:.85rem">
+            <thead><tr><th style="width:30px"><input type="checkbox" class="form-check-input" id="chart-all" title="Выбрать все видимые"></th>
+                <th>График</th><th>Запросы</th><th style="width:110px"></th></tr></thead>
+            <tbody><tr th:each="t : ${templates}" class="chart-row" th:classappend="${!t.enabled} ? 'text-muted'">
+                <td><input type="checkbox" class="form-check-input chart-sel" name="ids" th:value="${t.id}"></td>
+                <td style="max-width:280px"><div class="fw-semibold text-truncate" th:text="${t.name}" th:title="${t.name}"></div>
+                    <div class="text-muted" style="font-size:.75rem"><span th:if="${!#strings.isEmpty(t.unit)}" th:text="${t.unit} + ' · '"></span><span th:text="${t.queries.size()} + ' запр.'"></span><span th:if="${!t.enabled}"> · выключен</span></div></td>
+                <td style="max-width:0;width:100%"><details>
+                    <summary class="font-monospace text-truncate" style="display:block;cursor:pointer;font-size:.78rem" th:text="${t.promql}"></summary>
+                    <div th:each="q : ${t.queries}" class="mt-1"><code class="small" style="white-space:pre-wrap;word-break:break-all" th:text="${q.promql}"></code>
+                        <span class="badge text-bg-light border ms-1" th:if="${!#strings.isEmpty(q.legend)}" th:text="${q.legend}"></span></div>
+                </details></td>
+                <td class="text-end text-nowrap">
+                    <button class="btn btn-sm btn-outline-secondary py-0 px-1" name="enabled" th:value="${!t.enabled}" formnovalidate
+                            th:formaction="@{/scripts/{id}/charts/{tid}/toggle(id=${script.id},tid=${t.id})}" th:title="${t.enabled} ? 'Выключить (в отчёт не попадёт)' : 'Включить'">
+                        <i class="bi" th:classappend="${t.enabled} ? 'bi-eye' : 'bi-eye-slash'"></i></button>
+                    <button class="btn btn-sm btn-outline-danger py-0 px-1" formnovalidate title="Удалить"
+                            th:formaction="@{/scripts/{id}/charts/{tid}/delete(id=${script.id},tid=${t.id})}"><i class="bi bi-trash"></i></button></td>
+            </tr></tbody></table>
+    </form>
 </th:block>
 <th:block layout:fragment="scripts">
     <script>
         (function () {
+            var list = document.getElementById('chart-list');
+            if (list) {
+                var rows = [].slice.call(list.querySelectorAll('.chart-row'));
+                var all = document.getElementById('chart-all'), del = document.getElementById('chart-del-sel'), cnt = document.getElementById('chart-sel-n');
+                function visible(r) { return r.style.display !== 'none'; }
+                function sync() {
+                    var n = list.querySelectorAll('.chart-sel:checked').length;
+                    del.disabled = n === 0;
+                    cnt.textContent = n ? '(' + n + ')' : '';
+                }
+                list.addEventListener('change', function (e) { if (e.target.classList.contains('chart-sel')) { sync(); } });
+                all.addEventListener('change', function () {
+                    rows.forEach(function (r) { if (visible(r)) { r.querySelector('.chart-sel').checked = all.checked; } });
+                    sync();
+                });
+                document.getElementById('chart-filter').addEventListener('input', function (e) {
+                    var q = e.target.value.trim().toLowerCase();
+                    rows.forEach(function (r) {
+                        var show = !q || r.textContent.toLowerCase().indexOf(q) >= 0;
+                        r.style.display = show ? '' : 'none';
+                        if (!show) { r.querySelector('.chart-sel').checked = false; }
+                    });
+                    all.checked = false;
+                    sync();
+                });
+                sync();
+            }
             var box = document.getElementById('chart-queries');
             document.getElementById('chart-q-add').addEventListener('click', function () {
                 var row = box.querySelector('.chart-q').cloneNode(true);

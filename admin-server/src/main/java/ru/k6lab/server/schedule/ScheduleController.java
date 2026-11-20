@@ -26,9 +26,11 @@ public class ScheduleController {
     private final ScheduleTimelineService timeline;
     private final ScheduleImportService importer;
     private final ru.k6lab.server.load.ProfileImportService profileImport;
+    private final ru.k6lab.server.run.RunService runs;
 
     public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline, ScheduleImportService importer,
-                              ru.k6lab.server.load.ProfileImportService profileImport) {
+                              ru.k6lab.server.load.ProfileImportService profileImport, ru.k6lab.server.run.RunService runs) {
+        this.runs = runs;
         this.service = service;
         this.timeline = timeline;
         this.importer = importer;
@@ -82,8 +84,25 @@ public class ScheduleController {
         return timeline.overview();
     }
 
+    /** Пауза планировщика: идущий тест доходит до конца, новые запуски по расписанию не стартуют до снятия паузы. */
+    @PostMapping("/schedule/pause")
+    public String pause(Principal user, RedirectAttributes ra) {
+        service.pause(user == null ? "system" : user.getName());
+        ra.addFlashAttribute("info", "Планировщик на паузе: идущий тест закончится, новые запуски по расписанию не стартуют");
+        return "redirect:/schedule";
+    }
+
+    @PostMapping("/schedule/resume")
+    public String resume(Principal user, RedirectAttributes ra) {
+        int moved = service.resume(user == null ? "system" : user.getName());
+        ra.addFlashAttribute("info", "Пауза снята" + (moved > 0 ? ": записей, время которых прошло, перенесено на ближайшее свободное время: " + moved : ""));
+        return "redirect:/schedule";
+    }
+
     @GetMapping("/schedule")
     public String list(Model model) {
+        model.addAttribute("paused", service.paused());
+        model.addAttribute("activeRuns", runs.activeRuns());
         model.addAttribute("items", service.recent());
         model.addAttribute("fmt", new ReportFormat());
         return "schedule/index";

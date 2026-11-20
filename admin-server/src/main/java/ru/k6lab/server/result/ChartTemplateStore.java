@@ -84,6 +84,25 @@ public class ChartTemplateStore {
         jdbc.update("update chart_template set enabled = ? where script_id = ? and id = ?", enabled, scriptId, id);
     }
 
+    /** Удаляет выбранные графики скрипта; возвращает, сколько удалено. */
+    public int deleteMany(long scriptId, java.util.Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return 0;
+        }
+        String marks = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        Object[] args = new Object[ids.size() + 1];
+        args[0] = scriptId;
+        int i = 1;
+        for (Long id : ids) {
+            args[i++] = id;
+        }
+        return jdbc.update("delete from chart_template where script_id = ? and id in (" + marks + ")", args);
+    }
+
+    public int deleteAll(long scriptId) {
+        return jdbc.update("delete from chart_template where script_id = ?", scriptId);
+    }
+
     public boolean delete(long scriptId, long id) {
         return jdbc.update("delete from chart_template where script_id = ? and id = ?", scriptId, id) == 1;
     }

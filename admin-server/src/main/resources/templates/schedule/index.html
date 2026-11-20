@@ -8,6 +8,19 @@
         <h4 class="m-0"><i class="bi bi-calendar-event me-2"></i>Расписание запусков</h4>
         <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts}">К скриптам</a>
     </div>
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" th:if="${paused}">
+        <div class="me-auto"><b><i class="bi bi-pause-circle me-1"></i>Планировщик на паузе.</b>
+            Новые запуски по расписанию не стартуют, записи ждут.
+            <span th:if="${!activeRuns.isEmpty()}">Идёт тест (<a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id} + (${st.last} ? '' : ', ')"></a>): он закончится сам, после него запуски не продолжатся.</span>
+            <span th:if="${activeRuns.isEmpty()}">Сейчас тестов нет. При снятии паузы записи, время которых прошло, встанут на ближайшее свободное время.</span></div>
+        <form class="m-0" th:action="@{/schedule/resume}" method="post"><button class="btn btn-success btn-sm"><i class="bi bi-play-fill me-1"></i>Снять с паузы</button></form>
+    </div>
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2" th:unless="${paused}">
+        <form class="m-0" th:action="@{/schedule/pause}" method="post"
+              onsubmit="return confirm('Поставить планировщик на паузу? Идущий тест закончится сам, новые запуски по расписанию не стартуют.')">
+            <button class="btn btn-outline-warning btn-sm"><i class="bi bi-pause-fill me-1"></i>Поставить на паузу</button></form>
+        <span class="small text-muted" th:if="${!activeRuns.isEmpty()}">Идёт тест: при паузе он дойдёт до конца, следующие не стартуют.</span>
+    </div>
     <div class="alert alert-secondary small">В назначенное время сервер сам создаёт запуск с заданными переменными и интенсивностью по операциям.
         Генераторы бронируются сразу при планировании: если на это время свободных не хватает, запись не создаётся. Забронированные генераторы
         видны на таймлайне и недоступны для других записей на это время. Если выбранный генератор к назначенному часу стал недоступен, запуск пропускается и помечается ошибкой.

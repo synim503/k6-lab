@@ -234,6 +234,10 @@ class ResultsIT extends AbstractIT {
         assertThat(html).contains("Переменные запуска").contains("BASE_URL").contains("http://sut.example").contains("API_TOKEN").doesNotContain("s3cr3tval");
         mvc.perform(get("/runs/" + run.getId())).andExpect(content().string(containsString("http://sut.example")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("s3cr3tval"))));
+        // абсолютное время на графиках: переключатель в отчёте, те же графики, docx тоже строится
+        String abs = mvc.perform(get("/runs/" + run.getId() + "/report.html").param("time", "abs")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(abs).contains("абсолютное время").contains("data:image/png;base64");
+        mvc.perform(get("/runs/" + run.getId() + "/report.docx").param("time", "abs")).andExpect(status().isOk());
         byte[] pdf = mvc.perform(get("/runs/" + run.getId() + "/report.pdf")).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
         assertThat(new String(pdf, 0, 5, StandardCharsets.ISO_8859_1)).isEqualTo("%PDF-");
         assertThat(pdf.length).isGreaterThan(5_000);
