@@ -183,6 +183,21 @@ public class PrometheusClient {
         return best == Double.MAX_VALUE ? Optional.empty() : Optional.of(Instant.ofEpochSecond((long) best));
     }
 
+    /** Список имён доступных метрик Prometheus (для подсказок в конструкторе графиков). */
+    public List<String> metricNames(SettingsService.Prometheus p) throws IOException {
+        JsonNode data = call(p, "/api/v1/label/__name__/values", "");
+        List<String> out = new ArrayList<>();
+        if (data.isArray()) {
+            for (JsonNode n : data) {
+                String s = n.asText("");
+                if (!s.isEmpty()) {
+                    out.add(s);
+                }
+            }
+        }
+        return out;
+    }
+
     /** Доступность и права: тривиальный запрос. */
     public void ping(SettingsService.Prometheus p) throws IOException {
         call(p, "/api/v1/query", "query=1");
@@ -193,7 +208,8 @@ public class PrometheusClient {
             throw new IOException("URL запросов Prometheus не задан");
         }
         String base = normalize(p.queryUrl());
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path + "?" + query)).timeout(Duration.ofSeconds(15)).GET();
+        String uri = query == null || query.isEmpty() ? base + path : base + path + "?" + query;
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(uri)).timeout(Duration.ofSeconds(15)).GET();
         p.authHeaders().forEach(b::header);
         try {
             HttpResponse<String> r = http.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

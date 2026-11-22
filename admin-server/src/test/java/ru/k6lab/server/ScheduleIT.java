@@ -482,5 +482,16 @@ class ScheduleIT extends AbstractIT {
 
         mvc.perform(post("/schedule/import").with(csrf()).param("json", "[]")).andExpect(status().is3xxRedirection());
         mvc.perform(get("/schedule")).andExpect(status().isOk()).andExpect(content().string(containsString("Импорт списка тестов")));
+
+        // метаданные скрипта для быстрого планирования прямо на /schedule + предвыбор профиля на /scripts/{id}/run?profile=
+        long maxId = jdbc.queryForObject("select id from load_profile where script_id = ? and name = 'Максимум'", Long.class, s.getId());
+        mvc.perform(get("/schedule/script-meta/" + s.getId())).andExpect(status().isOk())
+                .andExpect(content().string(containsString("Максимум")))
+                .andExpect(content().string(containsString("Стабильность")));
+        mvc.perform(get("/scripts/" + s.getId() + "/run").param("profile", String.valueOf(maxId))).andExpect(status().isOk())
+                .andExpect(content().string(containsString("profileDetailsJson".replace("profileDetailsJson", "run-profile-details"))))
+                .andExpect(content().string(containsString("Максимум")));
+        mvc.perform(post("/schedule/cancel-all-pending").with(csrf())).andExpect(status().is3xxRedirection());
+        assertThat(schedule.pendingOf(s.getId())).isEmpty();
     }
 }

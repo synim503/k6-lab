@@ -226,9 +226,11 @@ class ResultsIT extends AbstractIT {
                 .andExpect(content().string(containsString("Пересчитать итоги")));
         mvc.perform(get("/runs/" + run.getId())).andExpect(status().isOk()).andExpect(content().string(containsString("Метрики")));
         String html = mvc.perform(get("/runs/" + run.getId() + "/report.html")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        assertThat(html).contains("Отчёт о нагрузочном тесте").contains("Ступень").contains("data:image/png;base64");
-        // графики по времени от начала теста (много точек), а не «по ступеням» (одна точка на ступень)
-        assertThat(html).contains("Интенсивность: факт и план").contains("Время ответа: work").contains("Ошибки");
+        assertThat(html).contains("Отчёт о нагрузочном тесте").contains("Ступень").contains("data:image/png;base64")
+                .contains("Поиск максимума").contains("Подтверждённый максимум: ступень 2").contains("Сводка по ступеням");
+        // графики по времени от начала теста + при поиске максимума также графики по ступеням
+        assertThat(html).contains("Интенсивность: факт и план").contains("Время ответа: work").contains("Ошибки")
+                .contains("Выполнение плана по интенсивности");
         assertThat(prom.queries).anyMatch(q -> q.startsWith("sum by (scenario) (increase(k6_iterations_total"));
         // переменные запуска видны в отчёте и на странице запуска; значение переменной с именем, похожим на секрет, скрыто
         assertThat(html).contains("Переменные запуска").contains("BASE_URL").contains("http://sut.example").contains("API_TOKEN").doesNotContain("s3cr3tval");

@@ -1,220 +1,409 @@
 <!DOCTYPE html>
 <html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
       layout:decorate="~{layout/main}">
-<head><title>Запустить скрипт</title></head>
+<head><title th:text="'Запуск: ' + ${script.name}">Запустить скрипт</title></head>
 <body>
 <th:block layout:fragment="content">
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='run')}"></th:block>
-    <h5 class="mb-3">Запуск</h5>
+
+    <div class="d-none" id="run-profile-details" th:text="${profileDetailsJson}">{}</div>
+
     <div class="alert alert-danger" th:if="${blockReason != null}" th:text="${blockReason}"></div>
     <div class="alert alert-danger" th:each="e : ${errors}">
         <span th:text="${e}"></span>
-        <a class="alert-link ms-1" th:href="@{/scripts/{id}/load(id=${script.id})}">Открыть нагрузку</a></div>
+        <a class="alert-link ms-1" th:href="@{/scripts/{id}/load(id=${script.id})}">Открыть нагрузку</a>
+    </div>
     <div class="alert alert-warning py-2" th:each="w : ${warnings}" th:text="${w}"></div>
 
-    <div class="row g-3"><div class="col-lg-7 order-1">
-    <form class="card card-body mx-0" th:action="@{/scripts/{id}/run(id=${script.id})}" method="post">
-        <div class="text-muted" th:if="${generators.isEmpty()}">Серверов нет — <a th:href="@{/generators/add}">добавьте сервер</a>.</div>
-        <div th:unless="${generators.isEmpty()}">
-            <label class="form-label fw-semibold" for="gen-count">Количество генераторов</label>
-            <div class="d-flex align-items-center gap-3">
-                <input class="form-control" style="width:110px" type="number" min="1" th:max="${freeCount}" th:value="${defaultCount}" name="count" id="gen-count">
-                <span class="text-muted small">свободно: <span th:text="${freeCount}"></span> из <span th:text="${generators.size()}"></span>. Нагрузка делится между ними поровну.
-                    Число задано в скрипте (<a th:href="@{/scripts/{id}/load(id=${script.id})}">изменить</a>).</span>
-            </div>
-            <div class="mt-3" th:if="${!loadProfiles.isEmpty()}">
-                <label class="form-label fw-semibold mb-1" for="run-profile">Профиль нагрузки</label>
-                <select class="form-select" style="max-width:420px" name="profile" id="run-profile">
-                    <option value="">нагрузка скрипта как сохранена</option>
-                    <option th:each="p : ${loadProfiles}" th:value="${p.id}" th:text="${p.name}"></option>
-                </select>
-                <div class="form-text">Запуск пойдёт с операциями, сценариями и переменными выбранного профиля; нагрузка скрипта не меняется.
-                    Список справа показывает нагрузку скрипта, не профиля.</div>
-            </div>
-            <details class="mt-3">
-                <summary class="text-muted">Выбрать конкретные серверы (необязательно)</summary>
-                <div class="mt-2">
-                    <div class="form-check" th:each="g : ${generators}">
-                        <input class="form-check-input host-pick" type="checkbox" name="generatorId" th:id="'g' + ${g.id}" th:value="${g.id}"
-                               th:disabled="${!g.availableForRuns}">
-                        <label class="form-check-label" th:for="'g' + ${g.id}">
-                            <span th:text="${g.name}"></span>
-                            <span class="badge ms-1" th:classappend="${g.availableForRuns} ? 'text-bg-success' : 'text-bg-secondary'"
-                                  th:text="${g.availableForRuns} ? 'свободен' : (${g.busy} ? 'занят' : ${g.status.title})"></span></label></div>
-                    <div class="form-text">Если отмечены серверы, количество берётся по ним, а поле выше не учитывается.</div>
-                </div>
-            </details>
-            <details class="mt-3">
-                <summary class="text-muted">Параметры k6 и отладка (необязательно)</summary>
-                <div class="mt-2">
-                    <label class="form-label fw-semibold mb-1" for="http-debug">HTTP-отладка</label>
-                    <select class="form-select" style="max-width:420px" name="httpDebug" id="http-debug">
-                        <option value="">выключена</option>
-                        <option value="headers">заголовки запросов и ответов (--http-debug)</option>
-                        <option value="full">заголовки и тела (--http-debug=full)</option>
-                    </select>
-                    <div class="form-text mb-3">Каждый запрос и ответ попадает в лог запуска. Включайте на малой нагрузке: строк очень много, лишние отбрасываются по лимиту.
-                        В телах могут быть секреты.</div>
-                    <div class="form-check mb-2" th:each="f : ${k6Flags}">
-                        <input class="form-check-input" type="checkbox" name="flag" th:id="'f-' + ${f.name()}" th:value="${f.name()}">
-                        <label class="form-check-label" th:for="'f-' + ${f.name()}">
-                            <span class="fw-semibold" th:text="${f.title}"></span> <code class="small" th:text="${f.arg}"></code>
-                            <span class="badge text-bg-warning ms-1" th:if="${f.changesLoad}" title="Меняет поведение скрипта или нагрузку: результаты нельзя сравнивать с обычным запуском">меняет нагрузку</span>
-                            <span class="d-block form-text mt-0" th:text="${f.description}"></span></label></div>
-                </div>
-            </details>
+    <!-- Переключатель режима: Запустить сейчас / Запланировать запуск -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <div class="run-mode-tabs m-0" role="tablist">
+            <button type="button" class="btn active" id="mode-now-btn" data-run-mode="now">
+                <i class="bi bi-play-fill me-1"></i>Запустить сейчас
+            </button>
+            <button type="button" class="btn" id="mode-sch-btn" data-run-mode="schedule">
+                <i class="bi bi-calendar-event me-1"></i>Запланировать запуск
+                <span class="badge text-bg-primary ms-1" th:if="${!pendingSchedule.isEmpty()}" th:text="${pendingSchedule.size()}"></span>
+            </button>
         </div>
-        <div class="mt-3"><button class="btn btn-success btn-lg" th:disabled="${generators.isEmpty() or !errors.isEmpty()}"><i class="bi bi-play-fill me-1"></i>Запустить</button>
-            <a class="btn btn-link" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a></div>
-        <div class="alert alert-danger mt-3 mb-0" th:if="${error}" th:text="${error}"></div>
-    </form>
-
-    </div><div class="col-12 order-3">
-    <form class="card card-body mx-0" id="schedule" th:action="@{/scripts/{id}/schedule(id=${script.id})}" method="post">
-        <h6 class="mb-2"><i class="bi bi-calendar-event me-1"></i>Запланировать запуск</h6>
-        <div class="form-text mb-2">Сервер сам запустит скрипт в назначенное время. Если генераторов в этот момент не хватает, запуск пропускается с ошибкой.</div>
-        <div class="alert alert-info py-2 small" th:if="${!pendingSchedule.isEmpty()}">Уже запланировано:
-            <span th:each="p : ${pendingSchedule}" class="me-2"><time class="local-time" th:attr="datetime=${p.runAt}" th:text="${p.runAt}"></time></span>
-            <a th:href="@{/schedule}">все запуски</a></div>
-        <div class="tl-root" th:attr="data-url=@{/scripts/{id}/schedule/timeline(id=${script.id})},data-run-url=@{/runs/},data-schedule-url=@{/schedule}">
-            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
-                <div class="fw-semibold">Занятость генераторов</div>
-                <div class="d-flex align-items-center gap-2">
-                    <div class="btn-group btn-group-sm tl-range" role="group" aria-label="Масштаб шкалы">
-                        <button type="button" class="btn btn-outline-secondary" data-h="3">3 ч</button>
-                        <button type="button" class="btn btn-outline-secondary active" data-h="6">6 ч</button>
-                        <button type="button" class="btn btn-outline-secondary" data-h="12">12 ч</button>
-                        <button type="button" class="btn btn-outline-secondary" data-h="24">24 ч</button>
-                        <button type="button" class="btn btn-outline-secondary" data-h="72">3 дня</button>
-                    </div>
-                    <button type="button" class="btn btn-sm btn-outline-primary tl-next"><i class="bi bi-search me-1"></i>Ближайшее свободное</button>
-                </div>
-            </div>
-            <div class="tl"><div class="tl-body"><div class="text-muted small p-2">Загрузка…</div></div></div>
-            <div class="tl-note small mt-1"></div>
-            <div class="d-flex gap-3 flex-wrap text-muted mb-1 mt-1" style="font-size:.75rem">
-                <span><i class="tl-key run"></i>идёт сейчас</span>
-                <span><i class="tl-key scheduled"></i>запланирован</span>
-                <span><i class="tl-key off"></i>генератор не в сети или на обслуживании</span>
-                <span><i class="tl-key sel"></i>ваш запуск (длительность + запас на остановку)</span>
-                <span><i class="tl-key now"></i>сейчас</span>
-                <span>Кликните или потяните по шкале, чтобы выбрать время старта; клик по полосе — подробности.</span>
-            </div>
-            <div class="tl-detail mb-3"></div>
-        <div class="row g-3">
-            <div class="col-md-6"><label class="form-label fw-semibold" for="sch-at">Когда</label>
-                <input class="form-control" type="datetime-local" id="sch-at">
-                <input type="hidden" name="runAt" id="sch-iso">
-                <div class="form-text">Время вашего часового пояса. Если не выбрано — запуск встанет на ближайшее время, когда свободны нужные генераторы.</div></div>
-            <div class="col-md-6"><label class="form-label fw-semibold" for="sch-count">Генераторов</label>
-                <input class="form-control" type="number" min="1" name="count" id="sch-count" th:value="${defaultCount}">
-                <div class="form-text">Свободные на момент старта. Или отметьте конкретные ниже.</div></div>
-        </div>
-        <div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="shift" value="true" id="sch-shift">
-            <label class="form-check-label" for="sch-shift">Сдвигать вперёд, если генераторы освободятся раньше
-                <span class="text-muted small">(например, предыдущий тест остановлен досрочно): запуск начнётся через 5 минут после освобождения. Время станет другим, чем выбрано.</span></label></div>
-        <details class="mt-2" th:unless="${generators.isEmpty()}"><summary class="text-muted">Выбрать конкретные серверы (необязательно)</summary>
-            <div class="mt-2 form-check" th:each="g : ${generators}">
-                <input class="form-check-input" type="checkbox" name="generatorId" th:id="'sg' + ${g.id}" th:value="${g.id}">
-                <label class="form-check-label" th:for="'sg' + ${g.id}" th:text="${g.name}"></label></div></details>
-
-        <div class="mt-3" th:if="${!loadProfiles.isEmpty()}" id="sch-profile-box" th:attr="data-ops=${profileOpsJson},data-env=${profileEnvJson}">
-            <label class="form-label fw-semibold mb-1" for="sch-profile">Профиль нагрузки</label>
-            <select class="form-select" style="max-width:420px" name="profile" id="sch-profile">
-                <option value="">нагрузка скрипта как сохранена на момент запуска</option>
-                <option th:each="p : ${loadProfiles}" th:value="${p.id}" th:text="${p.name}"></option>
-            </select>
-            <div class="form-text">Профили сохраняются на странице «Нагрузка». С профилем запуск идёт с его операциями, сценариями и переменными; нагрузка скрипта не меняется.</div>
-        </div>
-
-        <div class="fw-semibold mt-3 mb-1">Интенсивность по операциям</div>
-        <div class="form-text mb-2">Процент от нагрузки, заданной в скрипте: 100 — без изменений, 150 — в полтора раза выше. Умножаются ставки и цели стадий.</div>
-        <div class="text-muted small" th:if="${ops.isEmpty()}">Нагрузка не описана.</div>
-        <div class="row g-2" id="sch-ops">
-            <div class="col-md-6" th:each="o : ${ops}">
-                <div class="input-group input-group-sm"><span class="input-group-text flex-grow-1 text-start" th:text="${o.name}"></span>
-                    <input class="form-control" style="max-width:90px" type="number" min="1" max="10000" step="any" value="100" th:name="'pct_' + ${o.name}" aria-label="Процент интенсивности">
-                    <span class="input-group-text">%</span></div></div>
-        </div>
-
-        <div class="fw-semibold mt-3 mb-1">Переменные</div>
-        <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-script" value="script" checked>
-            <label class="form-check-label" for="env-script">как в скрипте на момент запуска (или как в выбранном профиле)</label></div>
-        <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-custom" value="custom">
-            <label class="form-check-label" for="env-custom">свои для этого запуска (полный набор вместо заданных в скрипте)</label></div>
-        <textarea class="form-control font-monospace mt-2" rows="5" name="envText" id="sch-env" disabled placeholder="KEY=VALUE, по одной на строку"
-                  th:text="${envText}"></textarea>
-        <div class="form-text">Можно ссылаться на секреты: <code>${secret:ИМЯ}</code>.</div>
-        <div class="mt-3"><button class="btn btn-primary" th:disabled="${generators.isEmpty() or !errors.isEmpty()}"><i class="bi bi-calendar-plus me-1"></i>Запланировать</button></div>
-    </form>
+        <a class="btn btn-sm btn-outline-secondary" th:href="@{/schedule}"><i class="bi bi-calendar3 me-1"></i>Всё расписание</a>
     </div>
-    <div class="col-lg-5 order-2">
-        <div class="card"><div class="card-header">Что будет запущено</div>
-            <div class="card-body pb-2">
-                <div class="d-flex gap-4 flex-wrap mb-2">
-                    <div><div class="text-muted small">Длительность</div><b th:text="${durationSec > 0} ? ${#numbers.formatDecimal(durationSec / 60.0, 1, 1)} + ' мин' : '—'"></b></div>
-                    <div><div class="text-muted small">Генераторов</div><b th:text="${defaultCount}"></b></div>
-                </div></div>
-            <ul class="list-group list-group-flush">
-                <li class="list-group-item text-muted" th:if="${ops.isEmpty()}">Нагрузка не описана</li>
-                <li class="list-group-item d-flex justify-content-between align-items-center gap-2" th:each="o : ${ops}">
-                    <span><span class="fw-semibold" th:text="${o.name}"></span><br><code class="small" th:text="${o.execFn}"></code></span>
-                    <span class="text-end small">
-                        <span th:if="${o.ratePerSec > 0}" th:text="${#numbers.formatDecimal(o.ratePerSec, 1, 2)} + ' оп/с'"></span>
-                        <span th:unless="${o.ratePerSec > 0}" class="text-muted" th:text="${o.executor}"></span>
-                        <br><span class="text-muted" th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaThresholdMs, 1, 0)} + ' мс'"></span></span>
-                </li></ul>
-            <div class="card-body pt-2"><a class="small" th:href="@{/scripts/{id}/load(id=${script.id})}"><i class="bi bi-pencil me-1"></i>Изменить нагрузку</a></div>
+
+    <div class="row g-3 align-items-start">
+        <div class="col-lg-8">
+            <!-- Режим 1: Запустить сейчас -->
+            <div id="pane-now">
+                <form class="card card-body mx-0" th:action="@{/scripts/{id}/run(id=${script.id})}" method="post">
+                    <div class="text-muted" th:if="${generators.isEmpty()}">Серверов нет — <a th:href="@{/generators/add}">добавьте сервер</a>.</div>
+                    <div th:unless="${generators.isEmpty()}">
+                        <div class="row g-3">
+                            <div class="col-md-6" th:if="${!loadProfiles.isEmpty()}">
+                                <label class="form-label fw-semibold mb-1" for="run-profile"><i class="bi bi-collection me-1 text-primary"></i>Профиль нагрузки</label>
+                                <select class="form-select" name="profile" id="run-profile">
+                                    <option value="">Нагрузка скрипта (как сохранена)</option>
+                                    <option th:each="p : ${loadProfiles}" th:value="${p.id}" th:text="${p.name}"
+                                            th:selected="${selectedProfileId != null and selectedProfileId == p.id}"></option>
+                                </select>
+                                <div class="form-text">Запуск пойдёт с операциями и переменными профиля; нагрузка скрипта не меняется.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold mb-1" for="gen-count"><i class="bi bi-hdd-network me-1 text-primary"></i>Количество генераторов</label>
+                                <div class="d-flex align-items-center gap-2">
+                                    <input class="form-control" style="width:110px" type="number" min="1" th:max="${freeCount}" th:value="${defaultCount}" name="count" id="gen-count">
+                                    <span class="badge" th:classappend="${freeCount > 0} ? 'text-bg-success' : 'text-bg-danger'"
+                                          th:text="'свободно ' + ${freeCount} + ' из ' + ${generators.size()}"></span>
+                                </div>
+                                <div class="form-text">Нагрузка делится поровну.</div>
+                            </div>
+                        </div>
+
+                        <details class="mt-3">
+                            <summary class="small fw-semibold text-muted"><i class="bi bi-pc-display me-1"></i>Выбрать конкретные серверы (необязательно)</summary>
+                            <div class="mt-2 sch-host-grid">
+                                <label class="sch-host-pill" th:each="g : ${generators}" th:classappend="${!g.availableForRuns} ? 'is-off'">
+                                    <input class="form-check-input host-pick" type="checkbox" name="generatorId" th:id="'g' + ${g.id}" th:value="${g.id}"
+                                           th:disabled="${!g.availableForRuns}">
+                                    <span class="dot" th:classappend="${g.availableForRuns} ? 'dot-ok' : 'dot-bad'"></span>
+                                    <span th:text="${g.name}"></span>
+                                    <span class="text-muted small" th:unless="${g.availableForRuns}"
+                                          th:text="${g.busy} ? '(занят)' : '(' + ${g.status.title} + ')'"></span>
+                                </label>
+                            </div>
+                            <div class="form-text">Если отмечены серверы, количество берётся по ним.</div>
+                        </details>
+
+                        <details class="mt-3">
+                            <summary class="small fw-semibold text-muted"><i class="bi bi-bug me-1"></i>Параметры k6 и отладка (необязательно)</summary>
+                            <div class="mt-2 pt-2 border-top">
+                                <label class="form-label small fw-semibold mb-1" for="http-debug">HTTP-отладка</label>
+                                <select class="form-select form-select-sm" style="max-width:420px" name="httpDebug" id="http-debug">
+                                    <option value="">выключена</option>
+                                    <option value="headers">заголовки запросов и ответов (--http-debug)</option>
+                                    <option value="full">заголовки и тела (--http-debug=full)</option>
+                                </select>
+                                <div class="form-text mb-3">Включайте на малой нагрузке: строк лога очень много. В телах могут быть секреты.</div>
+                                <div class="form-check mb-2" th:each="f : ${k6Flags}">
+                                    <input class="form-check-input" type="checkbox" name="flag" th:id="'f-' + ${f.name()}" th:value="${f.name()}">
+                                    <label class="form-check-label" th:for="'f-' + ${f.name()}">
+                                        <span class="fw-semibold" th:text="${f.title}"></span> <code class="small" th:text="${f.arg}"></code>
+                                        <span class="badge text-bg-warning ms-1" th:if="${f.changesLoad}" title="Меняет поведение скрипта или нагрузку">меняет нагрузку</span>
+                                        <span class="d-block form-text mt-0" th:text="${f.description}"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                    <div class="mt-3 pt-3 border-top d-flex align-items-center gap-2">
+                        <button class="btn btn-success" th:disabled="${generators.isEmpty() or !errors.isEmpty()}">
+                            <i class="bi bi-play-fill me-1"></i>Запустить сейчас
+                        </button>
+                        <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
+                    </div>
+                    <div class="alert alert-danger mt-3 mb-0" th:if="${error}" th:text="${error}"></div>
+                </form>
+            </div>
+
+            <!-- Режим 2: Запланировать запуск -->
+            <div id="pane-schedule" class="d-none">
+                <form class="card card-body mx-0" id="schedule" th:action="@{/scripts/{id}/schedule(id=${script.id})}" method="post">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                        <h6 class="m-0"><i class="bi bi-calendar-event me-1 text-primary"></i>Запланировать запуск</h6>
+                        <span class="small text-muted" th:if="${!pendingSchedule.isEmpty()}">
+                            Уже в расписании: <b th:text="${pendingSchedule.size()}"></b> · <a th:href="@{/schedule}">открыть список</a>
+                        </span>
+                    </div>
+
+                    <!-- Интерактивный таймлайн занятости генераторов -->
+                    <div class="tl-root mb-3" th:attr="data-url=@{/scripts/{id}/schedule/timeline(id=${script.id})},data-run-url=@{/runs/},data-schedule-url=@{/schedule}">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+                            <div class="small fw-semibold">Занятость генераторов <span class="text-muted fw-normal">(кликните по шкале, чтобы выбрать старт)</span></div>
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="btn-group btn-group-sm tl-range" role="group" aria-label="Масштаб шкалы">
+                                    <button type="button" class="btn btn-outline-secondary" data-h="3">3 ч</button>
+                                    <button type="button" class="btn btn-outline-secondary active" data-h="6">6 ч</button>
+                                    <button type="button" class="btn btn-outline-secondary" data-h="12">12 ч</button>
+                                    <button type="button" class="btn btn-outline-secondary" data-h="24">24 ч</button>
+                                    <button type="button" class="btn btn-outline-secondary" data-h="72">3 дня</button>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-primary tl-next"><i class="bi bi-search me-1"></i>Ближайшее свободное</button>
+                            </div>
+                        </div>
+                        <div class="tl"><div class="tl-body"><div class="text-muted small p-2">Загрузка…</div></div></div>
+                        <div class="tl-note small mt-1"></div>
+                        <div class="d-flex gap-3 flex-wrap text-muted mt-1" style="font-size:.74rem">
+                            <span><i class="tl-key run"></i>идёт сейчас</span>
+                            <span><i class="tl-key scheduled"></i>запланирован</span>
+                            <span><i class="tl-key off"></i>не в сети</span>
+                            <span><i class="tl-key sel"></i>ваш запуск</span>
+                            <span><i class="tl-key now"></i>сейчас</span>
+                        </div>
+                        <div class="tl-detail mt-1"></div>
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold mb-1" for="sch-at">Время старта</label>
+                            <input class="form-control form-control-sm" type="datetime-local" id="sch-at">
+                            <input type="hidden" name="runAt" id="sch-iso">
+                            <div class="sch-preset-chips">
+                                <button type="button" class="sch-preset-chip" data-time-preset="auto">Ближайшее авто</button>
+                                <button type="button" class="sch-preset-chip" data-time-preset="+15m">+15 мин</button>
+                                <button type="button" class="sch-preset-chip" data-time-preset="+1h">+1 час</button>
+                                <button type="button" class="sch-preset-chip" data-time-preset="22:00">Сегодня 22:00</button>
+                                <button type="button" class="sch-preset-chip" data-time-preset="02:00">Ночью 02:00</button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold mb-1" for="sch-count">Генераторов</label>
+                            <input class="form-control form-control-sm" type="number" min="1" name="count" id="sch-count" th:value="${defaultCount}">
+                            <div class="form-check form-switch mt-2">
+                                <input class="form-check-input" type="checkbox" role="switch" name="shift" value="true" id="sch-shift">
+                                <label class="form-check-label small" for="sch-shift">Сдвигать вперёд, если генераторы освободятся раньше</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-3" th:if="${!loadProfiles.isEmpty()}" id="sch-profile-box"
+                         th:attr="data-ops=${profileOpsJson},data-env=${profileEnvJson}">
+                        <label class="form-label fw-semibold mb-1" for="sch-profile"><i class="bi bi-collection me-1 text-primary"></i>Профиль нагрузки</label>
+                        <select class="form-select form-select-sm" style="max-width:420px" name="profile" id="sch-profile">
+                            <option value="">Нагрузка скрипта (как сохранена на момент запуска)</option>
+                            <option th:each="p : ${loadProfiles}" th:value="${p.id}" th:text="${p.name}"
+                                    th:selected="${selectedProfileId != null and selectedProfileId == p.id}"></option>
+                        </select>
+                    </div>
+
+                    <details class="mt-3" th:unless="${generators.isEmpty()}">
+                        <summary class="small fw-semibold text-muted"><i class="bi bi-pc-display me-1"></i>Выбрать конкретные серверы (необязательно)</summary>
+                        <div class="mt-2 sch-host-grid">
+                            <label class="sch-host-pill" th:each="g : ${generators}">
+                                <input class="form-check-input" type="checkbox" name="generatorId" th:id="'sg' + ${g.id}" th:value="${g.id}">
+                                <span th:text="${g.name}"></span>
+                            </label>
+                        </div>
+                    </details>
+
+                    <div class="mt-3 pt-3 border-top">
+                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                            <span class="small fw-semibold"><i class="bi bi-sliders me-1 text-primary"></i>Масштаб интенсивности по операциям</span>
+                            <div class="sch-preset-chips m-0">
+                                <button type="button" class="sch-preset-chip" data-pct-all="50">50%</button>
+                                <button type="button" class="sch-preset-chip" data-pct-all="80">80%</button>
+                                <button type="button" class="sch-preset-chip" data-pct-all="100">100%</button>
+                                <button type="button" class="sch-preset-chip" data-pct-all="120">120%</button>
+                                <button type="button" class="sch-preset-chip" data-pct-all="150">150%</button>
+                                <button type="button" class="sch-preset-chip" data-pct-all="200">200%</button>
+                            </div>
+                        </div>
+                        <div class="text-muted small" th:if="${ops.isEmpty()}">Нагрузка не описана.</div>
+                        <div class="row g-2" id="sch-ops">
+                            <div class="col-md-6" th:each="o : ${ops}">
+                                <div class="input-group input-group-sm">
+                                    <span class="input-group-text flex-grow-1 text-start" th:text="${o.name}"></span>
+                                    <input class="form-control" style="max-width:86px" type="number" min="1" max="10000" step="any" value="100"
+                                           th:name="'pct_' + ${o.name}" aria-label="Процент интенсивности">
+                                    <span class="input-group-text">%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <details class="mt-3">
+                        <summary class="small fw-semibold text-muted"><i class="bi bi-braces me-1"></i>Переменные запуска (необязательно)</summary>
+                        <div class="mt-2">
+                            <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-script" value="script" checked>
+                                <label class="form-check-label small" for="env-script">Как в скрипте (или в выбранном профиле)</label></div>
+                            <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-custom" value="custom">
+                                <label class="form-check-label small" for="env-custom">Свои для этого запуска (полный набор)</label></div>
+                            <textarea class="form-control form-control-sm font-monospace mt-2" rows="4" name="envText" id="sch-env" disabled
+                                      placeholder="KEY=VALUE, по одной на строку" th:text="${envText}"></textarea>
+                            <div class="form-text">Можно ссылаться на секреты: <code>${secret:ИМЯ}</code>.</div>
+                        </div>
+                    </details>
+
+                    <div class="mt-3 pt-3 border-top">
+                        <button class="btn btn-primary" th:disabled="${generators.isEmpty() or !errors.isEmpty()}">
+                            <i class="bi bi-calendar-plus me-1"></i>Запланировать запуск
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
-    </div></div>
+
+        <!-- Правая липкая сводка: живое отображение выбранного профиля или нагрузки скрипта -->
+        <div class="col-lg-4">
+            <div class="card" style="position:sticky;top:.85rem">
+                <div class="card-header d-flex align-items-center justify-content-between gap-2">
+                    <span><i class="bi bi-card-checklist me-1 text-primary"></i>Что будет запущено</span>
+                    <span class="badge text-bg-primary" id="sum-source-badge">Нагрузка скрипта</span>
+                </div>
+                <div class="card-body pb-2">
+                    <div class="d-flex gap-4 flex-wrap mb-1">
+                        <div><div class="text-muted small">Длительность</div><b id="sum-dur" th:text="${durationSec > 0} ? ${#numbers.formatDecimal(durationSec / 60.0, 1, 1)} + ' мин' : '—'"></b></div>
+                        <div><div class="text-muted small">Генераторов</div><b id="sum-gens" th:text="${defaultCount}"></b></div>
+                        <div><div class="text-muted small">Переменных</div><b id="sum-env">—</b></div>
+                    </div>
+                </div>
+                <ul class="list-group list-group-flush" id="sum-ops-list">
+                    <li class="list-group-item text-muted" th:if="${ops.isEmpty()}">Нагрузка не описана</li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center gap-2" th:each="o : ${ops}">
+                        <span><span class="fw-semibold" th:text="${o.name}"></span><br><code class="small" th:text="${o.execFn}"></code></span>
+                        <span class="text-end small">
+                            <span th:if="${o.ratePerSec > 0}" th:text="${#numbers.formatDecimal(o.ratePerSec, 1, 2)} + ' оп/с'"></span>
+                            <span th:unless="${o.ratePerSec > 0}" class="text-muted" th:text="${o.executor}"></span>
+                            <br><span class="text-muted" th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaThresholdMs, 1, 0)} + ' мс'"></span>
+                        </span>
+                    </li>
+                </ul>
+                <div class="card-body pt-2 d-flex justify-content-between align-items-center">
+                    <a class="small" id="sum-edit-link" th:href="@{/scripts/{id}/load(id=${script.id})}"><i class="bi bi-pencil me-1"></i>Изменить нагрузку</a>
+                </div>
+            </div>
+        </div>
+    </div>
 </th:block>
 <th:block layout:fragment="scripts">
     <script th:src="@{/js/schedule-timeline.js}"></script>
-    <script>
-        // планирование: локальное время браузера -> ISO (UTC) для сервера; переменные редактируются только в режиме «свои»
+    <script th:inline="none">
         (function () {
-            var at = document.getElementById('sch-at'), iso = document.getElementById('sch-iso');
-            if (!at) { return; }
-            at.addEventListener('input', function () { var d = new Date(at.value); iso.value = isNaN(d) ? '' : d.toISOString(); });
-            var env = document.getElementById('sch-env');
-            // выбор профиля: список операций для интенсивности и переменные подставляются из профиля
-            var box = document.getElementById('sch-profile-box');
-            if (box) {
-                var opsBy = JSON.parse(box.dataset.ops || '{}'), envBy = JSON.parse(box.dataset.env || '{}');
-                document.getElementById('sch-profile').addEventListener('change', function (e) {
-                    var key = e.target.value, names = opsBy[key] || [], html = '';
-                    names.forEach(function (n) {
-                        html += '<div class="col-md-6"><div class="input-group input-group-sm"><span class="input-group-text flex-grow-1 text-start">' + n
-                            + '</span><input class="form-control" style="max-width:90px" type="number" min="1" max="10000" step="any" value="100" name="pct_' + n
-                            + '" aria-label="Процент интенсивности"><span class="input-group-text">%</span></div></div>';
+            function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+            function pad(n) { return n < 10 ? '0' + n : '' + n; }
+            function toLocalVal(d) {
+                return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+            }
+
+            // Переключение вкладок «Запустить сейчас» / «Запланировать»
+            var paneNow = document.getElementById('pane-now'), paneSch = document.getElementById('pane-schedule');
+            var btnNow = document.getElementById('mode-now-btn'), btnSch = document.getElementById('mode-sch-btn');
+            var timelineInited = false;
+
+            function setMode(mode) {
+                var isSch = mode === 'schedule';
+                paneNow.classList.toggle('d-none', isSch);
+                paneSch.classList.toggle('d-none', !isSch);
+                btnNow.classList.toggle('active', !isSch);
+                btnSch.classList.toggle('active', isSch);
+                if (isSch && !timelineInited) {
+                    timelineInited = true;
+                    var root = document.querySelector('.tl-root'), at = document.getElementById('sch-at');
+                    if (root && at && window.K6Timeline) {
+                        K6Timeline.init(root, {at: at, cnt: document.getElementById('sch-count'), prof: document.getElementById('sch-profile')});
+                    }
+                }
+                syncSummary(isSch ? (document.getElementById('sch-profile') ? document.getElementById('sch-profile').value : '')
+                    : (document.getElementById('run-profile') ? document.getElementById('run-profile').value : ''));
+            }
+            btnNow.addEventListener('click', function () { setMode('now'); history.replaceState(null, '', location.pathname + location.search); });
+            btnSch.addEventListener('click', function () { setMode('schedule'); history.replaceState(null, '', location.pathname + location.search + '#schedule'); });
+
+            // Живое обновление правой сводки при выборе профиля
+            var detailsEl = document.getElementById('run-profile-details');
+            var detailsBy = {};
+            try { detailsBy = JSON.parse((detailsEl && detailsEl.textContent) || '{}'); } catch (e) { detailsBy = {}; }
+            var sumBadge = document.getElementById('sum-source-badge');
+            var sumDur = document.getElementById('sum-dur');
+            var sumEnv = document.getElementById('sum-env');
+            var sumOps = document.getElementById('sum-ops-list');
+            var sumEdit = document.getElementById('sum-edit-link');
+            var baseLoadHref = sumEdit ? sumEdit.getAttribute('href') : '';
+
+            function syncSummary(profileKey) {
+                var d = detailsBy[profileKey || ''] || detailsBy[''];
+                if (!d) { return; }
+                if (sumBadge) {
+                    sumBadge.textContent = d.title || 'Нагрузка скрипта';
+                    sumBadge.className = 'badge ' + (profileKey ? 'text-bg-primary' : 'text-bg-secondary');
+                }
+                if (sumDur) { sumDur.textContent = d.durationSec > 0 ? (Math.round(d.durationSec / 6.0) / 10) + ' мин' : '—'; }
+                if (sumEnv) { sumEnv.textContent = String(d.envCount || 0); }
+                if (sumOps) {
+                    if (!d.ops || !d.ops.length) {
+                        sumOps.innerHTML = '<li class="list-group-item text-muted">Нагрузка не описана</li>';
+                    } else {
+                        sumOps.innerHTML = d.ops.map(function (o) {
+                            var rate = o.ratePerSec > 0 ? (Math.round(o.ratePerSec * 100) / 100) + ' оп/с' : esc(o.executor || '');
+                            return '<li class="list-group-item d-flex justify-content-between align-items-center gap-2">' +
+                                '<span><span class="fw-semibold">' + esc(o.name) + '</span><br><code class="small">' + esc(o.execFn) + '</code></span>' +
+                                '<span class="text-end small"><span>' + rate + '</span><br>' +
+                                '<span class="text-muted">p' + o.slaPercentile + ' ≤ ' + Math.round(o.slaThresholdMs) + ' мс</span></span></li>';
+                        }).join('');
+                    }
+                }
+                if (sumEdit && baseLoadHref) {
+                    sumEdit.setAttribute('href', profileKey ? baseLoadHref + '?profile=' + encodeURIComponent(profileKey) : baseLoadHref);
+                }
+            }
+
+            var runProf = document.getElementById('run-profile');
+            if (runProf) {
+                runProf.addEventListener('change', function () { syncSummary(runProf.value); });
+            }
+
+            // Планирование: время, пресеты времени, профиль, множитель интенсивности, переменные
+            var at = document.getElementById('sch-at'), iso = document.getElementById('sch-iso'), env = document.getElementById('sch-env');
+            if (at) {
+                at.addEventListener('input', function () { var d = new Date(at.value); iso.value = isNaN(d) ? '' : d.toISOString(); });
+                document.querySelectorAll('[data-time-preset]').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var p = btn.dataset.timePreset, d = new Date();
+                        if (p === 'auto') { at.value = ''; iso.value = ''; at.dispatchEvent(new Event('input')); return; }
+                        if (p === '+15m') { d.setMinutes(d.getMinutes() + 15); }
+                        else if (p === '+1h') { d.setHours(d.getHours() + 1); }
+                        else if (p === '22:00') { d.setHours(22, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
+                        else if (p === '02:00') { d.setHours(2, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
+                        at.value = toLocalVal(d);
+                        at.dispatchEvent(new Event('input'));
                     });
-                    document.getElementById('sch-ops').innerHTML = html;
-                    if (!document.getElementById('env-custom').checked && envBy[key] !== undefined) { env.value = envBy[key]; }
                 });
             }
-            document.querySelectorAll('input[name=envMode]').forEach(function (r) {
-                r.addEventListener('change', function () { env.disabled = document.getElementById('env-custom').checked ? false : true; });
-            });
-            document.querySelectorAll('time.local-time').forEach(function (t) {
-                var d = new Date(t.getAttribute('datetime')); if (!isNaN(d)) { t.textContent = d.toLocaleString('ru-RU'); }
-            });
-        })();
-        // таймлайн выбора времени: занятость генераторов, выбор старта кликом/перетаскиванием (общий скрипт static/js/schedule-timeline.js)
-        (function () {
-            var root = document.querySelector('.tl-root'), at = document.getElementById('sch-at');
-            if (root && at && window.K6Timeline) { K6Timeline.init(root, {at: at, cnt: document.getElementById('sch-count'), prof: document.getElementById('sch-profile')}); }
-        })();
-        // отмеченные хосты задают количество: поле синхронизируется и блокируется
-        (function () {
-            var cnt = document.getElementById('gen-count');
-            var picks = document.querySelectorAll('.host-pick');
-            if (!cnt) { return; }
-            function sync() {
-                var n = 0; picks.forEach(function (p) { if (p.checked) { n++; } });
-                if (n > 0) { cnt.value = n; }
-                cnt.readOnly = n > 0;
+
+            var box = document.getElementById('sch-profile-box');
+            var schProf = document.getElementById('sch-profile');
+            function applySchProfile(key) {
+                if (!box) { return; }
+                var opsBy = JSON.parse(box.dataset.ops || '{}'), envBy = JSON.parse(box.dataset.env || '{}');
+                var names = opsBy[key] || [], html = '';
+                names.forEach(function (n) {
+                    html += '<div class="col-md-6"><div class="input-group input-group-sm"><span class="input-group-text flex-grow-1 text-start">' + esc(n)
+                        + '</span><input class="form-control" style="max-width:86px" type="number" min="1" max="10000" step="any" value="100" name="pct_' + esc(n)
+                        + '" aria-label="Процент интенсивности"><span class="input-group-text">%</span></div></div>';
+                });
+                document.getElementById('sch-ops').innerHTML = html;
+                if (env && !document.getElementById('env-custom').checked && envBy[key] !== undefined) { env.value = envBy[key]; }
+                syncSummary(key);
             }
-            picks.forEach(function (p) { p.addEventListener('change', sync); });
+            if (schProf) {
+                schProf.addEventListener('change', function () { applySchProfile(schProf.value); });
+                if (schProf.value) { applySchProfile(schProf.value); }
+            }
+
+            document.querySelectorAll('[data-pct-all]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelectorAll('#sch-ops input[name^="pct_"]').forEach(function (i) { i.value = btn.dataset.pctAll; });
+                });
+            });
+
+            document.querySelectorAll('input[name=envMode]').forEach(function (r) {
+                r.addEventListener('change', function () { if (env) { env.disabled = !document.getElementById('env-custom').checked; } });
+            });
+
+            // Хосты и синхронизация счётчика генераторов
+            var cnt = document.getElementById('gen-count'), sumGens = document.getElementById('sum-gens');
+            var picks = document.querySelectorAll('.host-pick');
+            if (cnt) {
+                function syncHosts() {
+                    var n = 0; picks.forEach(function (p) { if (p.checked) { n++; } });
+                    if (n > 0) { cnt.value = n; }
+                    cnt.readOnly = n > 0;
+                    if (sumGens) { sumGens.textContent = cnt.value; }
+                }
+                picks.forEach(function (p) { p.addEventListener('change', syncHosts); });
+                cnt.addEventListener('input', function () { if (sumGens) { sumGens.textContent = cnt.value; } });
+            }
+
+            // Инициализация режима по хэшу #schedule
+            if (location.hash === '#schedule') { setMode('schedule'); }
+            else { setMode('now'); }
         })();
     </script>
 </th:block>

@@ -29,7 +29,7 @@ class ReportChartSettingsIT extends AbstractIT {
         try {
             assertThat(styles.get()).isEqualTo(ChartStyle.DEFAULT);
             mvc.perform(post("/settings/report-charts").with(csrf()).param("theme", "LIGHT").param("width", "1200").param("height", "400")
-                    .param("legend", "RIGHT").param("maxLegend", "12").param("timeAxis", "abs")).andExpect(status().is3xxRedirection());
+                    .param("legend", "RIGHT").param("maxLegend", "12").param("timeAxis", "abs").param("autoWidth", "true")).andExpect(status().is3xxRedirection());
             assertThat(styles.absoluteTime()).isTrue();
             ChartStyle s = styles.get();
             assertThat(s.theme()).isEqualTo(ChartStyle.Theme.LIGHT);
@@ -38,6 +38,7 @@ class ReportChartSettingsIT extends AbstractIT {
             assertThat(s.legend()).isEqualTo(ChartStyle.Legend.RIGHT);
             assertThat(s.maxLegend()).isEqualTo(12);
             assertThat(s.stats()).isFalse();   // флажок не отмечен
+            assertThat(s.autoWidth()).isTrue();
             mvc.perform(get("/settings")).andExpect(status().isOk()).andExpect(content().string(containsString("Графики отчёта")))
                     .andExpect(content().string(containsString("value=\"1200\"")));
             byte[] png = mvc.perform(get("/settings/report-charts/preview.png")).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
@@ -51,6 +52,17 @@ class ReportChartSettingsIT extends AbstractIT {
             mvc.perform(post("/settings/report-charts/reset").with(csrf())).andExpect(status().is3xxRedirection());
             assertThat(styles.get()).isEqualTo(ChartStyle.DEFAULT);
             assertThat(styles.absoluteTime()).isFalse();
+
+            // живой предпросмотр по query-параметрам: учитывает несохранённые значения и не меняет сохранённый стиль
+            byte[] livePng = mvc.perform(get("/settings/report-charts/preview.png")
+                            .param("theme", "LIGHT").param("width", "900").param("height", "280")
+                            .param("legend", "NONE").param("stats", "false").param("timeAxis", "abs").param("seriesCount", "4"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
+            var liveImg = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(livePng));
+            assertThat(liveImg.getWidth()).isEqualTo(900);
+            assertThat(liveImg.getHeight()).isEqualTo(280);
+            assertThat(liveImg.getRGB(2, 2) & 0xFFFFFF).isEqualTo(0xFFFFFF);
+            assertThat(styles.get()).isEqualTo(ChartStyle.DEFAULT);
         } finally {
             styles.reset();   // настройка общая для всех тестов
         }

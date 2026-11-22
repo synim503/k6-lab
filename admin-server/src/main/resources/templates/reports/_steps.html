@@ -1,8 +1,54 @@
 <!DOCTYPE html>
 <html lang="ru" xmlns:th="http://www.thymeleaf.org">
 <body>
-<!-- Ступени x операции + метрики SUT: общий фрагмент страницы результатов и отчёта -->
+<!-- Ступени x операции + итог поиска максимума: общий фрагмент страницы результатов, HTML и PDF отчёта -->
 <div th:fragment="steps(data, fmt)">
+    <!-- Сводка поиска максимума (показывается при многоступенчатом тесте, ≥ 2 ступеней) -->
+    <th:block th:if="${data.stepTest}" th:with="max=${data.maxCapacity()}">
+    <div th:if="${max != null}" class="step-block max-block">
+        <div class="max-box" th:classappend="'max-' + ${max.css()}">
+            <div class="max-head">
+                <span class="pill" th:classappend="${max.css()}" th:text="${max.confirmedStep != null ? 'Поиск максимума' : 'Максимум не подтверждён'}"></span>
+                <b th:text="${max.headline()}"></b>
+            </div>
+            <div class="max-detail" th:if="${!#strings.isEmpty(max.detail())}" th:text="${max.detail()}"></div>
+        </div>
+
+        <h4 class="step-h">Сводка по ступеням</h4>
+        <table class="tbl">
+            <thead>
+            <tr>
+                <th>Ступень</th>
+                <th>Уровень</th>
+                <th>Окно расчёта</th>
+                <th>План сумм., оп/с</th>
+                <th>Факт сумм., оп/с</th>
+                <th>Худший SLA</th>
+                <th>Ошибки макс., %</th>
+                <th>CPU ген., %</th>
+                <th>Статус</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="s : ${data.steps}" th:classappend="${s.status == 'FAILED' or s.status == 'UNRELIABLE'} ? 'row-bad' : (${max.confirmedStep != null and max.confirmedStep.stepNo == s.stepNo} ? 'row-max' : '')">
+                <td>
+                    <span th:text="'Ступень ' + ${s.stepNo}"></span>
+                    <span class="pill ok" th:if="${max.confirmedStep != null and max.confirmedStep.stepNo == s.stepNo}">макс.</span>
+                </td>
+                <td class="num" th:text="${#numbers.formatDecimal(s.levelPct, 1, 1)} + '%'"></td>
+                <td class="num" th:text="${s.status == 'NOT_RUN'} ? '—' : (${fmt.time(s.windowStart)} + ' – ' + ${fmt.time(s.windowEnd)})"></td>
+                <td class="num" th:text="${fmt.n(s.totalTargetRate(), 1)}"></td>
+                <td class="num" th:text="${fmt.n(s.totalActualRate(), 1)}"></td>
+                <td th:text="${s.worstSlaText()}"></td>
+                <td class="num" th:text="${fmt.n(s.maxErrorPct(), 2)}"></td>
+                <td class="num" th:text="${fmt.n(s.genCpuMax, 0)}" th:classappend="${s.genOverloaded} ? 'bad-text'"></td>
+                <td><span class="pill" th:classappend="${fmt.css(s.status)}" th:text="${fmt.status(s.status)}"></span></td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+    </th:block>
+
     <div th:each="s : ${data.steps}" class="step-block">
         <h4 class="step-h">
             Ступень <span th:text="${s.stepNo}"></span> — <span th:text="${#numbers.formatDecimal(s.levelPct, 1, 1)}"></span>% от модели

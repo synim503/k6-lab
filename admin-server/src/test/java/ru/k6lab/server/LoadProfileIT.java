@@ -124,4 +124,21 @@ class LoadProfileIT extends AbstractIT {
         mvc.perform(get("/scripts/" + s.getId() + "/load").param("profile", String.valueOf(id))).andExpect(status().isOk())
                 .andExpect(content().string(containsString("Профиль не найден")));
     }
+
+    @Test
+    void profileCanBeDuplicatedAndRenamed() throws Exception {
+        Script s = script();
+        mvc.perform(saveProfile(s, "Базовый", 30, "ENV=dev")).andExpect(status().isOk());
+        long origId = profiles.list(s.getId()).get(0).id();
+
+        mvc.perform(post("/scripts/" + s.getId() + "/load/profile/" + origId + "/duplicate").with(csrf()))
+                .andExpect(status().is3xxRedirection());
+        assertThat(profiles.list(s.getId())).extracting(LoadProfileStore.Profile::name)
+                .containsExactlyInAnyOrder("Базовый", "Базовый (копия)");
+
+        long copyId = profiles.list(s.getId()).stream().filter(p -> p.name().equals("Базовый (копия)")).findFirst().orElseThrow().id();
+        mvc.perform(post("/scripts/" + s.getId() + "/load/profile/" + copyId + "/rename").with(csrf()).param("name", "Ночной прогон"))
+                .andExpect(status().is3xxRedirection());
+        assertThat(profiles.find(s.getId(), copyId)).get().extracting(LoadProfileStore.Profile::name).isEqualTo("Ночной прогон");
+    }
 }

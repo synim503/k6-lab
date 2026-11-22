@@ -34,6 +34,8 @@ public final class FakePrometheus implements AutoCloseable {
         });
         server.createContext("/api/v1/query", this::query);
         server.createContext("/api/v1/query_range", this::queryRange);
+        server.createContext("/api/v1/label/__name__/values", ex ->
+                send(ex, "{\"status\":\"success\",\"data\":[\"k6_http_reqs_total\",\"k6_http_req_duration_seconds_bucket\",\"node_cpu_seconds_total\"]}"));
         server.start();
     }
 

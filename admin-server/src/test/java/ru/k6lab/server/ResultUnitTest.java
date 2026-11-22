@@ -32,6 +32,55 @@ class ResultUnitTest {
         // латентность операции + план + ошибки
         assertThat(imgs).hasSize(3);
         assertThat(imgs).allMatch(i -> i.dataUri().startsWith("data:image/png;base64,") && i.dataUri().length() > 2000);
+
+        // итог поиска максимума: 2 ступени пройдены, 3-я нарушила SLA
+        var max = data.maxCapacity();
+        assertThat(max).isNotNull();
+        assertThat(max.confirmedStep().stepNo()).isEqualTo(2);
+        assertThat(max.firstFailedStep().stepNo()).isEqualTo(3);
+        assertThat(max.headline()).contains("ступень 2").contains("110%");
+        assertThat(max.detail()).contains("ступень 3").contains("120%");
+    }
+
+    @Test
+    void stageStepExtractorFindsMultiStepPlateausAndSkipsWarmup() throws Exception {
+        String cfg = """
+                {
+                  "scenarios": {
+                    "search": {
+                      "executor": "ramping-arrival-rate",
+                      "startRate": 0,
+                      "timeUnit": "1s",
+                      "stages": [
+                        {"duration": "2m", "target": 20},
+                        {"duration": "1m", "target": 50},
+                        {"duration": "3m", "target": 50},
+                        {"duration": "30s", "target": 60},
+                        {"duration": "3m", "target": 60},
+                        {"duration": "30s", "target": 70},
+                        {"duration": "3m", "target": 70},
+                        {"duration": "30s", "target": 0}
+                      ]
+                    }
+                  }
+                }
+                """;
+        var node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(cfg);
+        var steps = ru.k6lab.core.k6config.StageStepExtractor.extract(node, 120);
+        assertThat(steps).hasSize(3);
+        assertThat(steps.get(0).levelPct()).isEqualTo(100.0);
+        assertThat(steps.get(0).rampSec()).isEqualTo(180); // 2m warmup + 1m ramp
+        assertThat(steps.get(0).holdSec()).isEqualTo(180); // 3m hold
+        assertThat(steps.get(1).levelPct()).isEqualTo(120.0);
+        assertThat(steps.get(1).rampSec()).isEqualTo(30);
+        assertThat(steps.get(1).holdSec()).isEqualTo(180);
+        assertThat(steps.get(2).levelPct()).isEqualTo(140.0);
+
+        // одна полка (не поиск максимума) -> пустой список
+        String single = """
+                {"scenarios":{"s":{"executor":"ramping-arrival-rate","startRate":0,"stages":[{"duration":"1m","target":50},{"duration":"5m","target":50}]}}}
+                """;
+        assertThat(ru.k6lab.core.k6config.StageStepExtractor.extract(new com.fasterxml.jackson.databind.ObjectMapper().readTree(single), 0)).isEmpty();
     }
 
     private static ResultData.StepRow step(int no, double level, double p95, double sla) {

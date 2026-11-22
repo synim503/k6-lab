@@ -124,15 +124,18 @@ public class RunPlanner {
                 if (!settings.urlNameTag() && (dropNameTag(gen.config()) | dropNameTag(finalConfig))) {
                     json = K6ConfigGenerator.toJson(gen);
                 }
-                // единственная «ступень» запуска - весь тест: длительность по самому долгому сценарию конфига, уровень 100%.
-                // Планы по оп/с (constant-arrival-rate) уже учитывают всё нужное, профиль нагрузки больше не задаётся отдельно.
+                // ступени запуска: если в стадиях сценария ≥2 полок (поиск максимума), каждая полка становится ступенью отчёта;
+                // иначе единственная ступень — весь тест (после прогрева)
                 long spanSec = ru.k6lab.core.k6config.ConfigDuration.of(finalConfig).totalSec();
                 if (spanSec > 0) {
-                    // прогрев - фаза «разгона» ступени: оценка, SLA и окна итогов начинаются после неё. Граница - самый поздний
-                    // конец прогрева среди сценариев (у сценариев без прогрева эти минуты тоже не оцениваются)
                     int warmEnd = specs.stream().mapToInt(K6ConfigGenerator::warmupEndSec).max().orElse(0);
-                    int ramp = (int) Math.min(warmEnd, Math.max(0, spanSec - 1));
-                    steps = List.of(new StepPlan(1, 100, ramp, (int) Math.max(1, Math.min(Integer.MAX_VALUE, spanSec - ramp)), "100%"));
+                    List<StepPlan> extracted = ru.k6lab.core.k6config.StageStepExtractor.extract(finalConfig, warmEnd);
+                    if (extracted.size() >= 2) {
+                        steps = extracted;
+                    } else {
+                        int ramp = (int) Math.min(warmEnd, Math.max(0, spanSec - 1));
+                        steps = List.of(new StepPlan(1, 100, ramp, (int) Math.max(1, Math.min(Integer.MAX_VALUE, spanSec - ramp)), "100%"));
+                    }
                 }
                 overridePaths = K6ConfigOverrides.paths(script.getK6Overrides());
                 if (!overridePaths.isEmpty()) {

@@ -84,7 +84,7 @@ public class RunViewService {
             for (RunStep s : steps) {
                 if (!now.isBefore(s.getRampStartAt()) && now.isBefore(s.getHoldEndAt())) {
                     current = s.getStepNo();
-                    phase = initializing ? "инициализация скрипта" : now.isBefore(s.getHoldStartAt()) ? (snap.warmup() != null ? "прогрев" : "разгон") : "удержание";
+                    phase = initializing ? "инициализация скрипта" : now.isBefore(s.getHoldStartAt()) ? (snap.warmup() != null && s.getStepNo() == 1 ? "прогрев" : "разгон") : "удержание";
                 }
             }
         } else if (run.getStartedAt() != null && run.getFinishedAt() != null) {

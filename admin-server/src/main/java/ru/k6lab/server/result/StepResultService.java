@@ -186,7 +186,8 @@ public class StepResultService {
         Map<Integer, Double> levels = new HashMap<>();
         Instant finished = run.getFinishedAt() == null ? now : run.getFinishedAt();
         String error = null;
-        for (RunStep step : runService.stepsOf(run.getId())) {
+        List<RunStep> runSteps = effectiveSteps(run, snap);
+        for (RunStep step : runSteps) {
             levels.put(step.getStepNo(), step.getLevelPct());
             int holdSec = (int) Duration.between(step.getHoldStartAt(), step.getHoldEndAt()).getSeconds();
             Instant winStart = step.getHoldStartAt().plusSeconds(Math.min(SETTLE_SEC, holdSec / 4));
@@ -229,6 +230,35 @@ public class StepResultService {
             }
         }
         return new ResultData(rows, error == null, error, now, genRows);
+    }
+
+    /**
+     * Ступени для расчёта итогов: если в БД одна сводная ступень (например, старый запуск до авторазбиения полок),
+     * но в конфиге k6 есть ≥2 полок (поиск максимума), строим окна ступеней прямо из конфига.
+     */
+    private List<RunStep> effectiveSteps(Run run, RunSnapshot snap) {
+        List<RunStep> saved = runService.stepsOf(run.getId());
+        Instant base = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
+        if (saved.size() == 1 && run.getK6Config() != null && base != null) {
+            int warmEnd = snap.warmup() != null ? snap.warmup().sec() : 0;
+            var plans = ru.k6lab.core.k6config.StageStepExtractor.extract(run.getK6Config(), warmEnd);
+            if (plans.size() >= 2) {
+                List<RunStep> out = new ArrayList<>(plans.size());
+                for (var w : ru.k6lab.core.profile.StepWindow.of(plans)) {
+                    RunStep rs = new RunStep();
+                    rs.setRunId(run.getId());
+                    rs.setStepNo(w.no());
+                    rs.setLabel(w.label());
+                    rs.setLevelPct(w.levelPct());
+                    rs.setRampStartAt(base.plusSeconds(w.rampStartSec()));
+                    rs.setHoldStartAt(base.plusSeconds(w.holdStartSec()));
+                    rs.setHoldEndAt(base.plusSeconds(w.holdEndSec()));
+                    out.add(rs);
+                }
+                return out;
+            }
+        }
+        return saved;
     }
 
     private List<StepAnalysis.OpMetrics> opMetrics(RunSnapshot snap, PromQueries.Names n, Run run, double stepLevel, long winSec,

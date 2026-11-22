@@ -105,45 +105,190 @@
                 <div class="form-text mt-2">Результаты и отчёты хранятся без ограничения срока.</div>
             </div></div>
 
-            <div class="card mt-3" id="charts"><div class="card-header">Графики отчёта</div><div class="card-body">
-                <div class="small text-muted mb-2">Оформление графиков в HTML, PDF и Word-отчётах. Высота — это высота самого графика: легенда снизу добавляется к ней,
+            <div class="card mt-3" id="charts"><div class="card-header d-flex align-items-center justify-content-between">
+                <span>Графики отчёта</span>
+                <span class="badge text-bg-warning d-none" id="chart-dirty-badge">Не сохранено</span>
+            </div><div class="card-body">
+                <div class="small text-muted mb-3">Оформление графиков в HTML, PDF и Word-отчётах. Высота — это высота самого графика: легенда снизу добавляется к ней,
                     поэтому график не сжимается, даже если в нём много рядов. Если рядов больше лимита легенды, в ней остаются ряды с наибольшим максимумом.</div>
-                <form class="row g-2 align-items-end" th:action="@{/settings/report-charts}" method="post">
-                    <div class="col-md-2"><label class="form-label small mb-1">Тема</label>
+                <form class="row g-2 align-items-end" id="chart-style-form" th:action="@{/settings/report-charts}" method="post"
+                      th:attr="data-preview-url=@{/settings/report-charts/preview.png}">
+                    <div class="col-sm-6 col-md-4"><label class="form-label small mb-1">Тема</label>
                         <select class="form-select form-select-sm" name="theme">
                             <option value="DARK" th:selected="${chartStyle.theme().name() == 'DARK'}">Тёмная (как Grafana)</option>
                             <option value="LIGHT" th:selected="${chartStyle.theme().name() == 'LIGHT'}">Светлая (для печати)</option></select></div>
-                    <div class="col-md-2"><label class="form-label small mb-1">Ширина, px</label>
-                        <input class="form-control form-control-sm" type="number" name="width" min="600" max="2000" step="50" th:value="${chartStyle.width()}"></div>
-                    <div class="col-md-2"><label class="form-label small mb-1">Высота графика, px</label>
-                        <input class="form-control form-control-sm" type="number" name="height" min="200" max="800" step="20" th:value="${chartStyle.height()}"></div>
-                    <div class="col-md-2"><label class="form-label small mb-1">Легенда</label>
+                    <div class="col-sm-6 col-md-4"><label class="form-label small mb-1">Легенда</label>
                         <select class="form-select form-select-sm" name="legend">
                             <option value="BOTTOM" th:selected="${chartStyle.legend().name() == 'BOTTOM'}">Снизу</option>
                             <option value="LEFT" th:selected="${chartStyle.legend().name() == 'LEFT'}">Слева</option>
                             <option value="RIGHT" th:selected="${chartStyle.legend().name() == 'RIGHT'}">Справа</option>
                             <option value="NONE" th:selected="${chartStyle.legend().name() == 'NONE'}">Скрыть</option></select></div>
-                    <div class="col-md-2"><label class="form-label small mb-1">Рядов в легенде, до</label>
-                        <input class="form-control form-control-sm" type="number" name="maxLegend" min="1" max="100" th:value="${chartStyle.maxLegend()}"></div>
-                    <div class="col-md-2"><label class="form-label small mb-1">Ось времени</label>
+                    <div class="col-sm-6 col-md-4"><label class="form-label small mb-1">Ось времени</label>
                         <select class="form-select form-select-sm" name="timeAxis">
                             <option value="rel" th:selected="${!timeAbs}">Минуты от начала теста</option>
                             <option value="abs" th:selected="${timeAbs}">Абсолютное время</option></select></div>
-                    <div class="col-md-2"><div class="form-check mb-1"><input class="form-check-input" type="checkbox" id="chart-stats" name="stats" value="true" th:checked="${chartStyle.stats()}">
-                        <label class="form-check-label small" for="chart-stats">Last / Mean / Max в легенде</label></div></div>
-                    <div class="col-12 d-flex gap-2">
-                        <button class="btn btn-primary btn-sm">Сохранить</button>
+                    <div class="col-4"><label class="form-label small mb-1">Ширина, px</label>
+                        <input class="form-control form-control-sm" type="number" name="width" min="600" max="2000" step="50" th:value="${chartStyle.width()}"></div>
+                    <div class="col-4"><label class="form-label small mb-1">Высота, px</label>
+                        <input class="form-control form-control-sm" type="number" name="height" min="200" max="800" step="20" th:value="${chartStyle.height()}"></div>
+                    <div class="col-4"><label class="form-label small mb-1">Рядов в легенде, до</label>
+                        <input class="form-control form-control-sm" type="number" name="maxLegend" min="1" max="100" th:value="${chartStyle.maxLegend()}"></div>
+                    <div class="col-12 mt-2 d-flex flex-column gap-1">
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" type="checkbox" role="switch" id="chart-stats" name="stats" value="true" th:checked="${chartStyle.stats()}">
+                            <label class="form-check-label small" for="chart-stats">Показывать Last / Mean / Max в легенде</label></div>
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" type="checkbox" role="switch" id="chart-auto-width" name="autoWidth" value="true" th:checked="${chartStyle.autoWidth()}">
+                            <label class="form-check-label small" for="chart-auto-width">Расширять ширину графика, если легенда не помещается</label></div>
+                    </div>
+                    <div class="col-12 d-flex align-items-center gap-2 mt-2">
+                        <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Сохранить</button>
                         <button class="btn btn-outline-secondary btn-sm" th:formaction="@{/settings/report-charts/reset}" formnovalidate
-                                onclick="return confirm('Сбросить оформление графиков к значениям по умолчанию?')">Сбросить</button></div>
+                                onclick="return confirm('Сбросить оформление графиков к значениям по умолчанию?')">Сбросить</button>
+                    </div>
                 </form>
-                <div class="mt-3 small text-muted">Предпросмотр на тестовых данных (обновляется после сохранения):</div>
-                <img class="img-fluid border rounded mt-1" th:src="@{/settings/report-charts/preview.png}" alt="Предпросмотр графика" style="max-width:100%">
+
+                <div class="mt-3 pt-3 border-top">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                        <div class="small fw-semibold d-flex align-items-center gap-2">
+                            <span><i class="bi bi-eye me-1 text-primary"></i>Живой предпросмотр</span>
+                            <span class="spinner-border spinner-border-sm text-primary d-none" id="chart-prev-spin" role="status"></span>
+                            <span class="badge text-bg-light border fw-normal" id="chart-prev-dim"></span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 small">
+                            <span class="text-muted">Рядов:</span>
+                            <div class="seg" id="chart-prev-series">
+                                <button type="button" class="btn btn-sm py-0 px-2" data-sc="4">4</button>
+                                <button type="button" class="btn btn-sm py-0 px-2 active" data-sc="6">6</button>
+                                <button type="button" class="btn btn-sm py-0 px-2" data-sc="12">12</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="position-relative border rounded overflow-hidden" style="background:#181b1f">
+                        <img class="img-fluid d-block w-100" id="chart-prev-img" th:src="@{/settings/report-charts/preview.png}"
+                             alt="Предпросмотр графика" style="cursor:zoom-in;transition:opacity .15s" title="Нажмите, чтобы открыть в полном размере">
+                    </div>
+                </div>
             </div></div>
+
+            <div class="modal fade" id="chart-prev-modal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-xl modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header py-2">
+                            <h6 class="modal-title">Предпросмотр графика отчёта <span class="text-muted fw-normal small ms-2" id="chart-prev-modal-dim"></span></h6>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                        </div>
+                        <div class="modal-body text-center p-2" style="background:#111827">
+                            <img id="chart-prev-modal-img" class="img-fluid" alt="Увеличенный предпросмотр">
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="card mt-3"><div class="card-header">Агенты</div><div class="card-body">
                 Порт подключения агентов: <b th:text="${agentPort}"></b> (отдельный коннектор, без TLS — используйте изолированную сеть).
             </div></div>
         </div>
     </div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        (function () {
+            var form = document.getElementById('chart-style-form');
+            var img = document.getElementById('chart-prev-img');
+            if (!form || !img) { return; }
+            var spin = document.getElementById('chart-prev-spin');
+            var dimEl = document.getElementById('chart-prev-dim');
+            var dirtyBadge = document.getElementById('chart-dirty-badge');
+            var seriesBtns = document.querySelectorAll('#chart-prev-series [data-sc]');
+            var baseUrl = form.dataset.previewUrl;
+            var seriesCount = 6;
+            var seq = 0, timer = null, prevObjUrl = null;
+
+            function readState() {
+                var fd = new FormData(form);
+                return {
+                    theme: fd.get('theme') || 'DARK',
+                    width: fd.get('width') || '1000',
+                    height: fd.get('height') || '320',
+                    legend: fd.get('legend') || 'BOTTOM',
+                    maxLegend: fd.get('maxLegend') || '20',
+                    timeAxis: fd.get('timeAxis') || 'rel',
+                    stats: form.querySelector('#chart-stats').checked ? 'true' : 'false',
+                    autoWidth: form.querySelector('#chart-auto-width').checked ? 'true' : 'false'
+                };
+            }
+
+            var initialSnap = JSON.stringify(readState());
+
+            function updateDim() {
+                if (img.naturalWidth > 0 && dimEl) {
+                    dimEl.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' px';
+                }
+            }
+            img.addEventListener('load', updateDim);
+            if (img.complete) { updateDim(); }
+
+            function refreshPreview() {
+                var st = readState();
+                if (dirtyBadge) {
+                    dirtyBadge.classList.toggle('d-none', JSON.stringify(st) === initialSnap);
+                }
+                var params = new URLSearchParams(st);
+                params.set('seriesCount', String(seriesCount));
+                var mySeq = ++seq;
+                if (spin) { spin.classList.remove('d-none'); }
+                img.style.opacity = '0.6';
+
+                fetch(baseUrl + '?' + params.toString(), {cache: 'no-store'})
+                    .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.blob(); })
+                    .then(function (blob) {
+                        if (mySeq !== seq) { return; }
+                        var url = URL.createObjectURL(blob);
+                        var next = new Image();
+                        next.onload = function () {
+                            if (mySeq !== seq) { URL.revokeObjectURL(url); return; }
+                            img.src = url;
+                            img.style.opacity = '1';
+                            if (prevObjUrl) { URL.revokeObjectURL(prevObjUrl); }
+                            prevObjUrl = url;
+                            if (spin) { spin.classList.add('d-none'); }
+                            if (dimEl) { dimEl.textContent = next.naturalWidth + ' × ' + next.naturalHeight + ' px'; }
+                        };
+                        next.onerror = function () {
+                            URL.revokeObjectURL(url);
+                            if (mySeq === seq) { img.style.opacity = '1'; if (spin) { spin.classList.add('d-none'); } }
+                        };
+                        next.src = url;
+                    })
+                    .catch(function () {
+                        if (mySeq === seq) { img.style.opacity = '1'; if (spin) { spin.classList.add('d-none'); } }
+                    });
+            }
+
+            function schedule() {
+                clearTimeout(timer);
+                timer = setTimeout(refreshPreview, 130);
+            }
+
+            form.addEventListener('input', schedule);
+            form.addEventListener('change', schedule);
+            seriesBtns.forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    seriesCount = parseInt(btn.dataset.sc, 10) || 6;
+                    seriesBtns.forEach(function (b) { b.classList.toggle('active', b === btn); });
+                    refreshPreview();
+                });
+            });
+
+            img.addEventListener('click', function () {
+                var mImg = document.getElementById('chart-prev-modal-img');
+                var mDim = document.getElementById('chart-prev-modal-dim');
+                mImg.src = img.src;
+                mDim.textContent = dimEl ? dimEl.textContent : '';
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('chart-prev-modal')).show();
+            });
+        })();
+    </script>
 </th:block>
 </body>
 </html>

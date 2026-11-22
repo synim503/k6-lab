@@ -27,14 +27,27 @@ public class ScheduleController {
     private final ScheduleImportService importer;
     private final ru.k6lab.server.load.ProfileImportService profileImport;
     private final ru.k6lab.server.run.RunService runs;
+    private final ru.k6lab.server.script.ScriptService scripts;
+    private final ru.k6lab.server.load.LoadProfileStore profileStore;
+    private final ru.k6lab.server.load.LoadService load;
+    private final ru.k6lab.server.load.RunPlanner planner;
+    private final ru.k6lab.server.generator.GeneratorRepository generators;
 
     public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline, ScheduleImportService importer,
-                              ru.k6lab.server.load.ProfileImportService profileImport, ru.k6lab.server.run.RunService runs) {
+                              ru.k6lab.server.load.ProfileImportService profileImport, ru.k6lab.server.run.RunService runs,
+                              ru.k6lab.server.script.ScriptService scripts, ru.k6lab.server.load.LoadProfileStore profileStore,
+                              ru.k6lab.server.load.LoadService load, ru.k6lab.server.load.RunPlanner planner,
+                              ru.k6lab.server.generator.GeneratorRepository generators) {
         this.runs = runs;
         this.service = service;
         this.timeline = timeline;
         this.importer = importer;
         this.profileImport = profileImport;
+        this.scripts = scripts;
+        this.profileStore = profileStore;
+        this.load = load;
+        this.planner = planner;
+        this.generators = generators;
     }
 
     /** Общий импорт профилей разных скриптов: у каждого профиля в JSON указан script. */
@@ -101,15 +114,89 @@ public class ScheduleController {
 
     @GetMapping("/schedule")
     public String list(Model model) {
+        var items = service.recent();
+        var active = runs.activeRuns();
+        var gens = generators.findAll().stream()
+                .sorted(java.util.Comparator.comparing(ru.k6lab.server.generator.Generator::getName)).toList();
+        var pending = items.stream().filter(ScheduledRunStore.Item::pending).toList();
+        var nextPending = pending.stream()
+                .min(java.util.Comparator.comparing(ScheduledRunStore.Item::runAt))
+                .map(ScheduledRunStore.Item::runAt).orElse(null);
         model.addAttribute("paused", service.paused());
-        model.addAttribute("activeRuns", runs.activeRuns());
-        model.addAttribute("items", service.recent());
+        model.addAttribute("activeRuns", active);
+        model.addAttribute("items", items);
+        model.addAttribute("scripts", scripts.list());
+        model.addAttribute("generators", gens);
+        model.addAttribute("freeGenCount", gens.stream().filter(ru.k6lab.server.generator.Generator::isAvailableForRuns).count());
+        model.addAttribute("onlineGenCount", gens.stream().filter(g -> g.getStatus() == ru.k6lab.server.generator.Generator.Status.ONLINE).count());
+        model.addAttribute("pendingCount", pending.size());
+        model.addAttribute("startedCount", items.stream().filter(i -> i.status() == ScheduledRunStore.Status.STARTED || i.status() == ScheduledRunStore.Status.STARTING).count());
+        model.addAttribute("failedCount", items.stream().filter(i -> i.status() == ScheduledRunStore.Status.FAILED).count());
+        model.addAttribute("nextRunAt", nextPending);
         model.addAttribute("fmt", new ReportFormat());
         return "schedule/index";
     }
 
+    /** Метаданные скрипта для быстрого планирования прямо со страницы /schedule: профили, операции, переменные, длительность. */
+    @GetMapping("/schedule/script-meta/{scriptId}")
+    @org.springframework.web.bind.annotation.ResponseBody
+    public Map<String, Object> scriptMeta(@PathVariable Long scriptId) {
+        var s = scripts.get(scriptId);
+        var plan = planner.plan(scriptId, s.getGeneratorCount());
+        int baseDur = plan.config() != null ? (int) ru.k6lab.core.k6config.ConfigDuration.of(plan.config()).totalSec()
+                : (plan.steps() == null ? 0 : plan.steps().stream().mapToInt(ru.k6lab.core.profile.StepPlan::totalSec).sum());
+        StringBuilder env = new StringBuilder();
+        s.getEnv().forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
+        List<Map<String, Object>> profs = new ArrayList<>();
+        for (var p : profileStore.list(scriptId)) {
+            Map<String, Object> pm = new LinkedHashMap<>();
+            pm.put("id", p.id());
+            pm.put("name", p.name());
+            try {
+                var built = load.fromProfile(scriptId, p.id());
+                var pp = planner.plan(scriptId, s.getGeneratorCount(), built);
+                int pdur = pp.config() != null ? (int) ru.k6lab.core.k6config.ConfigDuration.of(pp.config()).totalSec()
+                        : (pp.steps() == null ? 0 : pp.steps().stream().mapToInt(ru.k6lab.core.profile.StepPlan::totalSec).sum());
+                pm.put("ops", pp.operations().stream().map(ru.k6lab.server.load.LoadOperation::getName).toList());
+                pm.put("durationSec", pdur);
+                StringBuilder penv = new StringBuilder();
+                built.env().forEach((k, v) -> penv.append(k).append('=').append(v).append('\n'));
+                pm.put("envText", penv.toString());
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                pm.put("ops", List.of());
+                pm.put("durationSec", 0);
+                pm.put("envText", "");
+            }
+            profs.add(pm);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("scriptId", s.getId());
+        out.put("scriptName", s.getName());
+        out.put("defaultCount", s.getGeneratorCount());
+        out.put("durationSec", baseDur);
+        out.put("errors", plan.errors());
+        out.put("ops", plan.operations().stream().map(ru.k6lab.server.load.LoadOperation::getName).toList());
+        out.put("envText", env.toString());
+        out.put("profiles", profs);
+        return out;
+    }
+
+    /** Отменяет все ожидающие записи расписания. */
+    @PostMapping("/schedule/cancel-all-pending")
+    public String cancelAllPending(Principal user, RedirectAttributes ra) {
+        String by = user == null ? "system" : user.getName();
+        int n = 0;
+        for (var item : service.recent()) {
+            if (item.pending() && service.cancel(item.id(), by)) {
+                n++;
+            }
+        }
+        ra.addFlashAttribute(n > 0 ? "info" : "error", n > 0 ? "Отменено ожидающих запусков: " + n : "Нет ожидающих запусков для отмены");
+        return "redirect:/schedule";
+    }
+
     /**
-     * Форма «Запланировать» на странице запуска скрипта. Время приходит в ISO (браузер переводит локальное время в UTC),
+     * Форма «Запланировать» на странице запуска скрипта (и из быстрого диалога на /schedule). Время приходит в ISO (браузер переводит локальное время в UTC),
      * процент интенсивности - полями pct_ИМЯОПЕРАЦИИ, переменные - текстом KEY=VALUE, если выбран режим «свои».
      */
     @PostMapping("/scripts/{id}/schedule")
@@ -118,6 +205,7 @@ public class ScheduleController {
                          @RequestParam(required = false) Long profile,
                          @RequestParam(defaultValue = "false") boolean shift,
                          @RequestParam(defaultValue = "script") String envMode, @RequestParam(required = false) String envText,
+                         @RequestParam(required = false) String returnTo,
                          @RequestParam Map<String, String> all, Principal user, RedirectAttributes ra) {
         try {
             Instant at = null; // время не выбрано - ближайшее доступное
@@ -148,7 +236,7 @@ public class ScheduleController {
             return "redirect:/schedule";
         } catch (IllegalArgumentException | IllegalStateException e) {
             ra.addFlashAttribute("error", e.getMessage());
-            return "redirect:/scripts/" + id + "/run#schedule";
+            return "schedule".equals(returnTo) ? "redirect:/schedule" : "redirect:/scripts/" + id + "/run#schedule";
         }
     }
 

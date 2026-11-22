@@ -159,6 +159,39 @@ public class LoadController {
         return "redirect:/scripts/" + id + "/load";
     }
 
+    @PostMapping("/load/profile/{pid}/duplicate")
+    public String duplicateProfile(@PathVariable Long id, @PathVariable Long pid, java.security.Principal user, RedirectAttributes ra) {
+        try {
+            var copy = profiles.duplicate(id, pid, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", "Создана копия профиля «" + copy.name() + "»");
+            return "redirect:/scripts/" + id + "/load?profile=" + copy.id();
+        } catch (IllegalArgumentException | org.springframework.dao.InvalidDataAccessApiUsageException e) {
+            ra.addFlashAttribute("error", rootMessage(e));
+            return "redirect:/scripts/" + id + "/load";
+        }
+    }
+
+    @PostMapping("/load/profile/{pid}/rename")
+    public String renameProfile(@PathVariable Long id, @PathVariable Long pid, @RequestParam String name,
+                                java.security.Principal user, RedirectAttributes ra) {
+        try {
+            var upd = profiles.rename(id, pid, name, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", "Профиль переименован в «" + upd.name() + "»");
+            return "redirect:/scripts/" + id + "/load?profile=" + upd.id();
+        } catch (IllegalArgumentException | org.springframework.dao.InvalidDataAccessApiUsageException e) {
+            ra.addFlashAttribute("error", rootMessage(e));
+            return "redirect:/scripts/" + id + "/load?profile=" + pid;
+        }
+    }
+
+    private static String rootMessage(RuntimeException e) {
+        Throwable cur = e;
+        while (cur.getCause() != null && cur.getCause() != cur) {
+            cur = cur.getCause();
+        }
+        return cur.getMessage() != null ? cur.getMessage() : e.getMessage();
+    }
+
     @PostMapping("/load")
     public String save(@PathVariable Long id, @ModelAttribute("form") LoadForm f, Model model, RedirectAttributes ra) {
         try {
@@ -286,7 +319,9 @@ public class LoadController {
     }
 
     private void fill(Model model, Long id, LoadForm f, int generators) {
-        model.addAttribute("profiles", profiles.list(id));
+        var profList = profiles.list(id);
+        model.addAttribute("profiles", profList);
+        model.addAttribute("profilesJson", profilesJson(profList));
         model.addAttribute("formJson", LoadJson.toJson(f));
         RunPlan plan = planner.plan(id, Math.max(1, generators));
         model.addAttribute("script", scripts.get(id));
@@ -389,5 +424,23 @@ public class LoadController {
         int n = Math.max(1, plan.generatorCount());
         return new PerGenerator(g.totalPeakRatePerSec() / n, (long) Math.ceil(g.totalPeakVus() / (double) n),
                 (long) Math.ceil(g.operations().stream().mapToLong(GeneratedConfig.OpPlan::preAllocatedVus).sum() / (double) n));
+    }
+
+    /** Метаданные профилей (с разбором операций/переменных для карточек в менеджере профилей). */
+    private static String profilesJson(List<LoadProfileStore.Profile> list) {
+        ArrayNode arr = MAPPER.createArrayNode();
+        for (var p : list) {
+            ObjectNode n = arr.addObject();
+            n.put("id", p.id());
+            n.put("name", p.name());
+            n.put("updatedAt", p.updatedAt() == null ? "" : p.updatedAt().toString());
+            n.put("updatedBy", p.updatedBy() == null ? "" : p.updatedBy());
+            try {
+                n.set("data", MAPPER.readTree(p.data()));
+            } catch (IOException e) {
+                n.putObject("data");
+            }
+        }
+        return arr.toString();
     }
 }

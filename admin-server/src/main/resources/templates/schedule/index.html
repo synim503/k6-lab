@@ -4,64 +4,80 @@
 <head><title>Расписание запусков</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4 class="m-0"><i class="bi bi-calendar-event me-2"></i>Расписание запусков</h4>
-        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts}">К скриптам</a>
+    <!-- Шапка и основные действия -->
+    <div class="page-head">
+        <div>
+            <h3>
+                <span class="icon-tile"><i class="bi bi-calendar-event"></i></span>
+                <span>Расписание запусков</span>
+                <span class="chip ms-1" th:unless="${paused}"><span class="dot dot-ok"></span>Активен</span>
+                <span class="chip ms-1" th:if="${paused}"><span class="dot dot-bad"></span>На паузе</span>
+            </h3>
+            <div class="sub mt-1">Автоматический запуск тестов по расписанию с бронированием генераторов и контролем очереди.</div>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#sch-quick-modal"
+                    th:disabled="${scripts.isEmpty()}">
+                <i class="bi bi-calendar-plus me-1"></i>Запланировать тест
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#sch-imp-tests-modal">
+                <i class="bi bi-upload me-1"></i>Импорт списка тестов
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#sch-imp-prof-modal">
+                <i class="bi bi-collection me-1"></i>Импорт профилей нагрузки
+            </button>
+            <form class="m-0" th:unless="${paused}" th:action="@{/schedule/pause}" method="post"
+                  onsubmit="return confirm('Поставить планировщик на паузу? Идущий тест закончится сам, новые запуски по расписанию не стартуют.')">
+                <button class="btn btn-outline-warning btn-sm"><i class="bi bi-pause-fill me-1"></i>Поставить на паузу</button>
+            </form>
+        </div>
     </div>
-    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" th:if="${paused}">
-        <div class="me-auto"><b><i class="bi bi-pause-circle me-1"></i>Планировщик на паузе.</b>
+
+    <!-- Баннер паузы -->
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 mb-3" th:if="${paused}">
+        <div class="me-auto">
+            <b><i class="bi bi-pause-circle me-1"></i>Планировщик на паузе.</b>
             Новые запуски по расписанию не стартуют, записи ждут.
-            <span th:if="${!activeRuns.isEmpty()}">Идёт тест (<a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id} + (${st.last} ? '' : ', ')"></a>): он закончится сам, после него запуски не продолжатся.</span>
-            <span th:if="${activeRuns.isEmpty()}">Сейчас тестов нет. При снятии паузы записи, время которых прошло, встанут на ближайшее свободное время.</span></div>
-        <form class="m-0" th:action="@{/schedule/resume}" method="post"><button class="btn btn-success btn-sm"><i class="bi bi-play-fill me-1"></i>Снять с паузы</button></form>
-    </div>
-    <div class="d-flex flex-wrap align-items-center gap-2 mb-2" th:unless="${paused}">
-        <form class="m-0" th:action="@{/schedule/pause}" method="post"
-              onsubmit="return confirm('Поставить планировщик на паузу? Идущий тест закончится сам, новые запуски по расписанию не стартуют.')">
-            <button class="btn btn-outline-warning btn-sm"><i class="bi bi-pause-fill me-1"></i>Поставить на паузу</button></form>
-        <span class="small text-muted" th:if="${!activeRuns.isEmpty()}">Идёт тест: при паузе он дойдёт до конца, следующие не стартуют.</span>
-    </div>
-    <div class="alert alert-secondary small">В назначенное время сервер сам создаёт запуск с заданными переменными и интенсивностью по операциям.
-        Генераторы бронируются сразу при планировании: если на это время свободных не хватает, запись не создаётся. Забронированные генераторы
-        видны на таймлайне и недоступны для других записей на это время. Если выбранный генератор к назначенному часу стал недоступен, запуск пропускается и помечается ошибкой.
-        Запланировать запуск можно на странице запуска скрипта.</div>
-    <details class="card card-body mb-3" th:attr="open=${importProfilesJson != null} ? 'open'">
-        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-collection me-1"></i>Импорт профилей нагрузки (JSON)</summary>
-        <form class="mt-2" th:action="@{/schedule/import-profiles}" method="post" enctype="multipart/form-data">
-            <div class="small text-muted mb-2">Профили для разных скриптов одним файлом: массив или <code>{"profiles": [...]}</code>. У каждого — <code>script</code> (имя скрипта),
-                <code>name</code> (имя профиля) и конфиг нагрузки (<code>operations</code>, <code>env</code>, <code>stop</code>…). Профили с существующим именем обновляются.
-                После этого тесты с этими профилями можно импортировать ниже. Образец формата — «Скачать профили» на странице «Нагрузка» скрипта (там без <code>script</code>).</div>
-            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="6" th:text="${importProfilesJson}"
-                      placeholder="[{&quot;script&quot;: &quot;Платежи&quot;, &quot;name&quot;: &quot;Максимум&quot;, &quot;operations&quot;: [{&quot;name&quot;: &quot;pay&quot;, &quot;execFn&quot;: &quot;pay&quot;, &quot;ratePerSec&quot;: 40}]}]"></textarea>
-            <div class="d-flex gap-2 align-items-center flex-wrap">
-                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
-                <button class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать профили</button>
-            </div>
+            <span th:if="${!activeRuns.isEmpty()}">Идёт тест (<a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id} + (${st.last} ? '' : ', ')"></a>): он закончится сам.</span>
+            <span th:if="${activeRuns.isEmpty()}">При снятии паузы записи, время которых прошло, встанут на ближайшее свободное время.</span>
+        </div>
+        <form class="m-0" th:action="@{/schedule/resume}" method="post">
+            <button class="btn btn-success btn-sm"><i class="bi bi-play-fill me-1"></i>Снять с паузы</button>
         </form>
-    </details>
-    <details class="card card-body mb-3" th:attr="open=${importJson != null} ? 'open'">
-        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-upload me-1"></i>Импорт списка тестов (JSON)</summary>
-        <form class="mt-2" th:action="@{/schedule/import}" method="post" enctype="multipart/form-data">
-            <div class="small text-muted mb-2">Каждый тест — скрипт и профиль нагрузки; после импорта все тесты сразу планируются на ближайшее свободное время
-                (генераторы бронируются, пауза между запусками на одних генераторах 5 минут) и запускаются сами. Если хотя бы один тест не прошёл проверку,
-                не запланировано ничего. Необязательные поля: <code>runAt</code> (дата со смещением), <code>generators</code> (имена или id), <code>count</code>,
-                <code>env</code>, <code>shift</code> (по умолчанию true).</div>
-            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="8" th:text="${importJson}"
-                      placeholder='[
-  {"script": "Платежи", "profile": "Максимальная"},
-  {"script": "Платежи", "profile": "Стабильность 4ч", "runAt": "2026-11-21T22:00:00+03:00"},
-  {"script": "Каталог", "profile": "Базовая", "count": 2}
-]'></textarea>
-            <div class="d-flex gap-2 align-items-center flex-wrap">
-                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
-                <button class="btn btn-primary btn-sm"><i class="bi bi-calendar-plus me-1"></i>Запланировать</button>
-                <span class="text-muted small">Если выбран файл, используется он, а не текст.</span>
+    </div>
+
+    <!-- Сводка KPI -->
+    <div class="sch-kpi-grid">
+        <div class="sch-kpi">
+            <div class="k"><i class="bi bi-hourglass-split text-primary"></i>Ожидают старта</div>
+            <div class="v" th:text="${pendingCount}">0</div>
+            <div class="s" th:if="${nextRunAt != null}">ближайший <span class="fw-semibold" th:attr="data-countdown=${nextRunAt}">скоро</span></div>
+            <div class="s" th:if="${nextRunAt == null}">очередь пуста</div>
+        </div>
+        <div class="sch-kpi">
+            <div class="k"><i class="bi bi-play-circle text-success"></i>Идут сейчас</div>
+            <div class="v" th:text="${activeRuns.size()}">0</div>
+            <div class="s" th:if="${!activeRuns.isEmpty()}">
+                <a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id} + (${st.last} ? '' : ', ')"></a>
             </div>
-        </form>
-    </details>
+            <div class="s" th:if="${activeRuns.isEmpty()}">нет активных тестов</div>
+        </div>
+        <div class="sch-kpi">
+            <div class="k"><i class="bi bi-hdd-network text-primary"></i>Генераторы</div>
+            <div class="v"><span th:text="${freeGenCount}">0</span> <span class="fs-6 fw-normal text-muted">свободно</span></div>
+            <div class="s"><span th:text="${onlineGenCount}">0</span> из <span th:text="${generators.size()}">0</span> в сети</div>
+        </div>
+        <div class="sch-kpi">
+            <div class="k"><i class="bi bi-clock-history text-primary"></i>Последние записи</div>
+            <div class="v" th:text="${startedCount}">0</div>
+            <div class="s">запущено · <span th:classappend="${failedCount > 0} ? 'text-danger fw-semibold'" th:text="${failedCount} + ' с ошибкой'"></span></div>
+        </div>
+    </div>
+
+    <!-- Таймлайн занятости генераторов -->
     <div class="card card-body mb-3 tl-root" th:attr="data-url=@{/schedule/timeline},data-run-url=@{/runs/},data-schedule-url=@{/schedule}">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
-            <h6 class="m-0"><i class="bi bi-bar-chart-steps me-1"></i>Занятость генераторов</h6>
+            <h6 class="m-0"><i class="bi bi-bar-chart-steps me-1 text-primary"></i>Занятость генераторов</h6>
             <div class="btn-group btn-group-sm tl-range" role="group" aria-label="Масштаб шкалы">
                 <button type="button" class="btn btn-outline-secondary" data-h="3">3 ч</button>
                 <button type="button" class="btn btn-outline-secondary" data-h="6">6 ч</button>
@@ -75,57 +91,298 @@
         <div class="d-flex gap-3 flex-wrap text-muted mt-1" style="font-size:.75rem">
             <span><i class="tl-key run"></i>идёт сейчас</span>
             <span><i class="tl-key scheduled"></i>запланирован</span>
-            <span><i class="tl-key off"></i>генератор не в сети или на обслуживании</span>
+            <span><i class="tl-key off"></i>не в сети / обслуживание</span>
             <span><i class="tl-key now"></i>сейчас</span>
-            <span>Запись «любые свободные ×N» займёт N свободных генераторов на момент старта. Клик по полосе — подробности: скрипт, профиль, интенсивность, переменные, кто назначил.</span>
+            <span>Клик по полосе — подробности (скрипт, профиль, переменные, кто назначил).</span>
         </div>
         <div class="tl-detail"></div>
     </div>
-    <div class="card empty-state" th:if="${items.isEmpty()}"><i class="bi bi-calendar-x"></i>Запланированных запусков нет.</div>
-    <div class="card" th:unless="${items.isEmpty()}"><table class="table table-sm align-middle mb-0">
-        <thead><tr><th>Когда</th><th>Скрипт</th><th>Генераторы</th><th>Интенсивность</th><th>Переменные</th><th>Статус</th><th></th></tr></thead>
-        <tbody>
-        <tr th:each="s : ${items}">
-            <td><time class="local-time" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time>
-                <div class="small text-muted" th:if="${s.shiftForward and s.pending}" title="Время может сместиться раньше, если генераторы освободятся"><i class="bi bi-skip-forward me-1"></i>сдвигается вперёд</div></td>
-            <td><a th:href="@{/scripts/{id}(id=${s.scriptId})}" th:text="${s.scriptName}"></a>
-                <div class="small text-muted" th:if="${s.profileName != null}"><i class="bi bi-collection me-1"></i><span th:text="${s.profileName}"></span></div></td>
-            <td th:text="${s.generatorIds.isEmpty()} ? (${s.generatorCount} + ' (свободные)') : (${s.generatorIds.size()} + ' выбранных')"></td>
-            <td class="small">
-                <span class="text-muted" th:if="${s.intensity.isEmpty()}">как в скрипте</span>
-                <span th:each="e : ${s.intensity}" class="me-2"><code th:text="${e.key}"></code> <b th:text="${#numbers.formatDecimal(e.value, 1, 'DEFAULT', 1, 'DEFAULT')} + '%'"></b></span></td>
-            <td class="small">
-                <span class="text-muted" th:if="${s.env == null}">как в скрипте</span>
-                <span class="text-muted" th:if="${s.env != null and s.env.isEmpty()}">без переменных</span>
-                <span th:if="${s.env != null and !s.env.isEmpty()}" th:each="e : ${s.env}" class="me-2"><code th:text="${e.key}"></code></span></td>
-            <td>
-                <span class="badge text-bg-primary" th:if="${s.status.name() == 'PENDING'}">ожидает</span>
-                <span class="badge text-bg-info" th:if="${s.status.name() == 'STARTING'}">запускается</span>
-                <span class="badge text-bg-success" th:if="${s.status.name() == 'STARTED'}">запущен</span>
-                <span class="badge text-bg-danger" th:if="${s.status.name() == 'FAILED'}">ошибка</span>
-                <span class="badge text-bg-secondary" th:if="${s.status.name() == 'CANCELLED'}">отменён</span>
-                <a th:if="${s.runId != null}" th:href="@{/runs/{id}(id=${s.runId})}" class="ms-1" th:text="'запуск #' + ${s.runId}"></a>
-                <div class="small text-danger mt-1" th:if="${s.error != null}" th:text="${s.error}"></div></td>
-            <td class="text-end">
-                <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="m-0"
-                      onsubmit="return confirm('Отменить запланированный запуск?')">
-                    <button class="btn btn-sm btn-outline-danger">Отменить</button></form></td>
-        </tr></tbody></table></div>
+
+    <!-- Очередь и история расписания -->
+    <div class="card empty-state" th:if="${items.isEmpty()}">
+        <i class="bi bi-calendar-check"></i>
+        <div class="fw-semibold text-body mb-1">Запланированных запусков пока нет</div>
+        <div class="small mb-3">Назначьте запуск любого скрипта с нужным профилем или загрузите пакетный список из JSON.</div>
+        <div class="d-flex justify-content-center gap-2 flex-wrap">
+            <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#sch-quick-modal" th:disabled="${scripts.isEmpty()}">
+                <i class="bi bi-calendar-plus me-1"></i>Запланировать тест
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#sch-imp-tests-modal">
+                <i class="bi bi-upload me-1"></i>Импорт списка тестов
+            </button>
+        </div>
+    </div>
+
+    <div class="card" th:unless="${items.isEmpty()}">
+        <div class="sch-list-toolbar">
+            <div class="seg">
+                <button type="button" class="btn btn-sm active" data-sch-filter="all">Все <span class="badge text-bg-light ms-1" th:text="${items.size()}"></span></button>
+                <button type="button" class="btn btn-sm" data-sch-filter="pending">Ожидают <span class="badge text-bg-light ms-1" th:text="${pendingCount}"></span></button>
+                <button type="button" class="btn btn-sm" data-sch-filter="started">Запущены</button>
+                <button type="button" class="btn btn-sm" data-sch-filter="other">Ошибки / отмены</button>
+            </div>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <input class="form-control form-control-sm" style="width:230px" type="search" id="sch-search" placeholder="Поиск по скрипту, профилю…">
+                <div class="dropdown" th:if="${pendingCount > 0}">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" title="Дополнительные действия">
+                        <i class="bi bi-three-dots"></i>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li>
+                            <form class="m-0" th:action="@{/schedule/cancel-all-pending}" method="post"
+                                  onsubmit="return confirm('Отменить ВСЕ ожидающие запуски в расписании?')">
+                                <button type="submit" class="dropdown-item small text-danger">
+                                    <i class="bi bi-x-circle me-2"></i>Отменить все ожидающие (<span th:text="${pendingCount}"></span>)
+                                </button>
+                            </form>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead>
+                <tr>
+                    <th>Когда</th>
+                    <th>Скрипт и профиль</th>
+                    <th>Генераторы</th>
+                    <th>Интенсивность</th>
+                    <th>Переменные</th>
+                    <th>Статус</th>
+                    <th class="text-end">Действия</th>
+                </tr>
+                </thead>
+                <tbody id="sch-tbody">
+                <tr class="sch-row" th:each="s : ${items}" th:attr="data-status=${s.status.name()}">
+                    <td class="text-nowrap">
+                        <time class="local-time fw-semibold" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time>
+                        <div class="mt-1 d-flex flex-wrap gap-1 align-items-center">
+                            <span class="sch-countdown" th:if="${s.pending}" th:attr="data-countdown=${s.runAt}">скоро</span>
+                            <span class="small text-muted" th:if="${s.shiftForward and s.pending}" title="Время может сместиться раньше, если генераторы освободятся">
+                                <i class="bi bi-skip-forward"></i> сдвиг
+                            </span>
+                        </div>
+                    </td>
+                    <td>
+                        <a class="fw-semibold" th:href="@{/scripts/{id}(id=${s.scriptId})}" th:text="${s.scriptName}"></a>
+                        <div class="mt-1" th:if="${s.profileName != null}">
+                            <span class="badge text-bg-light border"><i class="bi bi-collection me-1 text-primary"></i><span th:text="${s.profileName}"></span></span>
+                        </div>
+                    </td>
+                    <td class="small text-nowrap" th:text="${s.generatorIds.isEmpty()} ? (${s.generatorCount} + ' (свободные)') : (${s.generatorIds.size()} + ' выбранных')"></td>
+                    <td class="small">
+                        <span class="text-muted" th:if="${s.intensity.isEmpty()}">100% (как в профиле)</span>
+                        <span th:each="e : ${s.intensity}" class="me-2 d-inline-block">
+                            <code th:text="${e.key}"></code> <b th:text="${#numbers.formatDecimal(e.value, 1, 'DEFAULT', 1, 'DEFAULT')} + '%'"></b>
+                        </span>
+                    </td>
+                    <td class="small">
+                        <span class="text-muted" th:if="${s.env == null}">как в скрипте</span>
+                        <span class="text-muted" th:if="${s.env != null and s.env.isEmpty()}">без переменных</span>
+                        <span th:if="${s.env != null and !s.env.isEmpty()}" th:each="e : ${s.env}" class="me-1"><code th:text="${e.key}"></code></span>
+                    </td>
+                    <td>
+                        <span class="badge text-bg-primary" th:if="${s.status.name() == 'PENDING'}">ожидает</span>
+                        <span class="badge text-bg-info" th:if="${s.status.name() == 'STARTING'}">запускается</span>
+                        <span class="badge text-bg-success" th:if="${s.status.name() == 'STARTED'}">запущен</span>
+                        <span class="badge text-bg-danger" th:if="${s.status.name() == 'FAILED'}">ошибка</span>
+                        <span class="badge text-bg-secondary" th:if="${s.status.name() == 'CANCELLED'}">отменён</span>
+                        <a th:if="${s.runId != null}" th:href="@{/runs/{id}(id=${s.runId})}" class="ms-1 small fw-semibold" th:text="'#' + ${s.runId}"></a>
+                        <div class="small text-danger mt-1" th:if="${s.error != null}" th:text="${s.error}"></div>
+                    </td>
+                    <td class="text-end text-nowrap">
+                        <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2"
+                                data-bs-toggle="modal" data-bs-target="#sch-quick-modal"
+                                th:attr="data-repeat-script=${s.scriptId},data-repeat-profile=${s.profileId},data-repeat-count=${s.generatorCount}"
+                                title="Запланировать этот же тест с профилем ещё раз">
+                            <i class="bi bi-arrow-repeat"></i>
+                        </button>
+                        <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
+                              onsubmit="return confirm('Отменить запланированный запуск?')">
+                            <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить">Отменить</button>
+                        </form>
+                    </td>
+                </tr>
+                <tr class="d-none" id="sch-filter-empty"><td colspan="7" class="text-center text-muted py-4 small">Нет записей по выбранному фильтру.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Модальное окно: Быстрое планирование теста прямо из планировщика -->
+    <div class="modal fade" id="sch-quick-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <form class="modal-content" id="sch-quick-form" method="post"
+                  th:attr="data-action-tpl=@{/scripts/__ID__/schedule},data-meta-base=@{/schedule/script-meta}">
+                <input type="hidden" th:if="${_csrf != null}" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+                <input type="hidden" name="returnTo" value="schedule">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-calendar-plus me-2 text-primary"></i>Запланировать тест</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger py-2 small d-none" id="qm-err"></div>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label small fw-semibold mb-1" for="qm-script">Скрипт</label>
+                            <select class="form-select form-select-sm" id="qm-script" required>
+                                <option th:each="sc : ${scripts}" th:value="${sc.id}" th:text="${sc.name}"></option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex align-items-center justify-content-between mb-1">
+                                <label class="form-label small fw-semibold mb-0" for="qm-profile">Профиль нагрузки</label>
+                                <span class="d-flex gap-1" id="qm-meta"></span>
+                            </div>
+                            <select class="form-select form-select-sm" name="profile" id="qm-profile">
+                                <option value="">Нагрузка скрипта (как сохранена)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-7">
+                            <label class="form-label small fw-semibold mb-1" for="qm-at">Когда запустить</label>
+                            <input class="form-control form-control-sm" type="datetime-local" id="qm-at">
+                            <input type="hidden" name="runAt" id="qm-iso">
+                            <div class="sch-preset-chips">
+                                <button type="button" class="sch-preset-chip" data-qm-time="auto">Ближайшее авто</button>
+                                <button type="button" class="sch-preset-chip" data-qm-time="+15m">+15 мин</button>
+                                <button type="button" class="sch-preset-chip" data-qm-time="+1h">+1 час</button>
+                                <button type="button" class="sch-preset-chip" data-qm-time="22:00">Сегодня 22:00</button>
+                                <button type="button" class="sch-preset-chip" data-qm-time="02:00">Ночью 02:00</button>
+                            </div>
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label small fw-semibold mb-1" for="qm-count">Генераторов</label>
+                            <input class="form-control form-control-sm" type="number" min="1" name="count" id="qm-count" value="1">
+                            <div class="form-check form-switch mt-2">
+                                <input class="form-check-input" type="checkbox" role="switch" name="shift" value="true" id="qm-shift" checked>
+                                <label class="form-check-label small" for="qm-shift">Сдвигать вперёд при освобождении</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <details class="mb-2" th:unless="${generators.isEmpty()}">
+                        <summary class="small fw-semibold text-muted"><i class="bi bi-pc-display me-1"></i>Выбрать конкретные генераторы (необязательно)</summary>
+                        <div class="mt-2 sch-host-grid">
+                            <label class="sch-host-pill" th:each="g : ${generators}">
+                                <input class="form-check-input" type="checkbox" name="generatorId" th:value="${g.id}">
+                                <span th:text="${g.name}"></span>
+                            </label>
+                        </div>
+                    </details>
+
+                    <details class="mb-2">
+                        <summary class="small fw-semibold text-muted"><i class="bi bi-sliders me-1"></i>Масштаб интенсивности по операциям (необязательно)</summary>
+                        <div class="mt-2">
+                            <div class="sch-preset-chips mb-2">
+                                <button type="button" class="sch-preset-chip" data-qm-pct="50">50%</button>
+                                <button type="button" class="sch-preset-chip" data-qm-pct="100">100%</button>
+                                <button type="button" class="sch-preset-chip" data-qm-pct="120">120%</button>
+                                <button type="button" class="sch-preset-chip" data-qm-pct="150">150%</button>
+                                <button type="button" class="sch-preset-chip" data-qm-pct="200">200%</button>
+                            </div>
+                            <div class="row g-2" id="qm-ops"></div>
+                        </div>
+                    </details>
+
+                    <details>
+                        <summary class="small fw-semibold text-muted"><i class="bi bi-braces me-1"></i>Переменные запуска (необязательно)</summary>
+                        <div class="mt-2">
+                            <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="qm-env-script" value="script" checked>
+                                <label class="form-check-label small" for="qm-env-script">Как в скрипте / выбранном профиле</label></div>
+                            <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="qm-env-custom" value="custom">
+                                <label class="form-check-label small" for="qm-env-custom">Свои для этого запуска</label></div>
+                            <textarea class="form-control form-control-sm font-monospace mt-2" rows="4" name="envText" id="qm-env" disabled placeholder="KEY=VALUE"></textarea>
+                        </div>
+                    </details>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm" id="qm-submit">
+                        <i class="bi bi-calendar-plus me-1"></i>Запланировать
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно: Импорт списка тестов (JSON) -->
+    <div class="modal fade" id="sch-imp-tests-modal" tabindex="-1" aria-hidden="true"
+         th:attr="data-auto-open=${importJson != null}">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <form class="modal-content" th:action="@{/schedule/import}" method="post" enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-upload me-2 text-primary"></i>Импорт списка тестов (JSON)</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-3">
+                        Каждый тест — скрипт и профиль нагрузки; все тесты сразу планируются на ближайшее свободное время с паузой 5 минут.
+                        Необязательные поля: <code>runAt</code>, <code>generators</code>, <code>count</code>, <code>env</code>, <code>shift</code>.
+                    </div>
+                    <div class="dropzone mb-3" id="sch-imp-tests-dz">
+                        <i class="bi bi-filetype-json"></i>
+                        <div id="sch-imp-tests-lbl">Перетащите JSON-файл списка тестов сюда или <u>выберите на компьютере</u></div>
+                        <input class="d-none" type="file" name="file" id="sch-imp-tests-file" accept=".json,application/json">
+                    </div>
+                    <label class="form-label small mb-1">Или вставьте JSON-текст</label>
+                    <textarea class="form-control form-control-sm font-monospace" name="json" rows="7" th:text="${importJson}"
+                              placeholder='[
+  {"script": "Платежи", "profile": "Максимальная"},
+  {"script": "Платежи", "profile": "Стабильность 4ч", "runAt": "2026-11-22T22:00:00+03:00"},
+  {"script": "Каталог", "profile": "Базовая", "count": 2}
+]'></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-calendar-plus me-1"></i>Запланировать список</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно: Импорт профилей нагрузки (JSON) -->
+    <div class="modal fade" id="sch-imp-prof-modal" tabindex="-1" aria-hidden="true"
+         th:attr="data-auto-open=${importProfilesJson != null}">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <form class="modal-content" th:action="@{/schedule/import-profiles}" method="post" enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-collection me-2 text-primary"></i>Импорт профилей нагрузки (JSON)</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-3">
+                        Профили для разных скриптов одним файлом: массив или <code>{"profiles": [...]}</code>.
+                        У каждого — <code>script</code> (имя скрипта), <code>name</code> (имя профиля) и конфиг нагрузки (<code>operations</code>, <code>env</code>, <code>stop</code>…).
+                    </div>
+                    <div class="dropzone mb-3" id="sch-imp-prof-dz">
+                        <i class="bi bi-filetype-json"></i>
+                        <div id="sch-imp-prof-lbl">Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u></div>
+                        <input class="d-none" type="file" name="file" id="sch-imp-prof-file" accept=".json,application/json">
+                    </div>
+                    <label class="form-label small mb-1">Или вставьте JSON-текст</label>
+                    <textarea class="form-control form-control-sm font-monospace" name="json" rows="7" th:text="${importProfilesJson}"
+                              placeholder='[{"script": "Платежи", "name": "Максимум", "operations": [{"name": "pay", "execFn": "pay", "ratePerSec": 40}]}]'></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать профили</button>
+                </div>
+            </form>
+        </div>
+    </div>
 </th:block>
 <th:block layout:fragment="scripts">
     <script th:src="@{/js/schedule-timeline.js}"></script>
+    <script th:src="@{/js/schedule-page.js}"></script>
     <script>
         (function () {
             var root = document.querySelector('.tl-root');
             if (root && window.K6Timeline) { K6Timeline.init(root, {hours: 12}); }
         })();
-    </script>
-    <script>
-        // время показывается в часовом поясе браузера
-        document.querySelectorAll('time.local-time').forEach(function (t) {
-            var d = new Date(t.getAttribute('datetime'));
-            if (!isNaN(d)) { t.textContent = d.toLocaleString('ru-RU'); }
-        });
     </script>
 </th:block>
 </body>

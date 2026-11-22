@@ -438,8 +438,26 @@ public final class ChartRenderer {
         s.setMarker(markers ? SeriesMarkers.CIRCLE : SeriesMarkers.NONE);
     }
 
-    /** Высота строки легенды в пикселях (шрифт 11) и запас под отступы. */
-    private static final int LEGEND_ROW = 17, LEGEND_PAD = 24;
+    /** Высота строки легенды в пикселях (шрифт 11), запас под отступы и предел авто-ширины графика. */
+    private static final int LEGEND_ROW = 17, LEGEND_PAD = 24, MAX_AUTO_WIDTH = 3200;
+
+    private static int maxLegendTextWidth(XYChart c) {
+        Font f = font(Font.PLAIN, 11);
+        java.awt.image.BufferedImage probe = new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = probe.createGraphics();
+        try {
+            java.awt.FontMetrics fm = g.getFontMetrics(f);
+            int maxW = 0;
+            for (XYSeries s : c.getSeriesMap().values()) {
+                if (s.isShowInLegend()) {
+                    maxW = Math.max(maxW, fm.stringWidth(s.getName()));
+                }
+            }
+            return maxW;
+        } finally {
+            g.dispose();
+        }
+    }
 
     private static Img img(String title, XYChart c) {
         ChartStyle cs = style();
@@ -460,15 +478,22 @@ public final class ChartRenderer {
         if (cs.legend() == ChartStyle.Legend.LEFT && shown > 0) {
             c.getStyler().setLegendVisible(false);   // XChart не умеет легенду слева: рисуем её сами и склеиваем с графиком
             try {
-                return new Img(title, "data:image/png;base64," + Base64.getEncoder().encodeToString(withLeftLegend(c)));
+                return new Img(title, "data:image/png;base64," + Base64.getEncoder().encodeToString(withLeftLegend(c, cs.autoWidth())));
             } catch (IOException e) {
                 throw new IllegalStateException(e);
             }
         }
         if (cs.legend() == ChartStyle.Legend.BOTTOM) {
             h += shown * LEGEND_ROW + (shown > 0 ? LEGEND_PAD : 0);
+            if (cs.autoWidth() && shown > 0) {
+                int need = maxLegendTextWidth(c) + 110;
+                if (need > w) {
+                    w = Math.min(MAX_AUTO_WIDTH, need);
+                }
+            }
         } else if (cs.legend() == ChartStyle.Legend.RIGHT && shown > 0) {
-            w += 380;
+            int panel = cs.autoWidth() ? Math.max(380, maxLegendTextWidth(c) + 100) : 380;
+            w = Math.min(MAX_AUTO_WIDTH, w + panel);
             h = Math.max(h, shown * LEGEND_ROW + 80);
         }
         if (c instanceof SizedChart sc) {
@@ -482,11 +507,11 @@ public final class ChartRenderer {
         }
     }
 
-    /** Максимальная ширина панели легенды слева, px: длинные имена обрезаются с многоточием. */
-    private static final int LEFT_LEGEND_MAX = 560;
+    /** Максимальная ширина панели легенды слева, px (если autoWidth выключен — длинные имена обрезаются с многоточием). */
+    private static final int LEFT_LEGEND_MAX = 560, LEFT_LEGEND_AUTO_MAX = 1600;
 
     /** График без легенды и нарисованная вручную легенда слева (цвет и стиль линии, имя), на одном фоне. */
-    private static byte[] withLeftLegend(XYChart c) throws IOException {
+    private static byte[] withLeftLegend(XYChart c, boolean autoWidth) throws IOException {
         var entries = new ArrayList<XYSeries>();
         for (XYSeries s : c.getSeriesMap().values()) {
             if (s.isShowInLegend()) {
@@ -496,12 +521,19 @@ public final class ChartRenderer {
         java.awt.image.BufferedImage plot = BitmapEncoder.getBufferedImage(c);
         Font f = font(Font.PLAIN, 11);
         java.awt.image.BufferedImage probe = new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_RGB);
-        java.awt.FontMetrics fm = probe.createGraphics().getFontMetrics(f);
+        java.awt.Graphics2D gp = probe.createGraphics();
+        java.awt.FontMetrics fm;
         int swatch = 28, gap = 8, pad = 12;
-        int textMax = LEFT_LEGEND_MAX - swatch - gap - 2 * pad;
+        int cap = autoWidth ? Math.min(LEFT_LEGEND_AUTO_MAX, Math.max(LEFT_LEGEND_MAX, MAX_AUTO_WIDTH - plot.getWidth())) : LEFT_LEGEND_MAX;
+        int textMax = cap - swatch - gap - 2 * pad;
         int textW = 0;
-        for (XYSeries s : entries) {
-            textW = Math.max(textW, Math.min(textMax, fm.stringWidth(s.getName())));
+        try {
+            fm = gp.getFontMetrics(f);
+            for (XYSeries s : entries) {
+                textW = Math.max(textW, Math.min(textMax, fm.stringWidth(s.getName())));
+            }
+        } finally {
+            gp.dispose();
         }
         int panelW = pad + swatch + gap + textW + pad;
         int h = Math.max(plot.getHeight(), entries.size() * LEGEND_ROW + 2 * pad);

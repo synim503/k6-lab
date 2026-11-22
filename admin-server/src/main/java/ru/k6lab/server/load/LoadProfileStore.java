@@ -51,4 +51,43 @@ public class LoadProfileStore {
     public boolean delete(long scriptId, long id) {
         return jdbc.update("delete from load_profile where script_id = ? and id = ?", scriptId, id) == 1;
     }
+
+    /** Переименовывает профиль нагрузки (с проверкой уникальности имени в пределах скрипта). */
+    public Profile rename(long scriptId, long id, String newName, String user) {
+        String n = newName == null ? "" : newName.strip();
+        if (n.isEmpty() || n.length() > 120) {
+            throw new IllegalArgumentException("Название профиля: от 1 до 120 символов");
+        }
+        Integer clash = jdbc.queryForObject("select count(*) from load_profile where script_id = ? and name = ? and id <> ?",
+                Integer.class, scriptId, n, id);
+        if (clash != null && clash > 0) {
+            throw new IllegalArgumentException("Профиль с именем «" + n + "» уже существует");
+        }
+        int upd = jdbc.update("update load_profile set name = ?, updated_at = now(), updated_by = ? where script_id = ? and id = ?",
+                n, user, scriptId, id);
+        if (upd == 0) {
+            throw new IllegalArgumentException("Профиль не найден");
+        }
+        return find(scriptId, id).orElseThrow();
+    }
+
+    /** Создаёт копию профиля нагрузки с уникальным именем. */
+    public Profile duplicate(long scriptId, long id, String user) {
+        Profile src = find(scriptId, id).orElseThrow(() -> new IllegalArgumentException("Профиль не найден"));
+        java.util.Set<String> names = new java.util.HashSet<>();
+        list(scriptId).forEach(p -> names.add(p.name()));
+        String copyName = truncateName(src.name(), " (копия)");
+        for (int i = 2; names.contains(copyName); i++) {
+            copyName = truncateName(src.name(), " (копия " + i + ")");
+        }
+        long newId = jdbc.queryForObject(
+                "insert into load_profile (script_id, name, data, created_by, updated_by) values (?, ?, ?, ?, ?) returning id",
+                Long.class, scriptId, copyName, src.data(), user, user);
+        return find(scriptId, newId).orElseThrow();
+    }
+
+    private static String truncateName(String base, String suffix) {
+        int maxBase = Math.max(1, 120 - suffix.length());
+        return (base.length() > maxBase ? base.substring(0, maxBase) : base) + suffix;
+    }
 }

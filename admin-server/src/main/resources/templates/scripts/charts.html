@@ -1,153 +1,317 @@
 <!DOCTYPE html>
 <html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security"
       layout:decorate="~{layout/main}">
 <head><title th:text="${script.name} + ' — графики отчёта'">Графики отчёта</title></head>
 <body>
 <th:block layout:fragment="content">
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='charts')}"></th:block>
 
-    <div class="alert alert-secondary small">Свои графики попадают в HTML, PDF и Word-отчёт каждого запуска этого скрипта, после стандартных.
-        Вставьте PromQL и дайте графику имя; запросов на одном графике может быть несколько (например, CPU и память сервера на одной шкале). В запросе можно использовать <code>{run_id}</code> (метка <code>test_run_id</code> запуска)
-        и <code>{range}</code> (окно для rate/increase, например 45s). Ряды рисуются по меткам результата, в легенде — Last / Mean / Max.
-        Пример: <code>sum(rate(http_reqs_total{test_run_id="{run_id}"}[{range}]))</code></div>
+    <div id="cb-root"
+         th:attr="data-script-id=${script.id},
+                  data-base-url=@{/scripts/{id}/charts(id=${script.id})},
+                  data-prom-configured=${promConfigured},
+                  data-open-grafana=${grafanaJson != null}">
 
-    <details class="card card-body mb-3" th:attr="open=${grafanaJson != null} ? 'open'">
-        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-upload me-1"></i>Импорт дашборда Grafana</summary>
-        <form class="mt-2" th:action="@{/scripts/{id}/charts/import-grafana(id=${script.id})}" method="post" enctype="multipart/form-data">
-            <div class="small text-muted mb-2">Вставьте JSON дашборда (Grafana → Dashboard settings → JSON Model или Share → Export → Export as JSON) или загрузите файл.
-                Каждая панель с запросами Prometheus станет графиком отчёта: имя — заголовок панели, подписи — <code>legendFormat</code>, единицы — из панели.
-                Переменная теста (<code>$testid</code>, <code>$run_id</code>…) заменяется на <code>{run_id}</code>, <code>$__interval</code> / <code>$__rate_interval</code> — на <code>{range}</code>,
-                остальные переменные — их текущим значением (для «All» — любое). Панели не с Prometheus и без запросов пропускаются; график с тем же именем обновляется.
-                Если ваш дашборд привязывает запуск по другой метке, поправьте запросы ниже в списке.</div>
-            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="6" th:text="${grafanaJson}" placeholder='{"title": "k6", "panels": [...]}'></textarea>
-            <div class="d-flex gap-2 align-items-center flex-wrap">
-                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
-                <button class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать панели</button>
-                <span class="text-muted small">Если выбран файл, используется он, а не текст.</span>
+        <!-- Безопасная передача начального состояния из Thymeleaf в JS -->
+        <div class="d-none" id="cb-init-templates" th:text="${templatesJson}">[]</div>
+        <div class="d-none" id="cb-init-variables" th:text="${variablesJson}">[]</div>
+
+        <!-- Верхняя панель действий -->
+        <div class="cb-toolbar">
+            <div class="cb-meta">
+                <span class="chip" id="cb-summary"><i class="bi bi-graph-up"></i> Загрузка…</span>
+                <span class="chip" th:if="${promConfigured}" title="Предпросмотр и автодополнение метрик активны">
+                    <span class="dot dot-ok"></span>Prometheus подключён
+                </span>
+                <a class="chip text-decoration-none" th:unless="${promConfigured}" th:href="@{/settings} + '#prom'"
+                   title="Настройте URL запросов Prometheus для живого предпросмотра">
+                    <span class="dot dot-bad"></span>Prometheus не настроен
+                </a>
+                <a class="small text-muted ms-1" sec:authorize="hasRole('ADMIN')" th:href="@{/settings} + '#charts'"
+                   title="Общие настройки вида графиков в отчётах (тема, размер, легенда)">
+                    <i class="bi bi-palette me-1"></i><span th:text="${chartStyle.theme().name() == 'DARK' ? 'Тёмная тема' : 'Светлая тема'}"></span>,
+                    <span th:text="${chartStyle.width()} + '×' + ${chartStyle.height()}"></span>
+                </a>
             </div>
-        </form>
-    </details>
-
-    <form class="card card-body mb-3" th:action="@{/scripts/{id}/charts(id=${script.id})}" method="post" id="chart-form">
-        <div class="row g-2 mb-1">
-            <div class="col-md-4"><label class="form-label small mb-1">Имя графика</label>
-                <input class="form-control form-control-sm" name="name" maxlength="120" required placeholder="Например: CPU сервера приложений"></div>
-            <div class="col-md-2"><label class="form-label small mb-1">Единицы</label>
-                <input class="form-control form-control-sm" name="unit" maxlength="32" placeholder="%, мс, оп/с, Б" title="Если единицы Б или Б/с, большие значения автоматически переводятся в КБ, МБ, ГБ"></div>
-        </div>
-        <label class="form-label small mb-1">Запросы на графике (каждый рисуется своими линиями)</label>
-        <div id="chart-queries">
-            <div class="row g-2 mb-2 chart-q">
-                <div class="col-md-8"><textarea class="form-control form-control-sm font-monospace" name="promql" rows="2" required
-                          placeholder="100 - avg(rate(node_cpu_seconds_total{mode=&quot;idle&quot;}[{range}])) * 100"></textarea></div>
-                <div class="col-md-3"><input class="form-control form-control-sm" name="legend" maxlength="120" placeholder="Подпись в легенде (необязательно)"></div>
-                <div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger chart-q-del" title="Убрать запрос">&times;</button></div>
+            <div class="cb-actions">
+                <button type="button" class="btn btn-primary btn-sm" id="cb-new-btn">
+                    <i class="bi bi-plus-lg me-1"></i>Новый график
+                </button>
+                <div class="dropdown">
+                    <button type="button" class="btn btn-outline-primary btn-sm dropdown-toggle" id="cb-presets-btn" data-bs-toggle="dropdown">
+                        <i class="bi bi-magic me-1"></i>Шаблоны
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" id="cb-presets-menu" style="min-width:300px;max-height:420px;overflow-y:auto"></ul>
+                </div>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="cb-vars-btn">
+                    <i class="bi bi-braces me-1"></i>Переменные
+                    <span class="badge text-bg-light ms-1" id="cb-vars-badge">0</span>
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#cb-grafana-modal">
+                    <i class="bi bi-upload me-1"></i>Импорт Grafana
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#cb-help-box" title="Справка по синтаксису">
+                    <i class="bi bi-question-circle"></i>
+                </button>
             </div>
         </div>
-        <div class="mt-1"><button type="button" class="btn btn-outline-secondary btn-sm" id="chart-q-add"><i class="bi bi-plus-lg me-1"></i>Ещё запрос</button>
-            <button class="btn btn-primary btn-sm ms-2"><i class="bi bi-save me-1"></i>Сохранить график</button>
-            <span class="text-muted small ms-2">График с уже существующим именем будет обновлён. Если запрос возвращает несколько рядов, к подписи добавляются их метки.</span></div>
-    </form>
 
-    <div class="card card-body mb-3">
-        <h6 class="mb-1"><i class="bi bi-braces me-1"></i>Переменные</h6>
-        <div class="small text-muted mb-2">В запросах переменная пишется как <code>$имя</code> или <code>${имя}</code>, при построении отчёта подставляется её значение.
-            Значение <code>{run_id}</code> — идентификатор запуска (так задаётся переменная теста), <code>{range}</code> — окно для rate/increase. Для регулярных выражений
-            (<code>=~</code>) значение может быть <code>.*</code> или <code>a|b</code>. При импорте дашборда Grafana сюда попадают его переменные; уже заданные не перезаписываются.</div>
-        <table class="table table-sm align-middle mb-2" th:unless="${variables.isEmpty()}">
-            <thead><tr><th style="width:220px">Переменная</th><th>Значение</th><th></th></tr></thead>
-            <tbody><tr th:each="v : ${variables}">
-                <td><code th:text="'$' + ${v.name}"></code></td>
-                <td><form class="d-flex gap-2 m-0" th:action="@{/scripts/{id}/charts/variables(id=${script.id})}" method="post">
-                    <input type="hidden" name="name" th:value="${v.name}">
-                    <input class="form-control form-control-sm font-monospace" name="value" th:value="${v.value}" placeholder="значение">
-                    <button class="btn btn-sm btn-outline-primary">Сохранить</button></form></td>
-                <td class="text-end"><form class="m-0" th:action="@{/scripts/{id}/charts/variables/{vid}/delete(id=${script.id},vid=${v.id})}" method="post"
-                      onsubmit="return confirm('Удалить переменную?')"><button class="btn btn-sm btn-outline-danger">Удалить</button></form></td>
-            </tr></tbody></table>
-        <form class="d-flex gap-2 flex-wrap m-0" th:action="@{/scripts/{id}/charts/variables(id=${script.id})}" method="post">
-            <input class="form-control form-control-sm" style="width:200px" name="name" maxlength="64" required placeholder="имя (например instance)">
-            <input class="form-control form-control-sm font-monospace" style="width:320px" name="value" placeholder="значение (например app-1 или {run_id})">
-            <button class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Добавить / изменить</button>
-        </form>
+        <!-- Компактная сворачиваемая справка -->
+        <div class="collapse mb-3" id="cb-help-box">
+            <div class="card card-body py-2 px-3 small">
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <div class="fw-semibold mb-1"><i class="bi bi-terminal me-1 text-primary"></i>Подстановки в PromQL</div>
+                        <div><code>{run_id}</code> — метка <code>test_run_id</code> текущего запуска.</div>
+                        <div><code>{range}</code> — окно для <code>rate()</code> / <code>increase()</code> (например <code>45s</code>).</div>
+                        <div><code>$имя</code> / <code>${имя}</code> — переменная скрипта (можно менять в панели «Переменные»).</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="fw-semibold mb-1"><i class="bi bi-tags me-1 text-primary"></i>Легенда и заголовок</div>
+                        <div>Пустая легенда — автоматическая подпись по меткам результата.</div>
+                        <div><code>{{метка}}</code> — подстановка значения метки как в Grafana (например <code>{{instance}}</code>).</div>
+                        <div>В имени графика переменные тоже раскрываются; в легенде выводятся <b>Last / Mean / Max</b>.</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="fw-semibold mb-1"><i class="bi bi-rulers me-1 text-primary"></i>Единицы и порядок</div>
+                        <div>Единицы <code>Б</code> и <code>Б/с</code> автоматически масштабируются в КБ, МБ, ГБ, ТБ.</div>
+                        <div>Перетаскивайте графики в списке слева за <i class="bi bi-grip-vertical"></i> — в таком порядке они попадут в HTML, PDF и Word-отчёт.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Сворачиваемая панель переменных -->
+        <div class="card cb-vars-card d-none" id="cb-vars-panel">
+            <div class="card-header py-2 d-flex align-items-center justify-content-between">
+                <span class="small"><i class="bi bi-braces me-1 text-primary"></i>Переменные графиков скрипта
+                    <span class="text-muted fw-normal ms-1">Подставляются в PromQL как <code>$имя</code> или <code>${имя}</code></span></span>
+                <button type="button" class="btn-close btn-sm" id="cb-vars-close" aria-label="Скрыть"></button>
+            </div>
+            <div class="card-body py-2">
+                <div class="cb-var-missing d-none" id="cb-vars-missing"></div>
+                <div class="cb-vars-grid mb-2" id="cb-vars-grid"></div>
+                <form class="d-flex flex-wrap align-items-center gap-2 pt-2 border-top" id="cb-var-add-form">
+                    <input class="form-control form-control-sm" style="width:185px" id="cb-var-new-name" maxlength="64" required
+                           placeholder="имя (например instance)">
+                    <input class="form-control form-control-sm font-monospace" style="width:280px" id="cb-var-new-val"
+                           placeholder="значение (app-1, .* или {run_id})">
+                    <div class="d-flex gap-1 align-items-center">
+                        <button type="button" class="cb-chip-ins" data-var-val-preset="{run_id}">{run_id}</button>
+                        <button type="button" class="cb-chip-ins" data-var-val-preset="{range}">{range}</button>
+                        <button type="button" class="cb-chip-ins" data-var-val-preset=".*">.*</button>
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-primary ms-auto"><i class="bi bi-plus-lg me-1"></i>Сохранить переменную</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Основное рабочее пространство: Слева список графиков, Справа конструктор + предпросмотр -->
+        <div class="cb-workspace">
+
+            <!-- Левая колонка: Список графиков отчёта -->
+            <div class="card cb-outline">
+                <div class="cb-outline-head">
+                    <div class="cb-filter-row">
+                        <div class="cb-search-wrap">
+                            <i class="bi bi-search"></i>
+                            <input class="form-control form-control-sm" type="search" id="cb-search" placeholder="Поиск по имени, PromQL…" aria-label="Поиск графиков">
+                        </div>
+                        <div class="dropdown">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" title="Дополнительные действия">
+                                <i class="bi bi-three-dots"></i>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><button type="button" class="dropdown-item small" id="cb-enable-all"><i class="bi bi-eye me-2"></i>Включить все в отчёт</button></li>
+                                <li><button type="button" class="dropdown-item small" id="cb-disable-all"><i class="bi bi-eye-slash me-2"></i>Скрыть все из отчёта</button></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li>
+                                    <form th:action="@{/scripts/{id}/charts/delete-all(id=${script.id})}" method="post" class="m-0"
+                                          onsubmit="return confirm('Удалить ВСЕ свои графики этого скрипта? Это действие нельзя отменить.')">
+                                        <button type="submit" class="dropdown-item small text-danger"><i class="bi bi-trash me-2"></i>Удалить все графики</button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="seg w-100">
+                        <button type="button" class="btn btn-sm flex-fill active" data-cb-filter="all">Все</button>
+                        <button type="button" class="btn btn-sm flex-fill" data-cb-filter="enabled">В отчёте</button>
+                        <button type="button" class="btn btn-sm flex-fill" data-cb-filter="disabled">Выкл.</button>
+                    </div>
+                </div>
+
+                <!-- Контекстная панель выбора и массовых действий -->
+                <div class="cb-bulk-bar" id="cb-bulk-bar">
+                    <div class="form-check m-0">
+                        <input type="checkbox" class="form-check-input" id="cb-select-all">
+                        <label class="form-check-label small" for="cb-select-all" id="cb-bulk-count">Выбрать все</label>
+                    </div>
+                    <div class="d-none d-flex align-items-center gap-1 ms-auto" id="cb-bulk-actions">
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" id="cb-bulk-enable" title="Включить выбранные"><i class="bi bi-eye"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" id="cb-bulk-disable" title="Скрыть выбранные"><i class="bi bi-eye-slash"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2" id="cb-bulk-delete" title="Удалить выбранные"><i class="bi bi-trash"></i></button>
+                    </div>
+                </div>
+
+                <!-- Список карточек графиков -->
+                <div class="cb-list" id="cb-list"></div>
+            </div>
+
+            <!-- Правая колонка: Студия конструктора и предпросмотр -->
+            <div class="card cb-studio" id="cb-studio">
+                <div class="cb-studio-head">
+                    <div class="cb-studio-title">
+                        <h5 id="cb-studio-mode">Конструктор графика</h5>
+                        <span class="cb-dirty-pill"><i class="bi bi-circle-fill" style="font-size:.45rem"></i>Не сохранено</span>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 d-none" id="cb-studio-edit-btns">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="cb-dup-btn" title="Создать копию этого графика">
+                            <i class="bi bi-copy me-1"></i>Дублировать
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" id="cb-del-btn" title="Удалить этот график">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="alert alert-danger mx-3 mt-3 mb-0 py-2 small d-none" id="cb-studio-err"></div>
+
+                <!-- Секция 1: Основные свойства -->
+                <div class="cb-section">
+                    <div class="row g-3 align-items-start">
+                        <div class="col-md-7">
+                            <label class="form-label mb-1" for="cb-name">Имя графика</label>
+                            <input class="form-control form-control-sm" id="cb-name" maxlength="120" required
+                                   placeholder="Например: Утилизация CPU серверов приложений">
+                            <div class="form-text small d-none mt-1" id="cb-name-var-hint"></div>
+                        </div>
+                        <div class="col-md-5">
+                            <div class="d-flex align-items-center justify-content-between mb-1">
+                                <label class="form-label mb-0" for="cb-unit">Единицы оси Y</label>
+                                <div class="form-check form-switch m-0">
+                                    <input class="form-check-input" type="checkbox" id="cb-enabled" checked>
+                                    <label class="form-check-label small" for="cb-enabled">В отчёт</label>
+                                </div>
+                            </div>
+                            <input class="form-control form-control-sm" id="cb-unit" maxlength="32"
+                                   placeholder="%, мс, оп/с, Б, Б/с…"
+                                   title="Для Б и Б/с большие значения автоматически переводятся в КБ, МБ, ГБ">
+                            <div class="cb-unit-pills" id="cb-unit-pills"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Секция 2: Запросы PromQL -->
+                <div class="cb-section">
+                    <div class="cb-section-head">
+                        <span class="cb-section-label">
+                            <i class="bi bi-code-slash text-primary"></i>Запросы PromQL
+                            <span class="badge text-bg-light" id="cb-q-count">1</span>
+                        </span>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="cb-add-q-btn">
+                            <i class="bi bi-plus-lg me-1"></i>Ещё запрос
+                        </button>
+                    </div>
+                    <div class="cb-queries" id="cb-queries"></div>
+                </div>
+
+                <!-- Секция 3: Живой WYSIWYG-предпросмотр -->
+                <div class="cb-section">
+                    <div class="cb-section-head">
+                        <span class="cb-section-label"><i class="bi bi-eye text-primary"></i>Предпросмотр (как в отчёте)</span>
+                        <div class="form-check form-check-inline m-0">
+                            <input class="form-check-input" type="checkbox" id="cb-auto-preview">
+                            <label class="form-check-label small text-muted" for="cb-auto-preview">Авто при выборе графика</label>
+                        </div>
+                    </div>
+                    <div class="cb-preview-bar">
+                        <select class="form-select form-select-sm" id="cb-preview-src" aria-label="Источник данных для предпросмотра">
+                            <optgroup label="Запуски этого скрипта" th:unless="${runs.isEmpty()}">
+                                <option th:each="r : ${runs}" th:value="'run:' + ${r.id}" th:text="${r.label}"></option>
+                            </optgroup>
+                            <optgroup label="Окно от текущего момента">
+                                <option value="min:15">Последние 15 мин</option>
+                                <option value="min:30" th:selected="${runs.isEmpty()}">Последние 30 мин</option>
+                                <option value="min:60">Последний 1 час</option>
+                                <option value="min:360">Последние 6 часов</option>
+                            </optgroup>
+                        </select>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="cb-preview-btn">
+                            <i class="bi bi-play-fill me-1"></i>Проверить и построить
+                        </button>
+                    </div>
+                    <div class="cb-preview-stage" id="cb-preview-stage"></div>
+                    <div class="cb-preview-meta" id="cb-preview-meta"></div>
+                </div>
+
+                <!-- Подвал конструктора -->
+                <div class="cb-studio-foot">
+                    <button type="button" class="btn btn-primary btn-sm" id="cb-save-btn">
+                        <i class="bi bi-save me-1"></i>Сохранить график
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="cb-reset-btn">
+                        Отменить изменения
+                    </button>
+                    <span class="cb-kbd-hint d-none d-md-inline">
+                        <kbd>Ctrl</kbd>+<kbd>Enter</kbd> — предпросмотр · <kbd>Ctrl</kbd>+<kbd>S</kbd> — сохранить
+                    </span>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="card empty-state" th:if="${templates.isEmpty()}"><i class="bi bi-graph-up"></i>Своих графиков пока нет.</div>
-    <form class="card" th:unless="${templates.isEmpty()}" id="chart-list" method="post" th:action="@{/scripts/{id}/charts/delete-selected(id=${script.id})}">
-        <div class="d-flex flex-wrap align-items-center gap-2 p-2 border-bottom">
-            <span class="fw-semibold small"><span th:text="${templates.size()}"></span> граф.</span>
-            <input class="form-control form-control-sm" style="width:220px" type="search" id="chart-filter" placeholder="Поиск по имени и запросу" aria-label="Поиск">
-            <button class="btn btn-sm btn-outline-danger ms-auto" id="chart-del-sel" disabled
-                    onclick="return confirm('Удалить выбранные графики (' + document.querySelectorAll('.chart-sel:checked').length + ')?')">
-                <i class="bi bi-trash me-1"></i>Удалить выбранные <span id="chart-sel-n"></span></button>
-            <button class="btn btn-sm btn-outline-danger" th:formaction="@{/scripts/{id}/charts/delete-all(id=${script.id})}" formnovalidate
-                    onclick="return confirm('Удалить ВСЕ графики этого скрипта?')">Удалить все</button>
+    <!-- Модальное окно импорта дашборда Grafana -->
+    <div class="modal fade" id="cb-grafana-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <form class="modal-content" th:action="@{/scripts/{id}/charts/import-grafana(id=${script.id})}" method="post" enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-upload me-2 text-primary"></i>Импорт дашборда Grafana</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-3">
+                        Загрузите JSON-файл дашборда (Grafana → <b>Dashboard settings → JSON Model</b> или <b>Share → Export → Export as JSON</b>) или вставьте текст ниже.
+                        Каждая панель с запросами Prometheus станет графиком отчёта, переменные дашборда добавятся в раздел «Переменные» (уже заданные вручную не перезаписываются).
+                    </div>
+                    <div class="dropzone mb-3" id="cb-grafana-dz">
+                        <i class="bi bi-filetype-json"></i>
+                        <div id="cb-grafana-dz-lbl">Перетащите JSON-файл дашборда сюда или <u>выберите на компьютере</u></div>
+                        <input class="d-none" type="file" name="file" id="cb-grafana-file" accept=".json,application/json">
+                    </div>
+                    <label class="form-label small mb-1" for="cb-grafana-json">Или вставьте JSON-текст</label>
+                    <textarea class="form-control form-control-sm font-monospace" id="cb-grafana-json" name="json" rows="7"
+                              th:text="${grafanaJson}" placeholder='{"title": "k6 + SUT", "panels": [...]}'></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать панели</button>
+                </div>
+            </form>
         </div>
-        <table class="table table-sm table-hover align-middle mb-0 chart-tbl" style="font-size:.85rem">
-            <thead><tr><th style="width:30px"><input type="checkbox" class="form-check-input" id="chart-all" title="Выбрать все видимые"></th>
-                <th>График</th><th>Запросы</th><th style="width:110px"></th></tr></thead>
-            <tbody><tr th:each="t : ${templates}" class="chart-row" th:classappend="${!t.enabled} ? 'text-muted'">
-                <td><input type="checkbox" class="form-check-input chart-sel" name="ids" th:value="${t.id}"></td>
-                <td style="max-width:280px"><div class="fw-semibold text-truncate" th:text="${t.name}" th:title="${t.name}"></div>
-                    <div class="text-muted" style="font-size:.75rem"><span th:if="${!#strings.isEmpty(t.unit)}" th:text="${t.unit} + ' · '"></span><span th:text="${t.queries.size()} + ' запр.'"></span><span th:if="${!t.enabled}"> · выключен</span></div></td>
-                <td style="max-width:0;width:100%"><details>
-                    <summary class="font-monospace text-truncate" style="display:block;cursor:pointer;font-size:.78rem" th:text="${t.promql}"></summary>
-                    <div th:each="q : ${t.queries}" class="mt-1"><code class="small" style="white-space:pre-wrap;word-break:break-all" th:text="${q.promql}"></code>
-                        <span class="badge text-bg-light border ms-1" th:if="${!#strings.isEmpty(q.legend)}" th:text="${q.legend}"></span></div>
-                </details></td>
-                <td class="text-end text-nowrap">
-                    <button class="btn btn-sm btn-outline-secondary py-0 px-1" name="enabled" th:value="${!t.enabled}" formnovalidate
-                            th:formaction="@{/scripts/{id}/charts/{tid}/toggle(id=${script.id},tid=${t.id})}" th:title="${t.enabled} ? 'Выключить (в отчёт не попадёт)' : 'Включить'">
-                        <i class="bi" th:classappend="${t.enabled} ? 'bi-eye' : 'bi-eye-slash'"></i></button>
-                    <button class="btn btn-sm btn-outline-danger py-0 px-1" formnovalidate title="Удалить"
-                            th:formaction="@{/scripts/{id}/charts/{tid}/delete(id=${script.id},tid=${t.id})}"><i class="bi bi-trash"></i></button></td>
-            </tr></tbody></table>
-    </form>
+    </div>
+
+    <!-- Модальное окно увеличения предпросмотра -->
+    <div class="modal fade" id="cb-zoom-modal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title" id="cb-zoom-title">Предпросмотр</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body text-center p-2" style="background:#111827">
+                    <img id="cb-zoom-img" class="img-fluid" alt="Увеличенный график">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Контейнер всплывающих уведомлений -->
+    <div class="cb-toast-box" id="cb-toast-box" aria-live="polite"></div>
 </th:block>
 <th:block layout:fragment="scripts">
-    <script>
-        (function () {
-            var list = document.getElementById('chart-list');
-            if (list) {
-                var rows = [].slice.call(list.querySelectorAll('.chart-row'));
-                var all = document.getElementById('chart-all'), del = document.getElementById('chart-del-sel'), cnt = document.getElementById('chart-sel-n');
-                function visible(r) { return r.style.display !== 'none'; }
-                function sync() {
-                    var n = list.querySelectorAll('.chart-sel:checked').length;
-                    del.disabled = n === 0;
-                    cnt.textContent = n ? '(' + n + ')' : '';
-                }
-                list.addEventListener('change', function (e) { if (e.target.classList.contains('chart-sel')) { sync(); } });
-                all.addEventListener('change', function () {
-                    rows.forEach(function (r) { if (visible(r)) { r.querySelector('.chart-sel').checked = all.checked; } });
-                    sync();
-                });
-                document.getElementById('chart-filter').addEventListener('input', function (e) {
-                    var q = e.target.value.trim().toLowerCase();
-                    rows.forEach(function (r) {
-                        var show = !q || r.textContent.toLowerCase().indexOf(q) >= 0;
-                        r.style.display = show ? '' : 'none';
-                        if (!show) { r.querySelector('.chart-sel').checked = false; }
-                    });
-                    all.checked = false;
-                    sync();
-                });
-                sync();
-            }
-            var box = document.getElementById('chart-queries');
-            document.getElementById('chart-q-add').addEventListener('click', function () {
-                var row = box.querySelector('.chart-q').cloneNode(true);
-                row.querySelectorAll('textarea,input').forEach(function (e) { e.value = ''; });
-                box.appendChild(row);
-            });
-            box.addEventListener('click', function (e) {
-                var b = e.target.closest('.chart-q-del');
-                if (!b) { return; }
-                if (box.querySelectorAll('.chart-q').length > 1) { b.closest('.chart-q').remove(); }
-                else { box.querySelectorAll('textarea,input').forEach(function (x) { x.value = ''; }); }
-            });
-        })();
-    </script>
+    <script th:src="@{/js/chart-builder.js}"></script>
 </th:block>
 </body>
 </html>

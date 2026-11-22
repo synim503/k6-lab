@@ -8,7 +8,8 @@ import ru.k6lab.server.settings.SettingsService;
 public class ChartStyleService {
 
     static final String THEME = "report.chart.theme", WIDTH = "report.chart.width", HEIGHT = "report.chart.height",
-            LEGEND = "report.chart.legend", STATS = "report.chart.stats", MAX_LEGEND = "report.chart.max_legend", TIME_AXIS = "report.chart.time_axis";
+            LEGEND = "report.chart.legend", STATS = "report.chart.stats", MAX_LEGEND = "report.chart.max_legend",
+            TIME_AXIS = "report.chart.time_axis", AUTO_WIDTH = "report.chart.auto_width";
 
     private final SettingsService settings;
 
@@ -19,7 +20,8 @@ public class ChartStyleService {
     public ChartStyle get() {
         ChartStyle d = ChartStyle.DEFAULT;
         return ChartStyle.of(settings.get(THEME, d.theme().name()), settings.getInt(WIDTH, d.width()), settings.getInt(HEIGHT, d.height()),
-                settings.get(LEGEND, d.legend().name()), !"0".equals(settings.get(STATS, "1")), settings.getInt(MAX_LEGEND, d.maxLegend()));
+                settings.get(LEGEND, d.legend().name()), !"0".equals(settings.get(STATS, "1")), settings.getInt(MAX_LEGEND, d.maxLegend()),
+                "1".equals(settings.get(AUTO_WIDTH, "0")));
     }
 
     /** Ось времени по умолчанию: true - абсолютное время (часы), false - минуты от начала теста. */
@@ -28,19 +30,24 @@ public class ChartStyleService {
     }
 
     public ChartStyle save(String theme, int width, int height, String legend, boolean stats, int maxLegend, boolean absoluteTime) {
+        return save(theme, width, height, legend, stats, maxLegend, absoluteTime, false);
+    }
+
+    public ChartStyle save(String theme, int width, int height, String legend, boolean stats, int maxLegend, boolean absoluteTime, boolean autoWidth) {
         settings.set(TIME_AXIS, absoluteTime ? "abs" : "rel");
-        ChartStyle s = ChartStyle.of(theme, width, height, legend, stats, maxLegend);
+        ChartStyle s = ChartStyle.of(theme, width, height, legend, stats, maxLegend, autoWidth);
         settings.set(THEME, s.theme().name());
         settings.set(WIDTH, String.valueOf(s.width()));
         settings.set(HEIGHT, String.valueOf(s.height()));
         settings.set(LEGEND, s.legend().name());
         settings.set(STATS, s.stats() ? "1" : "0");
         settings.set(MAX_LEGEND, String.valueOf(s.maxLegend()));
+        settings.set(AUTO_WIDTH, s.autoWidth() ? "1" : "0");
         return s;
     }
 
     public void reset() {
-        for (String k : new String[]{THEME, WIDTH, HEIGHT, LEGEND, STATS, MAX_LEGEND, TIME_AXIS}) {
+        for (String k : new String[]{THEME, WIDTH, HEIGHT, LEGEND, STATS, MAX_LEGEND, TIME_AXIS, AUTO_WIDTH}) {
             settings.delete(k);
         }
     }

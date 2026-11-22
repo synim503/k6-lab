@@ -1,5 +1,6 @@
 package ru.k6lab.server.result;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.time.Instant;
@@ -34,6 +35,138 @@ public record ResultData(List<StepRow> steps, boolean prometheusOk, String error
     public record StepRow(int stepNo, String label, double levelPct, String status, Instant holdStart, Instant holdEnd,
                           Instant windowStart, Instant windowEnd, boolean reliable, Double genCpuMax, boolean genOverloaded,
                           List<String> reasons, List<OpRow> ops) {
+
+        public double totalTargetRate() {
+            return ops == null ? 0 : ops.stream().mapToDouble(OpRow::targetRate).sum();
+        }
+
+        public Double totalActualRate() {
+            if (ops == null || ops.isEmpty()) {
+                return null;
+            }
+            double sum = 0;
+            boolean any = false;
+            for (OpRow o : ops) {
+                if (o.actualRate() != null && Double.isFinite(o.actualRate())) {
+                    sum += o.actualRate();
+                    any = true;
+                }
+            }
+            return any ? sum : null;
+        }
+
+        public Double maxErrorPct() {
+            if (ops == null) {
+                return null;
+            }
+            Double best = null;
+            for (OpRow o : ops) {
+                if (o.errorPct() != null && Double.isFinite(o.errorPct()) && (best == null || o.errorPct() > best)) {
+                    best = o.errorPct();
+                }
+            }
+            return best;
+        }
+
+        public String worstSlaText() {
+            if (ops == null || ops.isEmpty()) {
+                return "—";
+            }
+            OpRow worst = null;
+            double ratio = -1;
+            for (OpRow o : ops) {
+                Double v = o.slaValue();
+                if (v != null && o.slaMs() > 0) {
+                    double r = v / o.slaMs();
+                    if (r > ratio) {
+                        ratio = r;
+                        worst = o;
+                    }
+                }
+            }
+            if (worst == null) {
+                return "—";
+            }
+            return String.format(java.util.Locale.ROOT, "%s: p%d %.0f / %.0f мс",
+                    worst.operation(), worst.slaPercentile(), worst.slaValue(), worst.slaMs());
+        }
+    }
+
+    /** Итог поиска максимума по ступеням (заполняется, когда ступеней ≥ 2). */
+    public record MaxSummary(int totalSteps, int executedSteps, StepRow confirmedStep, StepRow firstFailedStep,
+                             boolean allPassed, double confirmedTargetRps, Double confirmedActualRps) {
+
+        public String css() {
+            return confirmedStep == null ? "bad" : (allPassed ? "ok" : "warn");
+        }
+
+        public String headline() {
+            if (confirmedStep == null) {
+                if (firstFailedStep == null) {
+                    return "Ни одна ступень не выполнена";
+                }
+                return "Максимум не подтверждён: нарушения уже на ступени " + firstFailedStep.stepNo()
+                        + " (" + fmtPct(firstFailedStep.levelPct()) + ")";
+            }
+            String rps = confirmedActualRps != null
+                    ? String.format(java.util.Locale.ROOT, ", %.1f оп/с", confirmedActualRps)
+                    : (confirmedTargetRps > 0 ? String.format(java.util.Locale.ROOT, ", план %.1f оп/с", confirmedTargetRps) : "");
+            if (allPassed) {
+                return "Потолок не достигнут: успешно пройдены все " + executedSteps + " ступ. (до "
+                        + fmtPct(confirmedStep.levelPct()) + rps + ")";
+            }
+            return "Подтверждённый максимум: ступень " + confirmedStep.stepNo()
+                    + " (" + fmtPct(confirmedStep.levelPct()) + rps + ")";
+        }
+
+        public String detail() {
+            if (allPassed) {
+                return "Нарушений SLA, ошибок и деградации не зафиксировано — нагрузку можно повышать дальше.";
+            }
+            if (firstFailedStep != null) {
+                String why = firstFailedStep.reasons() == null || firstFailedStep.reasons().isEmpty()
+                        ? firstFailedStep.status() : String.join("; ", firstFailedStep.reasons());
+                return "Точка деградации — ступень " + firstFailedStep.stepNo()
+                        + " (" + fmtPct(firstFailedStep.levelPct()) + "): " + why;
+            }
+            return "";
+        }
+
+        private static String fmtPct(double v) {
+            return v == Math.rint(v) ? String.format(java.util.Locale.ROOT, "%.0f%%", v)
+                    : String.format(java.util.Locale.ROOT, "%.1f%%", v);
+        }
+    }
+
+    /** Признак многоступенчатого теста (поиск максимума). */
+    @JsonIgnore
+    public boolean isStepTest() {
+        return steps != null && steps.size() >= 2;
+    }
+
+    /** Расчёт подтверждённого максимума и точки деградации (null для одноступенчатого теста). */
+    public MaxSummary maxCapacity() {
+        if (!isStepTest()) {
+            return null;
+        }
+        List<StepRow> executed = steps.stream().filter(s -> !"NOT_RUN".equals(s.status())).toList();
+        StepRow confirmed = null;
+        StepRow firstBad = null;
+        for (StepRow s : executed) {
+            if ("SUCCESS".equals(s.status())) {
+                if (firstBad == null) {
+                    confirmed = s;
+                }
+            } else {
+                if (firstBad == null) {
+                    firstBad = s;
+                }
+            }
+        }
+        boolean allOk = !executed.isEmpty() && firstBad == null && executed.size() == steps.size();
+        double target = confirmed == null ? 0 : confirmed.totalTargetRate();
+        Double actual = confirmed == null ? null : confirmed.totalActualRate();
+        return new MaxSummary(steps.size(), executed.size(), confirmed, firstBad, allOk, target, actual);
     }
 
     /** Справочная сводка k6 по генератору: накопленные перцентили за весь тест, НЕ для принятия решений. */

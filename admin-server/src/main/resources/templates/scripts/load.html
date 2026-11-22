@@ -10,756 +10,445 @@
     <div class="alert alert-warning py-2 small" th:if="${!staleOps.isEmpty()}">
         <i class="bi bi-info-circle me-1"></i>В последней версии скрипта нет функций операций:
         <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
-        Они убраны из списка и не участвуют в запуске. Если вернуть версию с этими функциями (откат), их нагрузка вернётся, пока вы не сохранили форму.</div>
+        Они убраны из списка и не участвуют в запуске. Если вернуть версию с этими функциями (откат), их нагрузка вернётся, пока вы не сохранили форму.
+    </div>
 
-    <details class="card card-body mb-3 py-2" th:attr="open=${importJson != null} ? 'open'">
-        <summary class="fw-semibold" style="cursor:pointer"><i class="bi bi-upload me-1"></i>Импорт и экспорт профилей (JSON)</summary>
-        <form class="mt-2" th:action="@{/scripts/{id}/load/profiles/import(id=${script.id})}" method="post" enctype="multipart/form-data">
-            <div class="small text-muted mb-2">Массив профилей или <code>{"profiles": [...]}</code>. Каждый профиль — <code>name</code> и конфиг нагрузки в том же формате,
-                что «JSON» ниже (<code>operations</code>, <code>env</code>, <code>stop</code>…). Профиль с существующим именем обновляется. Все профили проверяются как при запуске;
-                если хотя бы один не проходит, не сохраняется ни один. Образец формата — кнопка «Скачать профили».</div>
-            <textarea class="form-control form-control-sm font-monospace mb-2" name="json" rows="6" th:text="${importJson}"
-                      placeholder="[{&quot;name&quot;: &quot;Максимум&quot;, &quot;operations&quot;: [{&quot;name&quot;: &quot;work&quot;, &quot;execFn&quot;: &quot;work&quot;, &quot;ratePerSec&quot;: 40}], &quot;env&quot;: {&quot;BASE&quot;: &quot;x&quot;}}]"></textarea>
-            <div class="d-flex gap-2 align-items-center flex-wrap">
-                <input class="form-control form-control-sm w-auto" type="file" name="file" accept=".json,application/json">
-                <button class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать</button>
-                <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}/load/profiles.json(id=${script.id})}"><i class="bi bi-download me-1"></i>Скачать профили</a>
-            </div>
-        </form>
-    </details>
+    <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post"
+          th:attr="data-from-profile=${formDirty != null ? 'true' : null}">
 
-    <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post" th:attr="data-from-profile=${formDirty != null ? 'true' : null}">
-
-        <div class="card card-body mb-3 py-2" id="profiles-box">
-            <div class="d-flex flex-wrap align-items-center gap-2">
-                <span class="fw-semibold"><i class="bi bi-collection me-1"></i>Профили нагрузки</span>
-                <select class="form-select form-select-sm" style="width:auto;min-width:220px" id="profile-pick" aria-label="Профиль нагрузки" form="no-form" th:attr="data-open-url=@{/scripts/{id}/load(id=${script.id})}">
-                    <option value="" th:text="${profiles.isEmpty()} ? 'профилей пока нет' : 'выберите профиль'"></option>
-                    <option th:each="p : ${profiles}" th:value="${p.id}" th:text="${p.name}" th:selected="${loadedProfileId != null and loadedProfileId == p.id}"></option>
+        <!-- Верхняя панель профилей нагрузки -->
+        <div class="card ld-topbar" id="profiles-box">
+            <div class="ld-profile-grp">
+                <span class="fw-semibold small text-nowrap"><i class="bi bi-collection me-1 text-primary"></i>Профиль:</span>
+                <select class="form-select form-select-sm" id="profile-pick" aria-label="Профиль нагрузки" form="no-form"
+                        th:attr="data-open-url=@{/scripts/{id}/load(id=${script.id})}">
+                    <option value="" th:text="${profiles.isEmpty()} ? 'профилей пока нет' : 'выберите профиль…'"></option>
+                    <option th:each="p : ${profiles}" th:value="${p.id}" th:text="${p.name}"
+                            th:selected="${loadedProfileId != null and loadedProfileId == p.id}"></option>
                 </select>
-                <button type="submit" class="btn btn-sm btn-outline-danger" id="profile-delete" th:disabled="${profiles.isEmpty()}" formnovalidate
-                        th:formaction="@{/scripts/{id}/load/profile/delete(id=${script.id})}">Удалить</button>
-                <span class="vr mx-1"></span>
-                <input class="form-control form-control-sm" style="width:220px" name="profileName" id="profile-name" maxlength="120"
-                       placeholder="название профиля" th:value="${loadedProfile}" aria-label="Название профиля">
-                <button type="submit" class="btn btn-sm btn-outline-success" id="profile-save" formnovalidate
-                        th:formaction="@{/scripts/{id}/load/profile(id=${script.id})}"><i class="bi bi-save me-1"></i>Сохранить как профиль</button>
+                <button type="submit" class="btn btn-sm btn-outline-danger" id="profile-delete"
+                        th:disabled="${profiles.isEmpty()}" formnovalidate
+                        th:formaction="@{/scripts/{id}/load/profile/delete(id=${script.id})}" title="Удалить выбранный профиль">
+                    <i class="bi bi-trash"></i>
+                </button>
+                <span class="vr mx-1 d-none d-md-inline-block"></span>
+                <div class="input-group input-group-sm" style="max-width:340px">
+                    <input class="form-control" name="profileName" id="profile-name" maxlength="120"
+                           placeholder="название профиля…" th:value="${loadedProfile}" aria-label="Название профиля">
+                    <button type="submit" class="btn btn-outline-success" id="profile-save" formnovalidate
+                            th:formaction="@{/scripts/{id}/load/profile(id=${script.id})}">
+                        <i class="bi bi-save me-1"></i>Сохранить профиль
+                    </button>
+                </div>
             </div>
-            <div class="form-text mt-1">Профиль — набор операций, сценариев, SLA и переменных целиком. Выбор профиля в списке сразу подставляет его в форму, в нагрузку скрипта он попадает
-                после «Сохранить нагрузку». Профиль с тем же названием обновляется.</div>
+            <div class="d-flex align-items-center gap-2 ms-auto">
+                <button type="button" class="btn btn-sm btn-outline-primary" id="ld-prof-mgr-btn"
+                        th:if="${!profiles.isEmpty()}" title="Показать карточки всех профилей с действиями">
+                    <i class="bi bi-grid me-1"></i>Менеджер (<span th:text="${profiles.size()}"></span>)
+                </button>
+                <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/load/profiles.json(id=${script.id})}"
+                   title="Скачать все профили в JSON"><i class="bi bi-download me-1"></i>Экспорт</a>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ld-import-modal">
+                    <i class="bi bi-upload me-1"></i>Импорт / экспорт
+                </button>
+            </div>
             <input type="hidden" name="profile" id="profile-id">
         </div>
 
-        <div class="stage-warm mb-3 is-off" id="gw-box">
-            <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="gw-on" aria-label="Прогрев для всех сценариев">
-                <label class="form-check-label fw-semibold" for="gw-on">Прогрев</label></div>
-            <div class="input-group input-group-sm stage-warm-n"><span class="input-group-text">Время прогрева</span>
-                <input class="form-control" id="gw-d" type="text" value="2m" placeholder="2m" disabled aria-label="Время прогрева, общее для всех сценариев"></div>
-            <span class="small text-muted">Одно время на все сценарии. У сценариев со стадиями (ramping-*) первая, жёлтая стадия — прогрев: за это время нагрузка
-                растёт от начального значения до заданного в ней (VU или итераций за интервал). У constant-* прогрев — первые минуты на заданной нагрузке.
-                Ошибки, dropped и время ответа прогрева не попадают в итоги и SLA, на графиках он выделен. Выключение превращает стадию прогрева в обычную.</span>
+        <!-- Галерея карточек профилей (открывается по кнопке «Менеджер» или при загрузке, если хочется быстро выбрать/скопировать/запланировать) -->
+        <div class="d-none" id="ld-prof-init" th:text="${profilesJson}">[]</div>
+        <div class="d-none" id="ld-prof-gallery-wrap"
+             th:attr="data-load-url=@{/scripts/{id}/load(id=${script.id})},
+                      data-run-url=@{/scripts/{id}/run(id=${script.id})},
+                      data-loaded-id=${loadedProfileId}">
+            <div class="ld-prof-gallery" id="ld-prof-gallery"></div>
         </div>
-        <div class="sect-title mt-0"><h5>Операции</h5>
-            <span class="hint">каждая функция скрипта — отдельная операция; для одной функции можно добавить несколько сценариев</span></div>
+
+        <!-- Быстрая навигация по разделам -->
+        <nav class="ld-nav-pills" aria-label="Разделы нагрузки">
+            <a class="ld-nav-pill" href="#sec-ops"><i class="bi bi-speedometer2 text-primary"></i>Операции <span class="badge text-bg-light" id="ld-nav-ops-cnt">0/0</span></a>
+            <a class="ld-nav-pill" href="#sec-env"><i class="bi bi-braces text-primary"></i>Переменные и секреты <span class="badge text-bg-light" id="ld-nav-env-cnt">0</span></a>
+            <a class="ld-nav-pill" href="#sec-stop"><i class="bi bi-shield-exclamation text-primary"></i>Автостоп <span class="badge text-bg-light" id="ld-nav-stop-cnt">0</span></a>
+            <a class="ld-nav-pill" href="#sec-data" th:if="${!form.dataFiles.isEmpty()}"><i class="bi bi-file-earmark-spreadsheet text-primary"></i>Тестовые данные <span class="badge text-bg-light" th:text="${form.dataFiles.size()}"></span></a>
+            <a class="ld-nav-pill" href="#adv-box"><i class="bi bi-sliders2 text-primary"></i>Конфиг k6</a>
+        </nav>
+
+        <!-- Обзорная панель: живой график профиля + сводка KPI + общий прогрев -->
+        <div class="ld-hero">
+            <div class="card ld-chart-card">
+                <div class="ld-chart-head">
+                    <span class="fw-semibold small"><i class="bi bi-activity me-1 text-primary"></i>Визуальный профиль нагрузки (обновляется на лету)</span>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="seg d-none" id="ld-chart-mode">
+                            <button type="button" class="btn btn-sm active" data-ld-metric="rate">оп/с</button>
+                            <button type="button" class="btn btn-sm" data-ld-metric="vus">VU</button>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary active" id="ld-chart-stack" title="Переключить режим отображения: суммарный стек или отдельные линии">
+                            <i class="bi bi-layers-fill me-1"></i>Суммарно
+                        </button>
+                    </div>
+                </div>
+                <div class="ld-chart-body">
+                    <div class="ld-chart-canvas-wrap">
+                        <canvas id="ld-chart"></canvas>
+                    </div>
+                    <div class="ld-chart-empty d-none" id="ld-chart-empty">
+                        <i class="bi bi-bar-chart-line"></i>
+                        <div>Включите хотя бы одну операцию и задайте длительность — здесь сразу появится кривая нагрузки.</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="ld-side-col">
+                <div class="ld-kpi-grid">
+                    <div class="ld-kpi">
+                        <div class="k"><i class="bi bi-play-circle text-primary"></i>Операции</div>
+                        <div class="v" id="ld-kpi-ops">—</div>
+                        <div class="s" id="ld-kpi-ops-sub">активные сценарии</div>
+                    </div>
+                    <div class="ld-kpi">
+                        <div class="k"><i class="bi bi-lightning-charge text-primary"></i>Пик нагрузки</div>
+                        <div class="v" id="ld-kpi-peak">—</div>
+                        <div class="s" id="ld-kpi-peak-sub">суммарно</div>
+                    </div>
+                    <div class="ld-kpi">
+                        <div class="k"><i class="bi bi-clock text-primary"></i>Длительность</div>
+                        <div class="v" id="ld-kpi-dur">—</div>
+                        <div class="s" id="ld-kpi-dur-sub">оценка по стадиям</div>
+                    </div>
+                    <div class="ld-kpi">
+                        <div class="k"><i class="bi bi-people text-primary"></i>Лимит VU / ген.</div>
+                        <div class="v" id="ld-kpi-vus">—</div>
+                        <div class="s">сумма maxVUs / VU</div>
+                    </div>
+                </div>
+
+                <!-- Общий прогрев для всех сценариев -->
+                <div class="ld-warm-card op-warm is-off" id="gw-box" style="display:block">
+                    <div class="ld-warm-top">
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" type="checkbox" role="switch" id="gw-on" aria-label="Прогрев для всех сценариев">
+                            <label class="form-check-label fw-semibold" for="gw-on"><i class="bi bi-fire text-warning me-1"></i>Общий прогрев</label>
+                        </div>
+                        <div class="input-group input-group-sm ld-warm-ctrl" style="width:155px">
+                            <span class="input-group-text">Время</span>
+                            <input class="form-control" id="gw-d" type="text" value="2m" placeholder="2m" disabled aria-label="Время прогрева, общее для всех сценариев">
+                        </div>
+                    </div>
+                    <div class="ld-warm-chips">
+                        <button type="button" class="ld-warm-chip" data-gw-preset="30s">30s</button>
+                        <button type="button" class="ld-warm-chip" data-gw-preset="1m">1m</button>
+                        <button type="button" class="ld-warm-chip" data-gw-preset="2m">2m</button>
+                        <button type="button" class="ld-warm-chip" data-gw-preset="5m">5m</button>
+                    </div>
+                    <div class="small text-muted mt-2" style="font-size:.77rem;line-height:1.35">
+                        Единый прогрев для всех сценариев: ошибки и время ответа на прогреве не попадают в итоги и SLA, а на графиках он выделен янтарной зоной.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Раздел: Операции и сценарии -->
+        <div class="ld-ops-bar" id="sec-ops">
+            <div>
+                <h5><i class="bi bi-speedometer2 text-primary"></i>Операции и сценарии</h5>
+                <span class="small text-muted ms-2">каждая функция скрипта — отдельная операция; можно добавить несколько сценариев на одну функцию</span>
+            </div>
+            <div class="ld-ops-tools" th:unless="${form.ops.isEmpty()}">
+                <input class="form-control form-control-sm ld-op-search" type="search" id="ld-op-search" placeholder="Фильтр операций…" aria-label="Фильтр операций">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="ld-collapse-all">
+                    <i class="bi bi-arrows-collapse me-1"></i>Свернуть все
+                </button>
+            </div>
+        </div>
+
         <div class="op-list" id="ops-body">
-            <div class="card empty-state" th:if="${form.ops.isEmpty()}"><i class="bi bi-inbox"></i>В скрипте не найдено экспортируемых функций.
-                Добавьте их на странице версии, если определение неполное.</div>
+            <div class="card empty-state" th:if="${form.ops.isEmpty()}">
+                <i class="bi bi-inbox"></i>В скрипте не найдено экспортируемых функций.
+                Добавьте их на странице версии, если определение неполное.
+            </div>
+
             <div class="op-card op-row" th:each="o, st : ${form.ops}" th:attr="data-fn=${o.execFn}">
                 <div class="op-head">
+                    <button type="button" class="btn btn-sm btn-outline-secondary op-collapse-btn" title="Свернуть / развернуть параметры операции">
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
                     <div class="form-check form-switch m-0" title="Включена ли операция в запуск">
                         <input type="hidden" th:name="|_ops[${st.index}].enabled|" value="on">
-                        <input class="form-check-input op-on" type="checkbox" role="switch" value="true" th:name="|ops[${st.index}].enabled|" th:checked="${o.enabled}" aria-label="Операция участвует в запуске"></div>
+                        <input class="form-check-input op-on" type="checkbox" role="switch" value="true"
+                               th:name="|ops[${st.index}].enabled|" th:checked="${o.enabled}" aria-label="Операция участвует в запуске">
+                    </div>
+                    <span class="op-color-dot" title="Цвет операции на графике нагрузки"></span>
                     <code class="fn" th:text="${o.execFn}"></code>
                     <input type="hidden" th:name="|ops[${st.index}].execFn|" th:value="${o.execFn}">
                     <input type="hidden" th:name="|ops[${st.index}].failureSource|" th:value="${o.failureSource}">
                     <input class="form-control form-control-sm op-name" th:name="|ops[${st.index}].name|" th:value="${o.name}"
                            aria-label="Название операции" placeholder="Название" title="Название операции: по нему метрики и отчёты">
                     <select class="form-select form-select-sm op-exec" aria-label="Как запускать операцию">
-                        <option value="constant-arrival-rate">constant-arrival-rate: постоянная интенсивность</option>
-                        <option value="ramping-arrival-rate">ramping-arrival-rate: интенсивность по стадиям</option>
-                        <option value="constant-vus">constant-vus: постоянное число VU</option>
-                        <option value="ramping-vus">ramping-vus: VU по стадиям</option>
-                        <option value="per-vu-iterations">per-vu-iterations: итерации на VU</option>
-                        <option value="shared-iterations">shared-iterations: общее число итераций</option>
-                        <option value="externally-controlled">externally-controlled: через REST API</option></select>
+                        <option value="constant-arrival-rate">constant-arrival-rate — постоянная интенсивность</option>
+                        <option value="ramping-arrival-rate">ramping-arrival-rate — интенсивность по стадиям</option>
+                        <option value="constant-vus">constant-vus — постоянное число VU</option>
+                        <option value="ramping-vus">ramping-vus — VU по стадиям</option>
+                        <option value="per-vu-iterations">per-vu-iterations — итерации на VU</option>
+                        <option value="shared-iterations">shared-iterations — общее число итераций</option>
+                        <option value="externally-controlled">externally-controlled — через REST API</option>
+                    </select>
                     <input type="hidden" class="op-exec-val" th:name="|ops[${st.index}].executor|" th:value="${o.executor}">
                     <span class="op-state"></span>
                     <span class="op-tools">
-                        <button type="button" class="btn btn-sm btn-outline-secondary op-copy" title="Скопировать сценарий целиком (исполнитель и параметры), чтобы вставить в другой"><i class="bi bi-copy me-1"></i>Копировать</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary op-paste" disabled title="Заменить исполнителя и параметры этого сценария скопированными"><i class="bi bi-clipboard-plus me-1"></i>Вставить</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary op-add" title="Ещё один сценарий на эту функцию: свой исполнитель, параметры и требования"><i class="bi bi-plus-lg me-1"></i>Сценарий</button>
-                        <button type="button" class="btn btn-sm btn-outline-danger op-del d-none" title="Убрать этот сценарий" aria-label="Убрать сценарий"><i class="bi bi-trash"></i></button></span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary op-copy" title="Скопировать сценарий целиком (исполнитель и параметры)"><i class="bi bi-copy"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary op-paste" disabled title="Вставить скопированный сценарий"><i class="bi bi-clipboard-plus"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-primary op-add" title="Добавить ещё один сценарий на эту же функцию"><i class="bi bi-plus-lg me-1"></i>Сценарий</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger op-del d-none" title="Убрать этот сценарий" aria-label="Убрать сценарий"><i class="bi bi-trash"></i></button>
+                    </span>
                 </div>
-                <div class="op-grid">
-                    <div class="op-sla"><label class="form-label">Время ответа не более</label>
-                        <div class="input-group input-group-sm">
-                            <select class="form-select" style="max-width:84px" th:name="|ops[${st.index}].slaPercentile|" aria-label="Перцентиль">
-                                <option value="90" th:selected="${o.slaPercentile == 90}">p90</option>
-                                <option value="95" th:selected="${o.slaPercentile == 95}">p95</option>
-                                <option value="99" th:selected="${o.slaPercentile == 99}">p99</option></select>
-                            <input class="form-control" type="number" step="any" min="1" th:name="|ops[${st.index}].slaThresholdMs|" th:value="${o.slaThresholdMs}">
-                            <span class="input-group-text">мс</span></div></div>
-                    <div class="op-sla"><label class="form-label">Ошибок не более</label>
-                        <div class="input-group input-group-sm">
-                            <input class="form-control" type="number" step="any" min="0" max="100" th:name="|ops[${st.index}].maxErrorPct|" th:value="${o.maxErrorPct}">
-                            <span class="input-group-text">%</span></div></div>
-                </div>
-                <div class="op-detail">
-                    <input type="hidden" class="op-json" th:name="|ops[${st.index}].scenarioJson|" th:value="${o.scenarioJson}">
-                    <div class="op-panel"></div>
+
+                <!-- Краткая сводка (видна в свёрнутом состоянии) -->
+                <div class="op-summary-pills"></div>
+
+                <!-- Развёрнутое содержимое карточки -->
+                <div class="op-body">
+                    <div class="op-subblock op-detail mt-0 pt-2 border-top-0">
+                        <div class="op-subblock-head">
+                            <span class="op-subblock-title"><i class="bi bi-graph-up text-primary"></i>Параметры сценария k6</span>
+                            <span class="small text-muted">в числовых полях работают формулы: <code>50*1.5</code>, <code>120/2</code></span>
+                        </div>
+                        <input type="hidden" class="op-json" th:name="|ops[${st.index}].scenarioJson|" th:value="${o.scenarioJson}">
+                        <div class="op-panel"></div>
+                    </div>
+
+                    <div class="op-subblock">
+                        <div class="op-subblock-head">
+                            <span class="op-subblock-title"><i class="bi bi-award text-primary"></i>Требования SLA и порог ошибок</span>
+                        </div>
+                        <div class="op-grid">
+                            <div class="op-sla">
+                                <label class="form-label">Время ответа не более</label>
+                                <div class="input-group input-group-sm">
+                                    <select class="form-select" style="max-width:84px" th:name="|ops[${st.index}].slaPercentile|" aria-label="Перцентиль">
+                                        <option value="90" th:selected="${o.slaPercentile == 90}">p90</option>
+                                        <option value="95" th:selected="${o.slaPercentile == 95}">p95</option>
+                                        <option value="99" th:selected="${o.slaPercentile == 99}">p99</option>
+                                    </select>
+                                    <input class="form-control" type="number" step="any" min="1" th:name="|ops[${st.index}].slaThresholdMs|" th:value="${o.slaThresholdMs}" placeholder="500">
+                                    <span class="input-group-text">мс</span>
+                                </div>
+                            </div>
+                            <div class="op-sla">
+                                <label class="form-label">Ошибок не более</label>
+                                <div class="input-group input-group-sm">
+                                    <input class="form-control" type="number" step="any" min="0" max="100" th:name="|ops[${st.index}].maxErrorPct|" th:value="${o.maxErrorPct}" placeholder="1">
+                                    <span class="input-group-text">%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-        <div class="form-text mt-2">Выключенная операция в запуске не участвует. Параметры сценария задаются как в k6; для одной функции можно добавить несколько сценариев.
-            Список функций берётся из последней версии скрипта.</div>
 
-        <div class="sect-title"><h5>Переменные окружения и секреты</h5></div>
-        <div class="card"><div class="card-body">
-            <textarea class="form-control font-monospace" rows="4" th:field="*{envText}" aria-label="Переменные окружения" placeholder="BASE_URL=https://stand.example&#10;API_TOKEN=${secret:API_TOKEN}"></textarea>
-            <div class="form-text">По одной строке: <code>КЛЮЧ=значение</code>. Секреты: <code>${secret:NAME}</code> подставляются только на агенте и маскируются во всех логах.
-                Доступные секреты: <span th:each="n : ${secretNames}" class="badge text-bg-light me-1" th:text="${n}"></span>
-                <a th:href="@{/secrets}">управление секретами</a></div></div></div>
-
-        <div class="sect-title"><h5>Автостоп</h5><span class="hint">остановить тест, если он пошёл не по плану</span></div>
-        <div class="card"><div class="card-body">
-            <div class="form-text mb-2 mt-0">Сервер проверяет показатели каждые 15 секунд на основном участке (после прогрева). Если условие нарушено подряд указанное число проверок,
-                тест останавливается с причиной в запуске. Для каждой операции считается отдельно. Условия не включены, пока вы их не отметите.</div>
-            <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.rateEnabled}" id="stop-rate">
-                <label class="form-check-label" for="stop-rate">фактическая интенсивность ниже
-                    <input class="form-control form-control-sm d-inline-block mx-1" style="width:76px" type="number" min="1" max="100" step="any" th:field="*{stop.minRatePct}" aria-label="Порог интенсивности, %">% от плановой</label></div>
-            <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.droppedEnabled}" id="stop-dropped">
-                <label class="form-check-label" for="stop-dropped">доля <code>dropped_iterations</code> (итераций, которые k6 не успел запустить) выше
-                    <input class="form-control form-control-sm d-inline-block mx-1" style="width:76px" type="number" min="0" max="100" step="any" th:field="*{stop.maxDroppedPct}" aria-label="Порог dropped, %">% от плана</label></div>
-            <div class="form-check mb-1"><input class="form-check-input" type="checkbox" th:field="*{stop.errorsEnabled}" id="stop-errors">
-                <label class="form-check-label" for="stop-errors">ошибки выше порога операции</label></div>
-            <div class="form-check mb-2"><input class="form-check-input" type="checkbox" th:field="*{stop.percentileEnabled}" id="stop-pct">
-                <label class="form-check-label" for="stop-pct">время ответа выше SLA в
-                    <input class="form-control form-control-sm d-inline-block mx-1" style="width:76px" type="number" min="1" max="100" step="any" th:field="*{stop.slaMultiplier}" aria-label="Множитель SLA">раз(а)</label></div>
-            <div class="d-flex flex-wrap gap-3 align-items-center small">
-                <label>проверок подряд <input class="form-control form-control-sm d-inline-block ms-1" style="width:70px" type="number" min="1" max="100" th:field="*{stop.consecutive}"></label>
-                <label>окно, с <input class="form-control form-control-sm d-inline-block ms-1" style="width:80px" type="number" min="15" max="3600" th:field="*{stop.windowSec}"></label>
-                <span class="text-muted">При значениях по умолчанию остановка срабатывает примерно через минуту после начала нарушения.</span>
+        <!-- Раздел: Переменные окружения и секреты -->
+        <div class="sect-title" id="sec-env">
+            <h5><i class="bi bi-braces me-1 text-primary"></i>Переменные окружения и секреты</h5>
+            <div class="seg ms-auto">
+                <button type="button" class="btn btn-sm active" data-env-mode="table"><i class="bi bi-table me-1"></i>Таблица</button>
+                <button type="button" class="btn btn-sm" data-env-mode="raw"><i class="bi bi-code me-1"></i>Текст</button>
             </div>
-        </div></div>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div id="ld-env-table-pane">
+                    <div class="ld-env-rows" id="ld-env-rows"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="ld-env-add">
+                        <i class="bi bi-plus-lg me-1"></i>Переменная
+                    </button>
+                </div>
+                <div class="d-none" id="ld-env-raw-pane">
+                    <textarea class="form-control font-monospace form-control-sm" id="ld-env-ta" rows="5" th:field="*{envText}"
+                              aria-label="Переменные окружения" placeholder="BASE_URL=https://stand.example&#10;API_TOKEN=${secret:API_TOKEN}"></textarea>
+                    <div class="form-text">По одной строке: <code>КЛЮЧ=значение</code>.</div>
+                </div>
 
-        <div th:if="${!form.dataFiles.isEmpty()}">
-            <div class="sect-title"><h5>Тестовые данные</h5><span class="hint">как делить файлы данных между генераторами</span></div>
-            <div class="card"><div class="table-responsive"><table class="table table-sm mb-0">
-                <thead><tr><th>Файл данных</th><th>Режим</th><th title="первая строка — заголовок (сохраняется в каждой части)">Заголовок</th><th title="каждая строка используется один раз">Расходуется</th></tr></thead>
-                <tbody>
-                <tr th:each="d, st : ${form.dataFiles}">
-                    <td><code th:text="${d.path}"></code><input type="hidden" th:name="|dataFiles[${st.index}].path|" th:value="${d.path}"></td>
-                    <td><select class="form-select form-select-sm" th:name="|dataFiles[${st.index}].mode|" aria-label="Режим файла">
-                        <option th:each="m : ${modes}" th:value="${m}" th:text="${m.title}" th:selected="${m == d.mode}"></option></select></td>
-                    <td><input class="form-check-input" type="checkbox" value="true" th:name="|dataFiles[${st.index}].hasHeader|" th:checked="${d.hasHeader}" aria-label="Есть заголовок"></td>
-                    <td><input class="form-check-input" type="checkbox" value="true" th:name="|dataFiles[${st.index}].consumed|" th:checked="${d.consumed}" aria-label="Строки расходуются"></td>
-                </tr></tbody></table></div>
-                <div class="card-body pt-2 text-muted small">«Общий» — файл одинаковый на всех генераторах. «Нарезка» — агент перед стартом режет файл на непересекающиеся части
-                    по доле своего генератора и подменяет файл по тому же пути; скрипт не меняется.</div></div>
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-3 pt-2 border-top small">
+                    <span class="text-muted"><i class="bi bi-key me-1"></i>Вставить секрет (<code>${secret:NAME}</code>):</span>
+                    <div class="ld-secret-chips">
+                        <button type="button" class="ld-secret-chip" th:each="n : ${secretNames}" th:attr="data-secret-name=${n}">
+                            <i class="bi bi-plus-lg"></i><span th:text="${n}"></span>
+                        </button>
+                        <span class="text-muted" th:if="${secretNames.isEmpty()}">секретов пока нет</span>
+                    </div>
+                    <a class="ms-auto" th:href="@{/secrets}"><i class="bi bi-gear me-1"></i>Управление секретами</a>
+                </div>
+            </div>
         </div>
 
+        <!-- Раздел: Автостоп -->
+        <div class="sect-title" id="sec-stop">
+            <h5><i class="bi bi-shield-exclamation me-1 text-primary"></i>Автостоп</h5>
+            <span class="hint">автоматически остановить тест, если показатели вышли за допустимые рамки (после прогрева)</span>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="ld-stop-grid">
+                    <div class="ld-stop-card">
+                        <div class="ld-stop-head">
+                            <label class="ld-stop-title" for="stop-rate"><i class="bi bi-speedometer text-primary"></i>Падение интенсивности</label>
+                            <div class="form-check form-switch m-0">
+                                <input class="form-check-input" type="checkbox" role="switch" th:field="*{stop.rateEnabled}" id="stop-rate">
+                            </div>
+                        </div>
+                        <div class="ld-stop-desc">Остановить, если фактический RPS опустился ниже доли от планового.</div>
+                        <div class="ld-stop-val">
+                            <span class="small text-muted">Ниже</span>
+                            <div class="input-group input-group-sm" style="width:120px">
+                                <input class="form-control" type="number" min="1" max="100" step="any" th:field="*{stop.minRatePct}" aria-label="Порог интенсивности, %">
+                                <span class="input-group-text">%</span>
+                            </div>
+                            <span class="small text-muted">от плана</span>
+                        </div>
+                    </div>
+
+                    <div class="ld-stop-card">
+                        <div class="ld-stop-head">
+                            <label class="ld-stop-title" for="stop-dropped"><i class="bi bi-exclamation-diamond text-warning"></i>Высокий dropped_iterations</label>
+                            <div class="form-check form-switch m-0">
+                                <input class="form-check-input" type="checkbox" role="switch" th:field="*{stop.droppedEnabled}" id="stop-dropped">
+                            </div>
+                        </div>
+                        <div class="ld-stop-desc">Итерации, которые k6 не успел запустить (не хватило VU или генераторов).</div>
+                        <div class="ld-stop-val">
+                            <span class="small text-muted">Выше</span>
+                            <div class="input-group input-group-sm" style="width:120px">
+                                <input class="form-control" type="number" min="0" max="100" step="any" th:field="*{stop.maxDroppedPct}" aria-label="Порог dropped, %">
+                                <span class="input-group-text">%</span>
+                            </div>
+                            <span class="small text-muted">от плана</span>
+                        </div>
+                    </div>
+
+                    <div class="ld-stop-card">
+                        <div class="ld-stop-head">
+                            <label class="ld-stop-title" for="stop-errors"><i class="bi bi-x-octagon text-danger"></i>Превышен порог ошибок</label>
+                            <div class="form-check form-switch m-0">
+                                <input class="form-check-input" type="checkbox" role="switch" th:field="*{stop.errorsEnabled}" id="stop-errors">
+                            </div>
+                        </div>
+                        <div class="ld-stop-desc">Срабатывает, если доля ошибок операции превысила порог, заданный в её SLA.</div>
+                    </div>
+
+                    <div class="ld-stop-card">
+                        <div class="ld-stop-head">
+                            <label class="ld-stop-title" for="stop-pct"><i class="bi bi-stopwatch text-danger"></i>Деградация времени ответа</label>
+                            <div class="form-check form-switch m-0">
+                                <input class="form-check-input" type="checkbox" role="switch" th:field="*{stop.percentileEnabled}" id="stop-pct">
+                            </div>
+                        </div>
+                        <div class="ld-stop-desc">Перцентиль времени ответа операции превысил порог SLA в заданное число раз.</div>
+                        <div class="ld-stop-val">
+                            <span class="small text-muted">Выше SLA в</span>
+                            <div class="input-group input-group-sm" style="width:115px">
+                                <input class="form-control" type="number" min="1" max="100" step="any" th:field="*{stop.slaMultiplier}" aria-label="Множитель SLA">
+                                <span class="input-group-text">×</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ld-stop-timing">
+                    <label class="d-flex align-items-center gap-2 m-0">
+                        <span>Проверок подряд (каждые 15 с):</span>
+                        <input class="form-control form-control-sm" style="width:72px" type="number" min="1" max="100" th:field="*{stop.consecutive}">
+                    </label>
+                    <label class="d-flex align-items-center gap-2 m-0">
+                        <span>Окно расчёта, с:</span>
+                        <input class="form-control form-control-sm" style="width:82px" type="number" min="15" max="3600" th:field="*{stop.windowSec}">
+                    </label>
+                    <span class="text-muted ms-auto small"><i class="bi bi-clock-history me-1"></i>Сработает через <b id="ld-stop-eta">≈ 1 мин</b></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Раздел: Тестовые данные -->
+        <div th:if="${!form.dataFiles.isEmpty()}" id="sec-data">
+            <div class="sect-title">
+                <h5><i class="bi bi-file-earmark-spreadsheet me-1 text-primary"></i>Тестовые данные</h5>
+                <span class="hint">как делить файлы данных между генераторами</span>
+            </div>
+            <div class="card">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead>
+                        <tr>
+                            <th>Файл данных</th>
+                            <th>Режим</th>
+                            <th title="первая строка — заголовок (сохраняется в каждой части)">Заголовок</th>
+                            <th title="каждая строка используется один раз">Расходуется</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <tr th:each="d, st : ${form.dataFiles}">
+                            <td><code th:text="${d.path}"></code><input type="hidden" th:name="|dataFiles[${st.index}].path|" th:value="${d.path}"></td>
+                            <td>
+                                <select class="form-select form-select-sm" th:name="|dataFiles[${st.index}].mode|" aria-label="Режим файла">
+                                    <option th:each="m : ${modes}" th:value="${m}" th:text="${m.title}" th:selected="${m == d.mode}"></option>
+                                </select>
+                            </td>
+                            <td><input class="form-check-input" type="checkbox" value="true" th:name="|dataFiles[${st.index}].hasHeader|" th:checked="${d.hasHeader}" aria-label="Есть заголовок"></td>
+                            <td><input class="form-check-input" type="checkbox" value="true" th:name="|dataFiles[${st.index}].consumed|" th:checked="${d.consumed}" aria-label="Строки расходуются"></td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="card-body pt-2 text-muted small">
+                    «Общий» — файл одинаковый на всех генераторах. «Нарезка» — агент перед стартом режет файл на непересекающиеся части по доле своего генератора и подменяет файл по тому же пути; скрипт не меняется.
+                </div>
+            </div>
+        </div>
+
+        <!-- Липкая панель сохранения -->
         <div class="sticky-actions">
             <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить нагрузку</button>
-            <a class="btn btn-link" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
+            <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
             <span class="dirty-flag"><i class="bi bi-circle-fill" style="font-size:.5rem"></i>Есть несохранённые изменения</span>
+            <span class="cb-kbd-hint d-none d-md-inline"><kbd>Ctrl</kbd>+<kbd>S</kbd> — сохранить нагрузку</span>
         </div>
     </form>
 
-    <script th:inline="none">
+    <!-- Модальное окно: Импорт и экспорт профилей (JSON) -->
+    <div class="modal fade" id="ld-import-modal" tabindex="-1" aria-hidden="true"
+         th:attr="data-auto-open=${importJson != null}">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <form class="modal-content" th:action="@{/scripts/{id}/load/profiles/import(id=${script.id})}" method="post" enctype="multipart/form-data">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-upload me-2 text-primary"></i>Импорт и экспорт профилей (JSON)</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-3">
+                        Массив профилей или <code>{"profiles": [...]}</code>. Профиль с существующим именем обновляется.
+                        Все профили проверяются целиком; если хотя бы один содержит ошибку, не сохраняется ни один.
+                    </div>
+                    <div class="dropzone mb-3" id="ld-import-dz">
+                        <i class="bi bi-filetype-json"></i>
+                        <div id="ld-import-dz-lbl">Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u></div>
+                        <input class="d-none" type="file" name="file" id="ld-import-file" accept=".json,application/json">
+                    </div>
+                    <label class="form-label small mb-1" for="ld-import-json">Или вставьте JSON-текст</label>
+                    <textarea class="form-control form-control-sm font-monospace" id="ld-import-json" name="json" rows="7" th:text="${importJson}"
+                              placeholder='[{"name": "Максимум", "operations": [{"name": "work", "execFn": "work", "ratePerSec": 40}], "env": {"BASE": "x"}}]'></textarea>
+                </div>
+                <div class="modal-footer">
+                    <a class="btn btn-outline-secondary btn-sm me-auto" th:href="@{/scripts/{id}/load/profiles.json(id=${script.id})}">
+                        <i class="bi bi-download me-1"></i>Скачать текущие профили
+                    </a>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
-(function () {
-    // ---- описание полей сценария k6 (подписи, типы, подсказки)
-    const F = {
-        vus: {label: 'VU', type: 'int', hint: 'Сколько виртуальных пользователей работают одновременно (всего, на все генераторы)'},
-        duration: {label: 'Длительность', type: 'dur', ph: '5m', hint: 'Сколько длится сценарий: 30s, 5m, 1h'},
-        iterations: {label: 'Итераций', type: 'int', hint: 'Сколько итераций выполнить (в per-vu — на каждого VU, в shared — всего)'},
-        maxDuration: {label: 'Максимальная длительность', type: 'dur', ph: '10m', hint: 'Если итерации не закончились за это время, k6 остановит сценарий'},
-        startVUs: {label: 'Стартовые VU', type: 'int', hint: 'Сколько VU работает в момент старта'},
-        gracefulRampDown: {label: 'Плавное снижение VU', type: 'dur', ph: '30s', hint: 'Сколько ждать завершения итерации при уменьшении числа VU'},
-        rate: {label: 'Итераций за интервал', type: 'num', hint: 'Интенсивность: сколько итераций запускать за один «Интервал» (всего, на все генераторы)'},
-        timeUnit: {label: 'Интервал', type: 'dur', ph: '1s', hint: 'Период, к которому относится интенсивность (1s — «в секунду»)'},
-        startRate: {label: 'Начальная интенсивность', type: 'num', hint: 'Итераций за интервал в момент старта'},
-        preAllocatedVUs: {label: 'preAllocatedVUs на генератор', type: 'int', hint: 'Сколько VU подготовить заранее на ОДНОМ генераторе. При запуске умножается на число генераторов'},
-        maxVUs: {label: 'maxVUs на генератор', type: 'int', hint: 'Максимум VU на ОДНОМ генераторе, до которого k6 может добавлять, если не успевает. При запуске умножается на число генераторов'},
-        startTime: {label: 'Старт через', type: 'dur', ph: '0s', hint: 'Задержка старта сценария относительно начала теста'},
-        gracefulStop: {label: 'Ждать завершения итераций', type: 'dur', ph: '30s', hint: 'Сколько ждать, пока текущие итерации закончатся после остановки'},
-        stages: {label: 'Стадии', type: 'stages'},
-        warmup: {label: 'Прогрев', type: 'warmup'},
-        env: {label: 'Переменные окружения сценария', type: 'kv', ph: ['ИМЯ', 'значение']},
-        tags: {label: 'Теги метрик сценария', type: 'kv', ph: ['тег', 'значение']}
-    };
-    const TAIL = ['startTime', 'gracefulStop', 'env', 'tags'];
-    const EX = {
-        'constant-vus': {
-            real: 'constant-vus', title: 'constant-vus — постоянное число VU',
-            desc: 'Фиксированное число VU работает заданное время, каждый VU повторяет итерации без пауз.',
-            fields: ['warmup', 'vus', 'duration'].concat(TAIL), def: {vus: 10, duration: '5m'}
-        },
-        'ramping-vus': {
-            real: 'ramping-vus', title: 'ramping-vus — число VU по стадиям',
-            desc: 'Число VU меняется по стадиям: на каждой стадии задаётся длительность и целевое число VU.',
-            fields: ['startVUs', 'stages', 'gracefulRampDown'].concat(TAIL),
-            def: {startVUs: 0, stages: [{duration: '1m', target: 20}, {duration: '5m', target: 20}]}
-        },
-        'constant-arrival-rate': {
-            real: 'constant-arrival-rate', title: 'constant-arrival-rate — постоянная интенсивность',
-            desc: 'k6 запускает фиксированное число итераций за интервал независимо от времени ответа.',
-            fields: ['warmup', 'rate', 'timeUnit', 'duration', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
-            def: {rate: 50, timeUnit: '1s', duration: '5m', preAllocatedVUs: 20, maxVUs: 100}
-        },
-        'ramping-arrival-rate': {
-            real: 'ramping-arrival-rate', title: 'ramping-arrival-rate — интенсивность по стадиям',
-            desc: 'Интенсивность меняется по своим стадиям (профиль нагрузки из формы не применяется).',
-            fields: ['startRate', 'timeUnit', 'stages', 'preAllocatedVUs', 'maxVUs'].concat(TAIL),
-            def: {startRate: 0, timeUnit: '1s', preAllocatedVUs: 20, maxVUs: 100, stages: [{duration: '1m', target: 50}, {duration: '5m', target: 50}]}
-        },
-        'per-vu-iterations': {
-            real: 'per-vu-iterations', title: 'per-vu-iterations — итерации на каждого VU',
-            desc: 'Каждый VU выполняет заданное число итераций, сценарий заканчивается, когда все закончили.',
-            fields: ['vus', 'iterations', 'maxDuration'].concat(TAIL), def: {vus: 10, iterations: 20, maxDuration: '10m'}
-        },
-        'shared-iterations': {
-            real: 'shared-iterations', title: 'shared-iterations — общее число итераций',
-            desc: 'Заданное число итераций делится между VU: кто свободен, тот и выполняет.',
-            fields: ['vus', 'iterations', 'maxDuration'].concat(TAIL), def: {vus: 10, iterations: 200, maxDuration: '10m'}
-        },
-        'externally-controlled': {
-            real: 'externally-controlled', title: 'externally-controlled — управление через REST API k6',
-            desc: 'Число VU меняется во время теста через REST API k6 (пауза, продолжение, изменение VU).',
-            fields: ['vus', 'maxVUs', 'duration'].concat(TAIL), def: {vus: 10, maxVUs: 50, duration: '10m'}
-        }
-    };
-
-    const body = document.getElementById('ops-body');
-    if (!body) return;
-    const gwOnEl = document.getElementById('gw-on'), gwDEl = document.getElementById('gw-d'), gwBox = document.getElementById('gw-box');
-    const isRamp = ex => ex.indexOf('ramping') === 0;
-
-    // буфер скопированного сценария целиком (исполнитель и параметры): общий для всех сценариев, живёт до закрытия вкладки
-    let scenarioClipboard = null;
-    try { scenarioClipboard = JSON.parse(sessionStorage.getItem('k6lab-scenario') || 'null'); } catch (e) { scenarioClipboard = null; }
-
-    function esc(v) {
-        return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-    }
-    // значение числового поля: число или выражение со знаками + - * / (также x × ÷), скобками и запятой как десятичным разделителем.
-    // Разбор собственный, без eval: допустимы только эти символы. Не выражение - NaN.
-    function calc(text) {
-        const src = String(text == null ? '' : text).replace(/,/g, '.').replace(/[x×]/gi, '*').replace(/÷/g, '/').replace(/\s+/g, '');
-        if (src === '') return NaN;
-        if (!/^[0-9.+\-*\/()]+$/.test(src)) return NaN;
-        let i = 0;
-        function num() {
-            if (src[i] === '(') { i++; const v = add(); if (src[i] !== ')') throw 0; i++; return v; }
-            const m = /^[0-9]*\.?[0-9]+/.exec(src.slice(i));
-            if (!m) throw 0;
-            i += m[0].length;
-            return parseFloat(m[0]);
-        }
-        function unary() {
-            if (src[i] === '-') { i++; return -unary(); }
-            if (src[i] === '+') { i++; return unary(); }
-            return num();
-        }
-        function mul() {
-            let v = unary();
-            while (src[i] === '*' || src[i] === '/') { const op = src[i++]; const r = unary(); v = op === '*' ? v * r : v / r; }
-            return v;
-        }
-        function add() {
-            let v = mul();
-            while (src[i] === '+' || src[i] === '-') { const op = src[i++]; const r = mul(); v = op === '+' ? v + r : v - r; }
-            return v;
-        }
-        try { const v = add(); return i === src.length && isFinite(v) ? v : NaN; } catch (e) { return NaN; }
-    }
-    function calcOr0(text) { const v = calc(text); return isNaN(v) ? 0 : v; }
-    function readStages(container) {
-        return [...container.querySelectorAll('.op-stage')].map(r => ({duration: r.querySelector('.op-st-d').value.trim(), target: calcOr0(r.querySelector('.op-st-t').value)}))
-            .filter(x => x.duration !== '');
-    }
-    function parseDur(v) {
-        const m = /^\s*([0-9]*\.?[0-9]+)\s*(ms|s|m|h)?\s*$/.exec(String(v || ''));
-        if (!m) return 0;
-        return Number(m[1]) * ({ms: 0.001, s: 1, m: 60, h: 3600}[m[2] || 's']);
-    }
-    function warmOf(row) { return parseInt(row.dataset.warm, 10) || 0; }
-    function flash(row, text) {
-        const st = row.querySelector('.op-state');
-        st.textContent = text;
-        clearTimeout(row._t);
-        row._t = setTimeout(() => refreshRow(row), 2500);
-    }
-
-    // ---- отрисовка панели параметров сценария
-    function fieldHtml(key, val, exKey) {
-        const f = F[key];
-        if (f.type === 'warmup') {
-            // у constant-* стадий нет: прогрев - первые минуты сценария на заданной нагрузке; время общее, задаётся сверху
-            return '<div class="col-12"><div class="op-warm op-cwarm d-none"><span class="small op-cwarm-text"></span></div></div>';
-        }
-        if (f.type === 'stages') {
-            const unit = exKey.indexOf('arrival') >= 0 ? 'Итераций за интервал' : 'VU';
-            const rows = (val || []).map(s => stageRow(s.duration, s.target, unit)).join('');
-            return '<div class="col-12"><div class="small fw-semibold mb-1">' + f.label + '</div>'
-                + '<div class="op-stages" data-k="stages" data-unit="' + esc(unit) + '">' + rows + '</div>'
-                + '<div class="small text-muted mt-1 op-stage-total" aria-live="polite"></div>'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary op-stage-first d-none"><i class="bi bi-plus-lg me-1"></i>Первая стадия</button></div>';
-        }
-        if (f.type === 'kv') {
-            const rows = Object.keys(val || {}).map(k => kvRow(k, val[k], f.ph)).join('');
-            return '<div class="col-md-6"><div class="small fw-semibold mb-1">' + f.label + '</div>'
-                + '<div class="op-kv" data-k="' + key + '">' + rows + '</div>'
-                + '<button type="button" class="btn btn-sm btn-outline-secondary op-kv-add mt-1" data-ph="' + esc(f.ph.join('|')) + '">+ добавить</button></div>';
-        }
-        const t = 'text';
-        const step = f.type === 'dur' ? '' : ' inputmode="decimal" autocomplete="off"';
-        return '<div class="col-6 col-md-3"><label class="form-label small mb-1" title="' + esc(f.hint) + '">' + f.label + '</label>'
-            + '<input class="form-control form-control-sm op-f' + (f.type === 'dur' ? '' : ' op-calc') + '" data-k="' + key + '" data-t="' + f.type + '" type="' + t + '"' + step
-            + ' placeholder="' + esc(f.ph || '') + '" value="' + esc(val) + '" title="' + esc(f.hint + (f.type === 'dur' ? '' : '. Можно выражение: 50*1.5, 95+95')) + '"></div>';
-    }
-    // строка стадии: между строками при наведении появляется линия с плюсом (как в Excel), вставляет копию стадии, у границы которой нажали
-    function stageRow(d, tg, unit) {
-        return '<div class="input-group input-group-sm op-stage">'
-            + '<span class="input-group-text stage-lbl">Длительность</span><input class="form-control op-st-d" placeholder="1m" value="' + esc(d) + '">'
-            + '<span class="input-group-text">' + esc(unit) + '</span><input class="form-control op-st-t op-calc" type="text" inputmode="decimal" autocomplete="off" title="Число или выражение: 95+95, 50*1.5, (100+20)/2" value="' + esc(tg) + '">'
-            + '<button type="button" class="btn btn-outline-danger op-stage-del" title="Убрать стадию" aria-label="Убрать стадию">×</button>'
-            + '<button type="button" class="stage-ins stage-ins-above" title="Добавить стадию выше (копия этой)" aria-label="Добавить стадию выше"><span>+</span></button>'
-            + '<button type="button" class="stage-ins stage-ins-below" title="Добавить стадию ниже (копия этой)" aria-label="Добавить стадию ниже"><span>+</span></button></div>';
-    }
-    // длительность k6 в секунды: 30s, 10m, 1h30m, 500ms; не распознано - null
-    function durSec(text) {
-        const s = String(text == null ? '' : text).trim();
-        if (!s) return null;
-        const re = /([0-9]*\.?[0-9]+)\s*(ms|s|m|h)/g;
-        let m, sum = 0, end = 0;
-        while ((m = re.exec(s)) !== null) {
-            if (s.slice(end, m.index).trim()) return null;
-            sum += parseFloat(m[1]) * ({ms: 0.001, s: 1, m: 60, h: 3600})[m[2]];
-            end = re.lastIndex;
-        }
-        return end === 0 || s.slice(end).trim() ? null : sum;
-    }
-    function durText(sec) {
-        const t = Math.round(sec), h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
-        return [h ? h + ' ч' : '', m ? m + ' мин' : '', s || (!h && !m) ? s + ' с' : ''].filter(Boolean).join(' ');
-    }
-    // состояние блока стадий: жёлтые строки прогрева, недоступное удаление единственной стадии прогрева, кнопка «Первая стадия»
-    function refreshStages(row) {
-        const panel = detailOf(row).querySelector('.op-panel');
-        const cw = panel.querySelector('.op-cwarm');
-        if (cw) {
-            const d = row.dataset.cwarm || '';
-            cw.classList.toggle('d-none', !d);
-            cw.querySelector('.op-cwarm-text').textContent = d ? 'Прогрев: первые ' + d + ' сценария идут на заданной ниже нагрузке и не попадают в итоги и SLA.' : '';
-        }
-        const box = panel.querySelector('.op-stages');
-        if (!box) return;
-        const rows = [...box.querySelectorAll('.op-stage')];
-        const wn = Math.min(warmOf(row), rows.length);
-        row.dataset.warm = wn;
-        rows.forEach((r, i) => {
-            r.classList.toggle('is-warm', i < wn);
-            r.querySelector('.stage-lbl').textContent = i < wn ? 'Прогрев' : 'Длительность';
-            const d = r.querySelector('.op-st-d');
-            d.readOnly = i < wn;
-            d.title = i < wn ? 'Время прогрева общее для всех сценариев и задаётся сверху' : '';
-            r.querySelector('.stage-ins-above').hidden = i < wn;
-            r.querySelector('.op-stage-del').disabled = wn === 1 && i === 0; // обязательная стадия прогрева
-        });
-        const first = panel.querySelector('.op-stage-first');
-        if (first) first.classList.toggle('d-none', rows.length > 0);
-        // справочно: суммарное время стадий, отдельно прогрев и основная нагрузка
-        const total = panel.querySelector('.op-stage-total');
-        if (total) {
-            let warm = 0, main = 0, bad = 0;
-            rows.forEach((r, i) => {
-                const v = durSec(r.querySelector('.op-st-d').value);
-                if (v === null) { bad++; } else if (i < wn) { warm += v; } else { main += v; }
-            });
-            total.textContent = !rows.length ? '' : 'Всего по стадиям: ' + durText(warm + main)
-                + (wn > 0 ? ' (прогрев ' + durText(warm) + ' + нагрузка ' + durText(main) + ')' : '')
-                + (bad ? '. Не учтено стадий с нераспознанной длительностью: ' + bad : '');
-        }
-    }
-    // нормализация прогрева у ramping-*: прогрев - одна первая стадия. Прежние форматы: {duration, target} превращается в первую стадию,
-    // несколько стадий прогрева - остаётся первая (остальные становятся обычными), {duration} без значения - стадия добавится при отрисовке
-    function normalizeWarm(exKey, state) {
-        if (!state.warmup) return state;
-        if (!isRamp(exKey)) {
-            if (!state.warmup.duration) delete state.warmup; // у constant-* прогрев - только длительность
-            return state;
-        }
-        const w = state.warmup, st = (state.stages || []).map(x => Object.assign({}, x));
-        if (w.stages) {
-            state.warmup = st.length ? {stages: 1} : undefined;
-        } else if (w.target) {
-            st.unshift({duration: w.duration, target: Number(w.target)});
-            state.warmup = {stages: 1};
-        } else {
-            state.warmup = undefined;
-        }
-        if (!state.warmup) delete state.warmup;
-        state.stages = st;
-        return state;
-    }
-    function gwDur() { return gwDEl && gwDEl.value.trim() ? gwDEl.value.trim() : '2m'; }
-    function gwActive() { return !!(gwOnEl && gwOnEl.checked); }
-    function warmStage(base) { return {duration: gwDur(), target: Math.max(1, Math.round((Number(base) || 0) * 0.3))}; }
-    function kvRow(k, v, ph) {
-        return '<div class="input-group input-group-sm mb-1 op-kvrow"><input class="form-control op-kv-k" placeholder="' + esc(ph[0]) + '" value="' + esc(k) + '">'
-            + '<input class="form-control op-kv-v" placeholder="' + esc(ph[1]) + '" value="' + esc(v) + '">'
-            + '<button type="button" class="btn btn-outline-danger op-kv-del" title="Убрать">×</button></div>';
-    }
-    function detailOf(row) { return row.querySelector('.op-detail'); }
-
-    function render(row, exKey, state) {
-        const ex = EX[exKey];
-        state = normalizeWarm(exKey, state);
-        // общий прогрев включён: у сценария со стадиями первая стадия - прогрев с общим временем; у constant-* - общее время как длительность
-        if (isRamp(exKey)) {
-            if (gwActive()) {
-                const st = (state.stages || []).map(x => Object.assign({}, x));
-                if (!(state.warmup && state.warmup.stages)) st.unshift(warmStage(st.length ? st[0].target : 0));
-                st[0].duration = gwDur();
-                state.stages = st;
-                state.warmup = {stages: 1};
-            }
-        } else if (ex.fields.includes('warmup') && gwActive()) {
-            state.warmup = {duration: gwDur()};
-        }
-        row.dataset.warm = isRamp(exKey) && state.warmup && state.warmup.stages ? 1 : 0;
-        row.dataset.cwarm = !isRamp(exKey) && ex.fields.includes('warmup') && state.warmup && state.warmup.duration ? state.warmup.duration : '';
-        const panel = detailOf(row).querySelector('.op-panel');
-        panel.innerHTML = '<div class="op-desc">' + esc(ex.desc) + '</div><div class="row g-2">'
-            + ex.fields.map(k => fieldHtml(k, state[k], exKey)).join('') + '</div>';
-        row.dataset.prev = exKey; // исполнитель, под который отрисована панель
-        refreshRow(row);
-        refreshStages(row);
-    }
-
-    // ---- состояние <-> скрытое поле scenarioJson
-    function collect(row) {
-        const exKey = row.querySelector('.op-exec').value;
-        const panel = detailOf(row).querySelector('.op-panel');
-        const o = {};
-        panel.querySelectorAll('.op-f').forEach(i => {
-            const v = i.value.trim();
-            if (v === '') return;
-            o[i.dataset.k] = i.dataset.t === 'dur' ? v : calcOr0(v);
-        });
-        const st = panel.querySelector('.op-stages');
-        if (st) {
-            o.stages = readStages(st);
-            const wn = Math.min(warmOf(row), o.stages.length);
-            if (isRamp(exKey) && wn > 0) o.warmup = {stages: wn};
-        }
-        if (panel.querySelector('.op-cwarm') && row.dataset.cwarm) {
-            o.warmup = {duration: row.dataset.cwarm};
-        }
-        panel.querySelectorAll('.op-kv').forEach(c => {
-            const m = {};
-            c.querySelectorAll('.op-kvrow').forEach(r => {
-                const k = r.querySelector('.op-kv-k').value.trim();
-                if (k) m[k] = r.querySelector('.op-kv-v').value;
-            });
-            if (Object.keys(m).length) o[c.dataset.k] = m;
-        });
-        // ramping-arrival-rate всегда сохраняет эти поля: так он остаётся сценарием со своими стадиями
-        if (exKey === 'ramping-arrival-rate') {
-            if (o.timeUnit === undefined) o.timeUnit = '1s';
-            if (o.startRate === undefined) o.startRate = 0;
-            if (!o.stages) o.stages = [];
-        }
-        return o;
-    }
-    function sync(row) {
-        const exKey = row.querySelector('.op-exec').value;
-        const o = collect(row);
-        row.querySelector('.op-exec-val').value = EX[exKey].real;
-        detailOf(row).querySelector('.op-json').value = Object.keys(o).length ? JSON.stringify(o) : '';
-    }
-    // вид карточки: включена или выключена
-    function refreshRow(row) {
-        const on = row.querySelector('.op-on').checked;
-        row.classList.toggle('is-off', !on);
-        row.querySelector('.op-state').textContent = on ? 'Участвует в запуске' : 'Выключена';
-    }
-    function refreshAll() {
-        const rows = [...body.querySelectorAll('.op-row')];
-        const count = {};
-        rows.forEach(r => count[r.dataset.fn] = (count[r.dataset.fn] || 0) + 1);
-        rows.forEach(r => r.querySelector('.op-del').classList.toggle('d-none', count[r.dataset.fn] < 2));
-        document.querySelectorAll('.op-paste').forEach(b => { b.disabled = !scenarioClipboard; });
-    }
-
-    // ---- общий прогрев: один рубильник и одно время на все сценарии
-    function gwRefresh() {
-        if (!gwOnEl) return;
-        gwDEl.disabled = !gwOnEl.checked;
-        gwBox.classList.toggle('is-off', !gwOnEl.checked);
-    }
-    // время прогрева допустимо: от 5 секунд до часа
-    function gwValid() {
-        const sec = durSec(gwDur());
-        const ok = sec !== null && sec >= 5 && sec <= 3600;
-        gwDEl.classList.toggle('is-invalid', gwActive() && !ok);
-        gwDEl.title = ok ? '' : 'От 5 секунд до 1 часа, например 2m или 90s';
-        return ok;
-    }
-    // состояние рубильника по сохранённым сценариям: включён, если прогрев есть хотя бы у одного; время - самое длинное из заданных
-    function gwAdopt(durations) {
-        if (!gwOnEl) return;
-        let best = null;
-        durations.forEach(d => { const s = durSec(d); if (s !== null && (best === null || s > durSec(best))) best = d; });
-        gwOnEl.checked = durations.length > 0;
-        if (best !== null) gwDEl.value = best;
-        gwRefresh();
-    }
-    function gwFromJson() {
-        const found = [];
-        body.querySelectorAll('.op-row').forEach(row => {
-            let o = {};
-            try { o = JSON.parse(detailOf(row).querySelector('.op-json').value || '{}') || {}; } catch (e) { o = {}; }
-            const w = o.warmup;
-            if (!w || !row.querySelector('.op-on').checked) return;
-            if (w.stages && o.stages && o.stages.length) found.push(String(o.stages[0].duration || ''));
-            else if (w.duration) found.push(String(w.duration));
-        });
-        gwAdopt(found);
-    }
-    function gwFromRows() {
-        const found = [];
-        body.querySelectorAll('.op-row').forEach(row => {
-            if (warmOf(row) > 0) {
-                const d = row.querySelector('.op-stage .op-st-d');
-                if (d) found.push(d.value.trim());
-            } else if (row.dataset.cwarm) {
-                found.push(row.dataset.cwarm);
-            }
-        });
-        gwAdopt(found);
-    }
-    function insertStages(row, atStart, list) {
-        const c = row.querySelector('.op-stages');
-        if (!c) return;
-        const html = list.map(s => stageRow(s.duration, s.target, c.dataset.unit)).join('');
-        if (atStart === 0) c.insertAdjacentHTML('afterbegin', html);
-        else {
-            const rows = c.querySelectorAll('.op-stage');
-            if (atStart <= rows.length && atStart > 0) rows[atStart - 1].insertAdjacentHTML('afterend', html);
-            else c.insertAdjacentHTML('beforeend', html);
-        }
-    }
-    function gwApply() {
-        gwRefresh();
-        const on = gwOnEl.checked;
-        if (on && !gwValid()) return;
-        if (!on) gwDEl.classList.remove('is-invalid');
-        const g = gwDur();
-        body.querySelectorAll('.op-row').forEach(row => {
-            const exKey = row.querySelector('.op-exec').value;
-            const c = row.querySelector('.op-stages');
-            if (isRamp(exKey) && c) {
-                if (!on) {
-                    row.dataset.warm = 0; // стадия прогрева остаётся обычной стадией
-                } else {
-                    if (warmOf(row) === 0) {
-                        const first = c.querySelector('.op-stage .op-st-t');
-                        insertStages(row, 0, [warmStage(first ? first.value : 0)]);
-                    }
-                    c.querySelector('.op-stage .op-st-d').value = g;
-                    row.dataset.warm = 1;
-                }
-            } else if (detailOf(row).querySelector('.op-cwarm')) {
-                row.dataset.cwarm = on ? g : '';
-            }
-            refreshStages(row);
-            sync(row);
-        });
-    }
-    if (gwOnEl) {
-        gwOnEl.addEventListener('change', () => { gwApply(); markDirty(); });
-        gwDEl.addEventListener('input', () => { if (gwOnEl.checked) { gwApply(); markDirty(); } });
-    }
-
-    function initRow(row) {
-        let o = {};
-        try { o = JSON.parse(detailOf(row).querySelector('.op-json').value || '{}') || {}; } catch (e) { o = {}; }
-        let exKey = row.querySelector('.op-exec-val').value || 'constant-arrival-rate';
-        if (!EX[exKey]) exKey = 'constant-arrival-rate';
-        row.querySelector('.op-exec').value = exKey;
-        // у ещё не настроенной операции - значения по умолчанию, чтобы её можно было сразу включить
-        render(row, exKey, Object.keys(o).length ? o : Object.assign({}, EX[exKey].def));
-        sync(row);
-    }
-
-    function nextIndex() {
-        let max = -1;
-        body.querySelectorAll('input[name$=".execFn"]').forEach(i => { const m = i.name.match(/ops\[(\d+)\]/); if (m) max = Math.max(max, +m[1]); });
-        return max + 1;
-    }
-    function addScenario(row) {
-        const idx = nextIndex();
-        const r2 = row.cloneNode(true);
-        r2.querySelectorAll('[name]').forEach(f => f.name = f.name.replace(/ops\[\d+\]/, 'ops[' + idx + ']'));
-        const fn = row.dataset.fn;
-        const names = new Set([...body.querySelectorAll('input[name$=".name"]')].map(i => i.value));
-        let n = 2;
-        while (names.has(fn + n)) n++;
-        r2.querySelector('input[name$=".name"]').value = fn + n;
-        r2.querySelector('.op-on').checked = true;
-        r2.querySelector('.op-exec').value = 'constant-arrival-rate';
-        row.after(r2);
-        render(r2, 'constant-arrival-rate', EX['constant-arrival-rate'].def);
-        sync(r2);
-        refreshAll();
-        r2.querySelector('input[name$=".name"]').focus();
-    }
-
-    // ---- события
-    body.addEventListener('click', e => {
-        const t = e.target;
-        const row = t.closest('.op-row');
-        if (!row) return;
-        if (t.closest('.op-add')) { addScenario(row); markDirty(); return; }
-        if (t.closest('.op-del')) { row.remove(); refreshAll(); markDirty(); return; }
-        if (t.closest('.op-copy')) {
-            // копируется сценарий целиком: исполнитель и все его параметры (стадии, VU, прогрев)
-            scenarioClipboard = {executor: row.querySelector('.op-exec').value, scenario: collect(row)};
-            try { sessionStorage.setItem('k6lab-scenario', JSON.stringify(scenarioClipboard)); } catch (err) { /* без сохранения между страницами */ }
-            refreshAll();
-            flash(row, 'Скопировано');
-            return;
-        }
-        if (t.closest('.op-paste')) {
-            if (!scenarioClipboard || !EX[scenarioClipboard.executor]) return;
-            row.querySelector('.op-exec').value = scenarioClipboard.executor;
-            render(row, scenarioClipboard.executor, JSON.parse(JSON.stringify(scenarioClipboard.scenario)));
-            // вставленный сценарий с прогревом при выключенном общем рубильнике включает его для всех
-            if (gwOnEl && !gwOnEl.checked && (warmOf(row) > 0 || row.dataset.cwarm)) { gwFromRows(); gwApply(); }
-            sync(row);
-            flash(row, 'Вставлено');
-            markDirty();
-            return;
-        }
-        if (t.closest('.stage-ins')) {
-            // новая стадия - копия той, у границы которой нажали плюс; внутри прогрева она тоже становится прогревом
-            const cur = t.closest('.op-stage'), c = row.querySelector('.op-stages'), above = !!t.closest('.stage-ins-above');
-            const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur);
-            if (above && idx < warmOf(row)) return; // стадия прогрева всегда первая
-            cur.insertAdjacentHTML(above ? 'beforebegin' : 'afterend', stageRow(cur.querySelector('.op-st-d').value, cur.querySelector('.op-st-t').value, c.dataset.unit));
-        } else if (t.closest('.op-stage-first')) {
-            const c = row.querySelector('.op-stages');
-            c.insertAdjacentHTML('beforeend', stageRow('1m', 1, c.dataset.unit));
-        } else if (t.closest('.op-stage-del')) {
-            const cur = t.closest('.op-stage'), c = row.querySelector('.op-stages');
-            const idx = [...c.querySelectorAll('.op-stage')].indexOf(cur);
-            if (idx < warmOf(row)) return; // стадия прогрева убирается только общим рубильником
-            cur.remove();
-        } else if (t.closest('.op-kv-add')) {
-            const b = t.closest('.op-kv-add');
-            b.previousElementSibling.insertAdjacentHTML('beforeend', kvRow('', '', b.dataset.ph.split('|')));
-        } else if (t.closest('.op-kv-del')) {
-            t.closest('.op-kvrow').remove();
-        } else {
-            return;
-        }
-        refreshStages(row);
-        sync(row);
-        markDirty();
-    });
-    body.addEventListener('change', e => {
-        const row = e.target.closest('.op-row');
-        if (!row) return;
-        if (e.target.classList.contains('op-on')) { refreshRow(row); return; }
-        if (e.target.classList.contains('op-exec')) {
-            const exKey = e.target.value, old = collect(row), ex = EX[exKey];
-            // переносим то, что есть и у нового исполнителя; остальное - значения по умолчанию
-            const state = Object.assign({}, ex.def);
-            ex.fields.forEach(k => { if (k in old && old[k] !== undefined && !(['stages'].includes(k) && !old[k].length)) state[k] = old[k]; });
-            // стадия прогрева переносится вместе со стадиями: иначе при смене исполнителя добавилась бы вторая
-            if (isRamp(exKey) && old.warmup && old.warmup.stages && state.stages === old.stages) state.warmup = {stages: 1};
-            render(row, exKey, state);
-            sync(row);
-        }
-    });
-    // выражение в числовом поле: на выходе из поля заменяется результатом; непонятное выражение подсвечивается и не даёт сохранить
-    function markCalc(el) {
-        const bad = el.value.trim() !== '' && isNaN(calc(el.value));
-        el.classList.toggle('is-invalid', bad);
-        return !bad;
-    }
-    body.addEventListener('change', e => {
-        const el = e.target;
-        if (!el.classList || !el.classList.contains('op-calc')) return;
-        if (markCalc(el) && el.value.trim() !== '') {
-            const v = calc(el.value);
-            if (!isNaN(v)) el.value = String(Math.round(v * 1e6) / 1e6);
-            const row = el.closest('.op-row');
-            if (row) { refreshStages(row); sync(row); }
-        }
-    });
-    body.addEventListener('input', e => {
-        if (e.target.classList && e.target.classList.contains('op-calc')) markCalc(e.target);
-        const row = e.target.closest('.op-row');
-        if (row && e.target.closest('.op-detail')) sync(row);
-        if (row && e.target.classList.contains('op-st-d')) refreshStages(row);
-    });
-
-    // ---- несохранённые изменения: пометка и предупреждение при уходе со страницы
-    const form = body.closest('form');
-    let dirty = false, submitting = false;
-    function markDirty() { dirty = true; if (form) form.classList.add('is-dirty'); }
-    if (form) {
-        form.addEventListener('input', markDirty);
-        form.addEventListener('change', markDirty);
-        form.addEventListener('submit', ev => {
-            const bad = body.querySelector('.op-calc.is-invalid');
-            if (bad) { ev.preventDefault(); bad.focus(); alert('Не удаётся вычислить выражение в числовом поле. Допустимы числа и знаки + - * / ( ).'); return; }
-            submitting = true; body.querySelectorAll('.op-row').forEach(sync); });
-        window.addEventListener('beforeunload', e => { if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; } });
-    }
-
-    gwFromJson(); // сначала общий рубильник и время по сохранённым сценариям, затем отрисовка: она применяет их ко всем
-    body.querySelectorAll('.op-row').forEach(initRow);
-    refreshAll();
-    // начальная расстановка не считается правкой, кроме открытого профиля: он ещё не сохранён в нагрузку скрипта
-    dirty = false;
-    if (form) form.classList.remove('is-dirty');
-    if (form && form.dataset.fromProfile) markDirty();
-    // профили: «Открыть» переходит на форму с профилем, «Удалить» просит подтверждение и передаёт выбранный профиль
-    const pick = document.getElementById('profile-pick');
-    if (pick) {
-        // выбор профиля в списке открывает его сразу
-        const openProfile = () => {
-            if (!pick.value) return;
-            if (dirty && !confirm('Несохранённые изменения формы будут заменены профилем. Продолжить?')) {
-                pick.value = pick.dataset.current || '';
-                return;
-            }
-            dirty = false;
-            // адрес страницы формы всегда /scripts/{id}/load: после POST (сохранение профиля) текущий путь другой
-            location.href = pick.dataset.openUrl + '?profile=' + encodeURIComponent(pick.value);
-        };
-        pick.dataset.current = pick.value;
-        pick.addEventListener('change', openProfile);
-        document.getElementById('profile-delete').addEventListener('click', e => {
-            const opt = pick.options[pick.selectedIndex];
-            if (!pick.value) { e.preventDefault(); return; }
-            if (!confirm('Удалить профиль «' + opt.textContent + '»?')) { e.preventDefault(); return; }
-            document.getElementById('profile-id').value = pick.value;
-        });
-        document.getElementById('profile-save').addEventListener('click', e => {
-            const name = document.getElementById('profile-name');
-            if (!name.value.trim()) { e.preventDefault(); name.focus(); name.classList.add('is-invalid'); return; }
-            name.classList.remove('is-invalid');
-        });
-    }
-})();
-    </script>
-
-    <!-- для опытных: итоговый конфиг k6 и ресурсы -->
+    <!-- Для опытных: итоговый конфиг k6 и ресурсы -->
     <details class="adv-box mt-4" id="adv-box" th:attr="data-open=${configTabOpen != null}">
         <summary><i class="bi bi-sliders2 me-1"></i>Для опытных: конфиг k6 и ресурсы
             <span class="badge text-bg-warning ms-2" th:if="${!plan.warnings.isEmpty()}" th:text="${plan.warnings.size()} + ' ' + (${plan.warnings.size() == 1} ? 'замечание' : 'замечаний')"></span>
@@ -775,12 +464,14 @@
                     <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!overridePaths.isEmpty()}">
                         <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
                         <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" onsubmit="return confirm('Сбросить ручные правки и вернуть расчётный конфиг?')">
-                            <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button></form></div>
-                    <div class="small text-muted mb-2">Итоговый конфиг k6, который уйдёт на генераторы. Правится только то, чего нет в конструкторе: сохраняется лишь отличие от расчётного
-                        конфига, поэтому правки остаются при изменении операций. Конфиг проверяет сам k6.</div>
+                            <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button>
+                        </form>
+                    </div>
+                    <div class="small text-muted mb-2">Итоговый конфиг k6, который уйдёт на генераторы. Правится только то, чего нет в конструкторе: сохраняется лишь отличие от расчётного конфига, поэтому правки остаются при изменении операций. Конфиг проверяет сам k6.</div>
                     <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post">
                         <input type="hidden" name="config" id="cfg-value">
-                        <div id="config-editor" style="height: 55vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden" th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson}"></div>
+                        <div id="config-editor" style="height: 55vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden"
+                             th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson}"></div>
                         <div class="d-flex gap-2 mt-2 align-items-center">
                             <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Сохранить конфиг</button>
                             <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/config.json(id=${script.id})}">Скачать</a>
@@ -788,7 +479,8 @@
                     </form>
                 </div>
                 <div class="tab-pane fade" id="t-req">
-                    <button class="btn btn-outline-primary btn-sm mb-2" type="button" hx-post="" th:attr="hx-post=@{/scripts/{id}/requirements(id=${script.id})}"
+                    <button class="btn btn-outline-primary btn-sm mb-2" type="button" hx-post=""
+                            th:attr="hx-post=@{/scripts/{id}/requirements(id=${script.id})}"
                             hx-target="#req-out" hx-indicator="#req-out">Рассчитать (k6 inspect --execution-requirements)</button>
                     <div id="req-out"></div>
                 </div>
@@ -797,11 +489,12 @@
     </details>
 </th:block>
 <th:block layout:fragment="scripts">
+    <script th:src="@{/webjars/chart.js/dist/chart.umd.js}"></script>
+    <script th:src="@{/js/load-editor.js}"></script>
     <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script th:inline="none">
         (function () {
             var adv = document.getElementById('adv-box'), box = document.getElementById('config-editor'), ed = null;
-            // после ошибки сохранения конфига или перехода по якорю раздел открыт сразу
             if (adv && (location.hash === '#t-config' || adv.dataset.open === 'true')) { adv.open = true; }
             if (!box || !window.require) { return; }
             var base = location.origin + '/webjars/monaco-editor/min/vs';

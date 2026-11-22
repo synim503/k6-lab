@@ -142,8 +142,9 @@ public class SettingsController {
     @PostMapping("/report-charts")
     public String saveReportCharts(@RequestParam String theme, @RequestParam int width, @RequestParam int height, @RequestParam String legend,
                                    @RequestParam(defaultValue = "false") boolean stats, @RequestParam int maxLegend,
-                                   @RequestParam(defaultValue = "rel") String timeAxis, RedirectAttributes ra) {
-        chartStyle.save(theme, width, height, legend, stats, maxLegend, "abs".equals(timeAxis));
+                                   @RequestParam(defaultValue = "rel") String timeAxis,
+                                   @RequestParam(defaultValue = "false") boolean autoWidth, RedirectAttributes ra) {
+        chartStyle.save(theme, width, height, legend, stats, maxLegend, "abs".equals(timeAxis), autoWidth);
         ra.addFlashAttribute("info", "Оформление графиков отчёта сохранено");
         return "redirect:/settings#charts";
     }
@@ -155,20 +156,46 @@ public class SettingsController {
         return "redirect:/settings#charts";
     }
 
-    /** Пример графика с текущими настройками (на тестовых данных): чтобы подобрать вид, не запуская тест. */
+    /** Пример графика (на тестовых данных): поддерживает передачу несохранённых параметров в query-строке для живого предпросмотра. */
     @GetMapping(value = "/report-charts/preview.png", produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
-    @org.springframework.web.bind.annotation.ResponseBody
-    public byte[] previewReportChart() {
+    public org.springframework.http.ResponseEntity<byte[]> previewReportChart(
+            @RequestParam(required = false) String theme,
+            @RequestParam(required = false) Integer width,
+            @RequestParam(required = false) Integer height,
+            @RequestParam(required = false) String legend,
+            @RequestParam(required = false) Boolean stats,
+            @RequestParam(required = false) Integer maxLegend,
+            @RequestParam(required = false) String timeAxis,
+            @RequestParam(required = false) Boolean autoWidth,
+            @RequestParam(required = false) Integer seriesCount) {
+        ru.k6lab.server.result.ChartStyle saved = chartStyle.get();
+        ru.k6lab.server.result.ChartStyle effective = ru.k6lab.server.result.ChartStyle.of(
+                theme != null ? theme : saved.theme().name(),
+                width != null ? width : saved.width(),
+                height != null ? height : saved.height(),
+                legend != null ? legend : saved.legend().name(),
+                stats != null ? stats : saved.stats(),
+                maxLegend != null ? maxLegend : saved.maxLegend(),
+                autoWidth != null ? autoWidth : saved.autoWidth());
+        boolean abs = timeAxis != null ? "abs".equals(timeAxis) : chartStyle.absoluteTime();
+        int count = seriesCount == null ? 6 : Math.max(1, Math.min(20, seriesCount));
         java.util.Map<String, java.util.List<ru.k6lab.server.result.RunSeriesService.Pt>> series = new java.util.LinkedHashMap<>();
-        for (int s = 1; s <= 6; s++) {
+        for (int s = 1; s <= count; s++) {
             java.util.List<ru.k6lab.server.result.RunSeriesService.Pt> pts = new java.util.ArrayList<>();
             for (int i = 0; i <= 40; i++) {
-                pts.add(new ru.k6lab.server.result.RunSeriesService.Pt(i * 0.5, 15 + s * 8 + 12 * Math.sin(i / 4.0 + s) + i * 0.6));
+                pts.add(new ru.k6lab.server.result.RunSeriesService.Pt(i * 0.5, 15 + (s % 8) * 7 + 12 * Math.sin(i / 4.0 + s) + i * 0.5));
             }
-            series.put("omltd-app-0" + s + ".example:9100", pts);
+            series.put(String.format("omltd-app-%02d.example:9100", s), pts);
         }
-        return ru.k6lab.server.result.ChartRenderer.with(chartStyle.get(),
-                () -> ru.k6lab.server.result.ChartRenderer.custom("Пример: утилизация CPU", "%", series)).png();
+        long endMs = System.currentTimeMillis();
+        long originMs = endMs - 20 * 60_000L;
+        ru.k6lab.server.result.ChartRenderer.TimeBase tb = abs ? new ru.k6lab.server.result.ChartRenderer.TimeBase(originMs, endMs) : null;
+        byte[] png = ru.k6lab.server.result.ChartRenderer.withTime(tb,
+                () -> ru.k6lab.server.result.ChartRenderer.with(effective,
+                        () -> ru.k6lab.server.result.ChartRenderer.custom("Пример: утилизация CPU", "%", series))).png();
+        return org.springframework.http.ResponseEntity.ok()
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(png);
     }
 
     @PostMapping("/limits")

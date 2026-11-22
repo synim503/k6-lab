@@ -173,6 +173,41 @@ class ReportDocxTest {
     }
 
     @Test
+    void autoWidthExpandsChartWhenLegendDoesNotFit() throws Exception {
+        Map<String, List<RunSeriesService.Pt>> longNames = new LinkedHashMap<>();
+        longNames.put("instance=very-long-production-application-server-node-01.eu-central.internal.example.com:9100, job=node_exporter",
+                List.of(new RunSeriesService.Pt(0.5, 42), new RunSeriesService.Pt(1.0, 58), new RunSeriesService.Pt(1.5, 51)));
+
+        // снизу: при autoWidth=false ширина фиксирована (600), при autoWidth=true расширяется под длинную легенду
+        var bFixed = javax.imageio.ImageIO.read(new ByteArrayInputStream(
+                ChartRenderer.with(ru.k6lab.server.result.ChartStyle.of("DARK", 600, 300, "BOTTOM", true, 20, false),
+                        () -> ChartRenderer.custom("CPU", "%", longNames)).png()));
+        var bAuto = javax.imageio.ImageIO.read(new ByteArrayInputStream(
+                ChartRenderer.with(ru.k6lab.server.result.ChartStyle.of("DARK", 600, 300, "BOTTOM", true, 20, true),
+                        () -> ChartRenderer.custom("CPU", "%", longNames)).png()));
+        assertThat(bFixed.getWidth()).isEqualTo(600);
+        assertThat(bAuto.getWidth()).isGreaterThan(750);
+
+        // справа и слева: autoWidth даёт больше ширины под длинную легенду, чем фиксированный предел
+        var rFixed = javax.imageio.ImageIO.read(new ByteArrayInputStream(
+                ChartRenderer.with(ru.k6lab.server.result.ChartStyle.of("DARK", 800, 300, "RIGHT", true, 20, false),
+                        () -> ChartRenderer.custom("CPU", "%", longNames)).png()));
+        var rAuto = javax.imageio.ImageIO.read(new ByteArrayInputStream(
+                ChartRenderer.with(ru.k6lab.server.result.ChartStyle.of("DARK", 800, 300, "RIGHT", true, 20, true),
+                        () -> ChartRenderer.custom("CPU", "%", longNames)).png()));
+        assertThat(rFixed.getWidth()).isEqualTo(800 + 380);
+        assertThat(rAuto.getWidth()).isGreaterThan(rFixed.getWidth());
+
+        var lFixed = javax.imageio.ImageIO.read(new ByteArrayInputStream(
+                ChartRenderer.with(ru.k6lab.server.result.ChartStyle.of("DARK", 800, 300, "LEFT", true, 20, false),
+                        () -> ChartRenderer.custom("CPU", "%", longNames)).png()));
+        var lAuto = javax.imageio.ImageIO.read(new ByteArrayInputStream(
+                ChartRenderer.with(ru.k6lab.server.result.ChartStyle.of("DARK", 800, 300, "LEFT", true, 20, true),
+                        () -> ChartRenderer.custom("CPU", "%", longNames)).png()));
+        assertThat(lAuto.getWidth()).isGreaterThan(lFixed.getWidth());
+    }
+
+    @Test
     void bigByteValuesAreScaledToKilobytesMegabytesAndGigabytes() {
         Map<String, List<RunSeriesService.Pt>> traffic = new LinkedHashMap<>();
         traffic.put("ens192 - Receive", List.of(new RunSeriesService.Pt(1, 196_924_819), new RunSeriesService.Pt(2, 340_116_260)));

@@ -57,18 +57,16 @@ public class ReportService {
     }
 
     private List<ChartRenderer.Img> buildCharts(Run run, RunSnapshot snap, ResultData data) {
-        List<ChartRenderer.Img> charts = List.of();
+        List<ChartRenderer.Img> charts = new java.util.ArrayList<>();
         try {
-            // графики по времени от начала теста; если рядов нет - по ступеням (имеют смысл при двух и более ступенях)
-            charts = ChartRenderer.timeCharts(seriesService.series(run, snap));
-            if (charts.isEmpty()) {
-                charts = ChartRenderer.charts(data);
+            // графики по времени от начала теста
+            charts.addAll(ChartRenderer.timeCharts(seriesService.series(run, snap)));
+            // при многоступенчатом тесте (поиск максимума) добавляем графики по ступеням нагрузки (%) —
+            // или используем их как запасные, если временных рядов нет
+            if (charts.isEmpty() || data.isStepTest()) {
+                charts.addAll(ChartRenderer.charts(data));
             }
-            List<ChartRenderer.Img> custom = customCharts.charts(run);
-            if (!custom.isEmpty()) {
-                charts = new java.util.ArrayList<>(charts);
-                charts.addAll(custom);
-            }
+            charts.addAll(customCharts.charts(run));
         } catch (RuntimeException | LinkageError e) {
             // графики - украшение: без них отчёт всё равно полезен (например, нет AWT на сервере)
         }
@@ -113,6 +111,30 @@ public class ReportService {
             }
             d.table(List.of("Операция", "Интенсивность, оп/с", "SLA", "Допустимые ошибки"), ops, null);
             d.h1("Результаты по ступеням");
+            ResultData.MaxSummary max = data.maxCapacity();
+            if (max != null) {
+                d.bold("Поиск максимума: " + max.headline());
+                if (!max.detail().isBlank()) {
+                    d.text(max.detail());
+                }
+                List<List<String>> summaryRows = new java.util.ArrayList<>();
+                java.util.Set<Integer> badSteps = new java.util.HashSet<>();
+                for (ResultData.StepRow s : data.steps()) {
+                    if (!"SUCCESS".equals(s.status())) {
+                        badSteps.add(summaryRows.size());
+                    }
+                    summaryRows.add(List.of(
+                            "Ступень " + s.stepNo(),
+                            f.n(s.levelPct(), 1) + " %",
+                            "NOT_RUN".equals(s.status()) ? "—" : f.time(s.windowStart()) + "–" + f.time(s.windowEnd()),
+                            f.n(s.totalTargetRate(), 1),
+                            f.n(s.totalActualRate(), 1),
+                            s.worstSlaText(),
+                            f.n(s.maxErrorPct(), 2) + " %",
+                            f.status(s.status())));
+                }
+                d.table(List.of("Ступень", "Уровень", "Окно", "План, оп/с", "Факт, оп/с", "Худший SLA", "Ошибки макс.", "Статус"), summaryRows, badSteps);
+            }
             for (ResultData.StepRow s : data.steps()) {
                 d.h2("Ступень " + s.stepNo() + " — " + f.n(s.levelPct(), 1) + " % от модели: " + f.status(s.status()));
                 if (!s.reasons().isEmpty()) {

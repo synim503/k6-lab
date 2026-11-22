@@ -5,14 +5,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import ru.k6lab.server.metrics.PrometheusClient;
 import ru.k6lab.server.run.Run;
+import ru.k6lab.server.run.RunRepository;
 import ru.k6lab.server.settings.SettingsService;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * Свои графики отчёта: PromQL пользователя выполняется за время запуска. В запросе можно использовать
@@ -22,18 +26,24 @@ import java.util.Map;
 public class CustomChartService {
 
     private static final Logger log = LoggerFactory.getLogger(CustomChartService.class);
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault());
     static final int MAX_POINTS = 150;
 
     private final ChartTemplateStore store;
     private final PrometheusClient prom;
     private final SettingsService settings;
     private final ChartVariableStore variables;
+    private final RunRepository runs;
+    private final ChartStyleService chartStyle;
 
-    public CustomChartService(ChartTemplateStore store, PrometheusClient prom, SettingsService settings, ChartVariableStore variables) {
+    public CustomChartService(ChartTemplateStore store, PrometheusClient prom, SettingsService settings,
+                              ChartVariableStore variables, RunRepository runs, ChartStyleService chartStyle) {
         this.variables = variables;
         this.store = store;
         this.prom = prom;
         this.settings = settings;
+        this.runs = runs;
+        this.chartStyle = chartStyle;
     }
 
     /** Подстановка в запрос: переменные скрипта ($имя, ${имя}), затем {run_id} (идентификатор запуска) и {range} (окно rate/increase). */
@@ -122,5 +132,131 @@ public class CustomChartService {
             }
         }
         return out;
+    }
+
+    /** Диагностика одного запроса при живом предпросмотре в конструкторе. */
+    public record QueryDiag(int index, String rawPromql, String expandedPromql, String legend,
+                            int seriesCount, List<String> labelKeys, String error) {
+    }
+
+    /** Результат живого предпросмотра графика (та же картинка, что попадёт в HTML/PDF/Word-отчёт). */
+    public record PreviewResult(boolean ok, String title, String dataUri, String windowLabel,
+                                int totalSeries, long elapsedMs, String error, List<QueryDiag> queries) {
+    }
+
+    /**
+     * Выполняет запросы конструктора на выбранном запуске скрипта или за последние N минут и рисует точную копию графика отчёта.
+     */
+    public PreviewResult preview(long scriptId, String name, String unit, List<ChartTemplateStore.Query> queries,
+                                 Long runId, Integer minutes) {
+        long tStartNs = System.nanoTime();
+        Map<String, String> vars = variables.map(scriptId);
+        String renderedTitle = title(name == null || name.isBlank() ? "Предпросмотр" : name.strip(), vars);
+        int push = settings.pushIntervalSec();
+        long window = Math.max(15, 3L * push);
+
+        Instant start;
+        Instant end;
+        long effectiveRunId = 0;
+        String windowLabel;
+        if (runId != null && runId > 0) {
+            Run run = runs.findById(runId).filter(r -> Long.valueOf(scriptId).equals(r.getScriptId())).orElse(null);
+            if (run == null) {
+                return new PreviewResult(false, renderedTitle, null, "", 0, 0, "Запуск #" + runId + " не найден для этого скрипта", List.of());
+            }
+            start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
+            if (start == null) {
+                return new PreviewResult(false, renderedTitle, null, "", 0, 0, "У запуска #" + runId + " ещё нет времени начала", List.of());
+            }
+            end = run.getFinishedAt() != null ? run.getFinishedAt() : Instant.now();
+            if (!end.isAfter(start)) {
+                end = start.plusSeconds(60);
+            }
+            effectiveRunId = run.getId();
+            long total = Math.max(1, end.getEpochSecond() - start.getEpochSecond());
+            int step = (int) Math.max(push, (long) Math.ceil(total / (double) MAX_POINTS));
+            windowLabel = "Запуск #" + run.getId() + " (" + TIME_FMT.format(start) + "–" + TIME_FMT.format(end) + ", шаг " + step + "с)";
+        } else {
+            int mins = minutes == null ? 30 : Math.max(5, Math.min(1440, minutes));
+            end = Instant.now();
+            start = end.minusSeconds(mins * 60L);
+            List<Run> recent = runs.findByScriptIdOrderByIdDesc(scriptId);
+            if (!recent.isEmpty()) {
+                effectiveRunId = recent.get(0).getId();
+            }
+            long total = Math.max(1, end.getEpochSecond() - start.getEpochSecond());
+            int step = (int) Math.max(push, (long) Math.ceil(total / (double) MAX_POINTS));
+            windowLabel = "Последние " + (mins >= 60 && mins % 60 == 0 ? (mins / 60) + " ч" : mins + " мин") + " (шаг " + step + "с)";
+        }
+
+        long total = Math.max(1, end.getEpochSecond() - start.getEpochSecond());
+        int step = (int) Math.max(push, (long) Math.ceil(total / (double) MAX_POINTS));
+
+        SettingsService.Prometheus p = settings.prometheus();
+        List<QueryDiag> diags = new ArrayList<>();
+        if (!p.configured()) {
+            for (int i = 0; i < queries.size(); i++) {
+                ChartTemplateStore.Query q = queries.get(i);
+                String raw = q.promql() == null ? "" : q.promql().strip();
+                String exp = raw.isEmpty() ? "" : expand(raw, effectiveRunId, window, vars);
+                diags.add(new QueryDiag(i, raw, exp, q.legend() == null ? "" : q.legend().strip(), 0, List.of(), null));
+            }
+            return new PreviewResult(false, renderedTitle, null, windowLabel, 0, elapsedMs(tStartNs),
+                    "Prometheus не настроен — укажите URL запросов в разделе «Настройки».", diags);
+        }
+
+        Map<String, List<RunSeriesService.Pt>> series = new LinkedHashMap<>();
+        long t0 = start.getEpochSecond();
+        for (int i = 0; i < queries.size(); i++) {
+            ChartTemplateStore.Query q = queries.get(i);
+            String raw = q.promql() == null ? "" : q.promql().strip();
+            String leg = q.legend() == null ? "" : q.legend().strip();
+            if (raw.isEmpty()) {
+                diags.add(new QueryDiag(i, "", "", leg, 0, List.of(), "Пустой запрос"));
+                continue;
+            }
+            String expanded = expand(raw, effectiveRunId, window, vars);
+            try {
+                List<PrometheusClient.Series> rawSeries = prom.rangeSeries(p, expanded, start, end, step);
+                TreeSet<String> labelKeys = new TreeSet<>();
+                for (PrometheusClient.Series sr : rawSeries) {
+                    labelKeys.addAll(sr.labels().keySet());
+                    String label = seriesName(leg, sr.labels(), sr.labelText(), rawSeries.size());
+                    List<RunSeriesService.Pt> mapped = sr.points().stream().filter(pt -> pt.ts() >= t0)
+                            .map(pt -> new RunSeriesService.Pt((pt.ts() - t0) / 60.0, pt.value())).toList();
+                    String key = label;
+                    for (int dup = 2; series.containsKey(key); dup++) {
+                        key = label + " #" + dup;
+                    }
+                    series.put(key, mapped);
+                }
+                List<String> keysList = labelKeys.stream().limit(24).toList();
+                diags.add(new QueryDiag(i, raw, expanded, leg, rawSeries.size(), keysList, null));
+            } catch (IOException | RuntimeException e) {
+                String msg = e.getMessage() != null && !e.getMessage().isBlank() ? e.getMessage() : e.getClass().getSimpleName();
+                diags.add(new QueryDiag(i, raw, expanded, leg, 0, List.of(), msg));
+            }
+        }
+
+        String dataUri = null;
+        String renderErr = null;
+        if (!series.isEmpty()) {
+            try {
+                ChartRenderer.TimeBase tb = chartStyle.absoluteTime()
+                        ? new ChartRenderer.TimeBase(start.toEpochMilli(), end.toEpochMilli()) : null;
+                ChartRenderer.Img img = ChartRenderer.withTime(tb,
+                        () -> ChartRenderer.with(chartStyle.get(), () -> ChartRenderer.custom(renderedTitle, unit, series)));
+                if (img != null) {
+                    dataUri = img.dataUri();
+                }
+            } catch (RuntimeException | LinkageError e) {
+                renderErr = "Не удалось нарисовать график: " + e.getMessage();
+            }
+        }
+        return new PreviewResult(dataUri != null, renderedTitle, dataUri, windowLabel, series.size(), elapsedMs(tStartNs), renderErr, diags);
+    }
+
+    private static long elapsedMs(long startNs) {
+        return Math.max(1, (System.nanoTime() - startNs) / 1_000_000L);
     }
 }

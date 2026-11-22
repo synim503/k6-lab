@@ -48,7 +48,8 @@ public class RunStartController {
     }
 
     @GetMapping("/run")
-    public String form(@PathVariable Long id, Model model) {
+    public String form(@PathVariable Long id, @RequestParam(required = false) Long profile, Model model) {
+        model.addAttribute("selectedProfileId", profile);
         fill(id, model);
         return "scripts/run";
     }
@@ -63,7 +64,7 @@ public class RunStartController {
         model.addAttribute("generators", all);
         model.addAttribute("freeCount", all.stream().filter(Generator::isAvailableForRuns).count());
         model.addAttribute("ops", plan.operations());
-        model.addAttribute("durationSec", plan.steps() == null || plan.steps().isEmpty() ? 0 : plan.steps().get(0).holdSec());
+        model.addAttribute("durationSec", totalDurationSec(plan));
         model.addAttribute("errors", plan.errors());
         model.addAttribute("warnings", plan.warnings());
         model.addAttribute("blockReason", runs.blockReason().orElse(null));
@@ -72,8 +73,9 @@ public class RunStartController {
         script.getEnv().forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
         model.addAttribute("envText", env.toString());
         model.addAttribute("pendingSchedule", schedule.pendingOf(id));
-        // профили нагрузки для планирования: выбор профиля меняет список операций (интенсивность) и переменные в форме
-        model.addAttribute("loadProfiles", profileStore.list(id));
+        // профили нагрузки для планирования: выбор профиля меняет список операций (интенсивность), переменные и сводку справа
+        var profilesList = profileStore.list(id);
+        model.addAttribute("loadProfiles", profilesList);
         try {
             java.util.Map<String, java.util.List<String>> opsByProfile = new java.util.LinkedHashMap<>();
             opsByProfile.put("", plan.operations().stream().map(o -> o.getName()).toList());
@@ -81,12 +83,56 @@ public class RunStartController {
             java.util.Map<String, String> envByProfile = new java.util.LinkedHashMap<>();
             envByProfile.put("", env.toString());
             load.profileEnvText(id).forEach((pid, t) -> envByProfile.put(String.valueOf(pid), t));
+            java.util.Map<String, Object> detailsByProfile = new java.util.LinkedHashMap<>();
+            detailsByProfile.put("", summaryOf("Нагрузка скрипта", plan, script.getEnv().size()));
+            for (var p : profilesList) {
+                try {
+                    var built = load.fromProfile(id, p.id());
+                    RunPlan pp = planner.plan(id, script.getGeneratorCount(), built);
+                    detailsByProfile.put(String.valueOf(p.id()), summaryOf("Профиль «" + p.name() + "»", pp, built.env().size()));
+                } catch (IllegalArgumentException | IllegalStateException ignored) {
+                    // повреждённый профиль пропускаем в превью
+                }
+            }
             model.addAttribute("profileOpsJson", JSON.writeValueAsString(opsByProfile));
             model.addAttribute("profileEnvJson", JSON.writeValueAsString(envByProfile));
+            model.addAttribute("profileDetailsJson", JSON.writeValueAsString(detailsByProfile));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             model.addAttribute("profileOpsJson", "{}");
             model.addAttribute("profileEnvJson", "{}");
+            model.addAttribute("profileDetailsJson", "{}");
         }
+    }
+
+    private static int totalDurationSec(RunPlan p) {
+        if (p.config() != null) {
+            long span = ru.k6lab.core.k6config.ConfigDuration.of(p.config()).totalSec();
+            if (span > 0) {
+                return (int) Math.min(Integer.MAX_VALUE, span);
+            }
+        }
+        return p.steps() == null ? 0 : p.steps().stream().mapToInt(ru.k6lab.core.profile.StepPlan::totalSec).sum();
+    }
+
+    private static java.util.Map<String, Object> summaryOf(String title, RunPlan p, int envCount) {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("title", title);
+        m.put("durationSec", totalDurationSec(p));
+        m.put("envCount", envCount);
+        m.put("errors", p.errors());
+        java.util.List<java.util.Map<String, Object>> ops = new java.util.ArrayList<>();
+        for (var o : p.operations()) {
+            java.util.Map<String, Object> om = new java.util.LinkedHashMap<>();
+            om.put("name", o.getName());
+            om.put("execFn", o.getExecFn());
+            om.put("ratePerSec", o.getRatePerSec());
+            om.put("executor", o.getExecutor());
+            om.put("slaPercentile", o.getSlaPercentile());
+            om.put("slaThresholdMs", o.getSlaThresholdMs());
+            ops.add(om);
+        }
+        m.put("ops", ops);
+        return m;
     }
 
     /**
