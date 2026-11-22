@@ -363,3 +363,73 @@ docker compose up -d --build
 * Графики вкладки «Метрики» накапливаются в браузере с момента открытия страницы (история до этого — в Grafana по ссылке).
 * Загрузка архива в качестве дистрибутива k6/xk6 не поддерживается — нужен сам исполняемый файл.
 * Сравнение запусков между собой удалено намеренно: итоги смотрятся в каждом запуске отдельно.
+
+
+## Установка на Linux (amd64) через GitVerse
+
+### 1. Установка `git` и `git-lfs` на Linux
+
+Полный архив `k6-lab-linux-amd64.tar.gz` и бинари `k6`/`xk6` в `vendor/` хранятся через Git LFS, поэтому на машине должны быть установлены `git` и `git-lfs`:
+
+* **Ubuntu / Debian / Astra Linux:**
+  ```bash
+  sudo apt update && sudo apt install -y git git-lfs
+  git lfs install
+  ```
+* **RHEL / CentOS / Rocky Linux / AlmaLinux / РЕД ОС (8/9+):**
+  ```bash
+  sudo dnf install -y git git-lfs
+  git lfs install
+  ```
+* **Alpine Linux:**
+  ```bash
+  sudo apk add git git-lfs
+  git lfs install
+  ```
+* **Arch Linux:**
+  ```bash
+  sudo pacman -S --noconfirm git git-lfs
+  git lfs install
+  ```
+
+### 2. Вариант А — готовый архив Linux amd64 (JDK и Go не нужны)
+
+Готовый архив `k6-lab-linux-amd64.tar.gz` (282 МБ, включает JRE 17, `k6`, `xk6` и Go-агента) размещён в ветке `release-v0.1.44`:
+* Страница релиза: https://gitverse.ru/503/k6-lab/releases/tag/v0.1.44
+* Скачать архив в браузере: https://gitverse.ru/503/k6-lab/content/release-v0.1.44/k6-lab-linux-amd64.tar.gz
+
+**Первая установка:**
+```bash
+git clone -b release-v0.1.44 --single-branch https://gitverse.ru/503/k6-lab.git k6-lab-v0.1.44
+cd k6-lab-v0.1.44
+git lfs pull
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xzf k6-lab-linux-amd64.tar.gz
+cd k6-lab
+./start.sh
+# Для автозапуска как systemd-сервис:
+sudo ./install-service.sh
+```
+
+**Обновление уже установленного сервера одной командой** (сохраняет `config/` и `data/`, откат при ошибке):
+```bash
+git clone -b release-v0.1.44 --single-branch https://gitverse.ru/503/k6-lab.git k6-lab-v0.1.44 && \
+cd k6-lab-v0.1.44 && git lfs pull && sha256sum -c --ignore-missing SHA256SUMS && \
+ARCHIVE="$PWD/k6-lab-linux-amd64.tar.gz" bash ./remote-update.sh
+```
+
+### 3. Вариант Б — сборка и установка из исходников (ветка `main`, офлайн из `vendor/`)
+
+Требуются JDK 17+ и Go 1.22+:
+
+**Сборка архива:**
+```bash
+git lfs install && git clone https://gitverse.ru/503/k6-lab.git
+cd k6-lab && git lfs pull
+./build.sh
+```
+
+**Обновление на сервере из исходников** (с сохранением `config/` и `data/`):
+```bash
+git clone https://gitverse.ru/503/k6-lab.git && cd k6-lab && git lfs pull && ./update.sh --no-pull
+```
