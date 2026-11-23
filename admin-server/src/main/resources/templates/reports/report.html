@@ -28,8 +28,28 @@
         .max-detail { color: #495057; font-size: 10px; }
         .reasons { margin: 2px 0; padding-left: 16px; color: #842029; }
         .step-block { page-break-inside: avoid; }
-        img.chart { width: 100%; height: auto; margin: 6px 0; }
-        @media print { .noprint { display: none; } }
+        .chart-card { page-break-inside: avoid; margin: 10px 0 14px 0; }
+        img.chart { display: block; width: 100%; height: auto; }
+        @media screen {
+            body { max-width: 1480px; margin: 0 auto; padding: 16px 24px 36px; background: #fff; }
+            .chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 7px 10px; margin: 6px 0 10px 0;
+                background: #f8f9fb; border: 1px solid #dce2ec; border-radius: 6px; font-size: 11px; color: #475569; }
+            .chart-toolbar .grp { display: inline-flex; align-items: center; gap: 4px; }
+            .chart-toolbar .lbl { color: #64748b; margin-right: 2px; }
+            .chart-toolbar a.chip { display: inline-block; padding: 2px 8px; border-radius: 4px; text-decoration: none;
+                color: #334155; background: #fff; border: 1px solid #cbd5e1; }
+            .chart-toolbar a.chip:hover { border-color: #2563eb; color: #1d4ed8; }
+            .chart-toolbar a.chip.active { background: #1d4ed8; border-color: #1d4ed8; color: #fff; font-weight: bold; }
+            .chart-toolbar .spacer { flex: 1 1 auto; }
+            .chart-card { break-inside: avoid; }
+            img.chart { border-radius: 8px; cursor: zoom-in; box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08); }
+            img.chart:hover { box-shadow: 0 4px 16px rgba(15, 23, 42, 0.16); }
+            #chart-lb { display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.88); z-index: 9999;
+                align-items: center; justify-content: center; padding: 20px; cursor: zoom-out; }
+            #chart-lb.open { display: flex; }
+            #chart-lb img { max-width: 96vw; max-height: 94vh; border-radius: 8px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
+        }
+        @media print { .noprint { display: none !important; } }
         pre { white-space: pre-wrap; font-size: 8px; background: #f8f9fa; border: 1px solid #ced4da; padding: 4px; }
     </style>
 </head>
@@ -41,7 +61,7 @@
     · отчёт сформирован <span th:text="${fmt.dt(generatedAt)}"></span>
 </div>
 
-<h2>Итог</h2>
+<h2 th:if="${run.conclusion != null or run.conclusionComment != null or run.stopReason != null or run.degraded or !data.prometheusOk or run.error != null}">Итог</h2>
 <div class="box" th:if="${run.conclusion != null or run.conclusionComment != null}">
     <div th:if="${run.conclusion != null}"><b>Вывод инженера:</b> <span th:text="${run.conclusion}"></span></div>
     <div th:if="${run.conclusionComment != null}" th:text="${run.conclusionComment}"></div>
@@ -80,10 +100,50 @@
 <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
 
 <h2 th:if="${!charts.isEmpty()}">Графики</h2>
-<div class="noprint muted" th:if="${!charts.isEmpty()}">Время на графиках:
-    <a th:href="'/runs/' + ${run.id} + '/report.html?time=rel'" th:style="${!timeAbs} ? 'font-weight:bold'">минуты от начала теста</a> ·
-    <a th:href="'/runs/' + ${run.id} + '/report.html?time=abs'" th:style="${timeAbs} ? 'font-weight:bold'">абсолютное время</a></div>
-<div th:each="c : ${charts}"><img class="chart" th:src="${c.dataUri}" th:alt="${c.title}"/></div>
+<div class="noprint chart-toolbar" th:if="${!charts.isEmpty()}"
+     th:with="tParam=${timeAbs ? 'abs' : 'rel'}, wParam=${skipWarmup ? 'skip' : 'include'}, qBase=${'?time=' + tParam + '&amp;warmup=' + wParam + '&amp;sort=' + sortBy + '&amp;dir=' + sortDir}">
+    <span class="grp">
+        <span class="lbl">Ось X:</span>
+        <a class="chip" th:classappend="${!timeAbs} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=rel&amp;warmup=' + ${wParam} + '&amp;sort=' + ${sortBy} + '&amp;dir=' + ${sortDir}">минуты от начала теста</a>
+        <a class="chip" th:classappend="${timeAbs} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=abs&amp;warmup=' + ${wParam} + '&amp;sort=' + ${sortBy} + '&amp;dir=' + ${sortDir}">абсолютное время</a>
+    </span>
+    <span class="grp">
+        <span class="lbl">Прогрев:</span>
+        <a class="chip" th:classappend="${!skipWarmup} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=include&amp;sort=' + ${sortBy} + '&amp;dir=' + ${sortDir}">С начала теста</a>
+        <a class="chip" th:classappend="${skipWarmup} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=skip&amp;sort=' + ${sortBy} + '&amp;dir=' + ${sortDir}"
+           th:title="${hasWarmup} ? ('Обрезать первые ' + ${warmupMinLabel} + ' прогрева') : 'В этом запуске прогрев не задан'"
+           th:text="${hasWarmup} ? ('От конца прогрева (' + ${warmupMinLabel} + ')') : 'От конца прогрева'">От конца прогрева</a>
+    </span>
+    <span class="grp">
+        <span class="lbl">Сортировка легенды:</span>
+        <a class="chip" th:classappend="${sortBy == 'NONE'} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=' + ${wParam} + '&amp;sort=NONE&amp;dir=' + ${sortDir}">Как в запросе</a>
+        <a class="chip" th:classappend="${sortBy == 'MAX'} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=' + ${wParam} + '&amp;sort=MAX&amp;dir=' + ${sortDir}">Max</a>
+        <a class="chip" th:classappend="${sortBy == 'MEAN'} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=' + ${wParam} + '&amp;sort=MEAN&amp;dir=' + ${sortDir}">Mean</a>
+        <a class="chip" th:classappend="${sortBy == 'LAST'} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=' + ${wParam} + '&amp;sort=LAST&amp;dir=' + ${sortDir}">Last</a>
+        <a class="chip" th:if="${sortBy != 'NONE'}" th:classappend="${sortDir == 'DESC'} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=' + ${wParam} + '&amp;sort=' + ${sortBy} + '&amp;dir=DESC'">↓ DESC</a>
+        <a class="chip" th:if="${sortBy != 'NONE'}" th:classappend="${sortDir == 'ASC'} ? ' active'" th:href="'/runs/' + ${run.id} + '/report.html?time=' + ${tParam} + '&amp;warmup=' + ${wParam} + '&amp;sort=' + ${sortBy} + '&amp;dir=ASC'">↑ ASC</a>
+    </span>
+    <span class="spacer"></span>
+    <span class="grp">
+        <span class="lbl">Скачать:</span>
+        <a class="chip" th:href="'/runs/' + ${run.id} + '/report.html' + ${qBase} + '&amp;download=true'">HTML</a>
+        <a class="chip" th:href="'/runs/' + ${run.id} + '/report.pdf' + ${qBase}">PDF</a>
+        <a class="chip" th:href="'/runs/' + ${run.id} + '/report.docx' + ${qBase}">Word</a>
+    </span>
+</div>
+<div class="chart-card" th:each="c : ${charts}"><img class="chart" th:src="${c.dataUri}" th:alt="${c.title}" title="Нажмите, чтобы увеличить"/></div>
+
+<div id="chart-lb" class="noprint" onclick="this.classList.remove('open')"><img id="chart-lb-img" alt=""/></div>
+<script class="noprint">
+(function () {
+    var lb = document.getElementById('chart-lb'), lbImg = document.getElementById('chart-lb-img');
+    if (!lb || !lbImg) { return; }
+    document.querySelectorAll('img.chart').forEach(function (el) {
+        el.addEventListener('click', function () { lbImg.src = el.src; lbImg.alt = el.alt || ''; lb.classList.add('open'); });
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { lb.classList.remove('open'); } });
+})();
+</script>
 
 <h2>Генераторы (справочно)</h2>
 <div class="muted">Сводка k6 по каждому генератору содержит накопленные за весь тест значения; для оценки SLA не используется.</div>

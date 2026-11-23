@@ -61,6 +61,7 @@ public class SettingsController {
         model.addAttribute("metricsDays", settings.metricsRetentionDays());
         model.addAttribute("chartStyle", chartStyle.get());
         model.addAttribute("timeAbs", chartStyle.absoluteTime());
+        model.addAttribute("skipWarmup", chartStyle.skipWarmup());
         model.addAttribute("agentPort", props.getAgentPort());
         model.addAttribute("requireDiagnostics", props.isRequireDiagnostics());
         List<Generator> connected = generators.findAll().stream().filter(g -> registry.isConnected(g.getId())).toList();
@@ -138,13 +139,16 @@ public class SettingsController {
         return "redirect:/settings";
     }
 
-    /** Оформление графиков отчёта: тема, размеры, легенда. */
+    /** Оформление графиков отчёта: тема, размеры, легенда, сортировка легенды, отображение прогрева. */
     @PostMapping("/report-charts")
     public String saveReportCharts(@RequestParam String theme, @RequestParam int width, @RequestParam int height, @RequestParam String legend,
                                    @RequestParam(defaultValue = "false") boolean stats, @RequestParam int maxLegend,
                                    @RequestParam(defaultValue = "rel") String timeAxis,
-                                   @RequestParam(defaultValue = "false") boolean autoWidth, RedirectAttributes ra) {
-        chartStyle.save(theme, width, height, legend, stats, maxLegend, "abs".equals(timeAxis), autoWidth);
+                                   @RequestParam(defaultValue = "false") boolean autoWidth,
+                                   @RequestParam(defaultValue = "NONE") String sortBy,
+                                   @RequestParam(defaultValue = "DESC") String sortDir,
+                                   @RequestParam(defaultValue = "false") boolean skipWarmup, RedirectAttributes ra) {
+        chartStyle.save(theme, width, height, legend, stats, maxLegend, "abs".equals(timeAxis), autoWidth, sortBy, sortDir, skipWarmup);
         ra.addFlashAttribute("info", "Оформление графиков отчёта сохранено");
         return "redirect:/settings#charts";
     }
@@ -167,6 +171,9 @@ public class SettingsController {
             @RequestParam(required = false) Integer maxLegend,
             @RequestParam(required = false) String timeAxis,
             @RequestParam(required = false) Boolean autoWidth,
+            @RequestParam(required = false) String sortBy,
+            @RequestParam(required = false) String sortDir,
+            @RequestParam(required = false) Boolean skipWarmup,
             @RequestParam(required = false) Integer seriesCount) {
         ru.k6lab.server.result.ChartStyle saved = chartStyle.get();
         ru.k6lab.server.result.ChartStyle effective = ru.k6lab.server.result.ChartStyle.of(
@@ -176,14 +183,29 @@ public class SettingsController {
                 legend != null ? legend : saved.legend().name(),
                 stats != null ? stats : saved.stats(),
                 maxLegend != null ? maxLegend : saved.maxLegend(),
-                autoWidth != null ? autoWidth : saved.autoWidth());
+                autoWidth != null ? autoWidth : saved.autoWidth(),
+                sortBy != null ? sortBy : saved.sortBy().name(),
+                sortDir != null ? sortDir : saved.sortDir().name());
         boolean abs = timeAxis != null ? "abs".equals(timeAxis) : chartStyle.absoluteTime();
+        boolean skip = skipWarmup != null ? skipWarmup : chartStyle.skipWarmup();
+        double previewWarmupMin = 3.0;
         int count = seriesCount == null ? 6 : Math.max(1, Math.min(20, seriesCount));
         java.util.Map<String, java.util.List<ru.k6lab.server.result.RunSeriesService.Pt>> series = new java.util.LinkedHashMap<>();
         for (int s = 1; s <= count; s++) {
             java.util.List<ru.k6lab.server.result.RunSeriesService.Pt> pts = new java.util.ArrayList<>();
             for (int i = 0; i <= 40; i++) {
-                pts.add(new ru.k6lab.server.result.RunSeriesService.Pt(i * 0.5, 15 + (s % 8) * 7 + 12 * Math.sin(i / 4.0 + s) + i * 0.5));
+                double min = i * 0.5;
+                if (skip && min < previewWarmupMin) {
+                    continue;
+                }
+                // разные профили (пик в начале / стабильно высокий / рост к концу), чтобы сортировка по Max / Mean / Last давала разный порядок
+                double v = switch (s % 4) {
+                    case 1 -> (i == 10 ? 96.0 : 18.0 + 6 * Math.sin(i / 3.0)) + (s / 4) * 3;   // высокий Max, низкие Mean/Last
+                    case 2 -> 56.0 + 8 * Math.sin(i / 4.0 + s) - i * 0.25 + (s / 4) * 2;       // высокий Mean, средний Last
+                    case 3 -> 14.0 + i * 1.75 + 4 * Math.sin(i / 3.0) + (s / 4) * 2;           // высокий Last, средний Mean
+                    default -> 26.0 + 10 * Math.sin(i / 4.0 + s) + i * 0.4 + (s / 4) * 2;
+                };
+                pts.add(new ru.k6lab.server.result.RunSeriesService.Pt(min, Math.max(1.0, v)));
             }
             series.put(String.format("omltd-app-%02d.example:9100", s), pts);
         }
@@ -192,7 +214,7 @@ public class SettingsController {
         ru.k6lab.server.result.ChartRenderer.TimeBase tb = abs ? new ru.k6lab.server.result.ChartRenderer.TimeBase(originMs, endMs) : null;
         byte[] png = ru.k6lab.server.result.ChartRenderer.withTime(tb,
                 () -> ru.k6lab.server.result.ChartRenderer.with(effective,
-                        () -> ru.k6lab.server.result.ChartRenderer.custom("Пример: утилизация CPU", "%", series))).png();
+                        () -> ru.k6lab.server.result.ChartRenderer.custom("Пример: утилизация CPU", "%", series, skip ? 0 : previewWarmupMin))).png();
         return org.springframework.http.ResponseEntity.ok()
                 .cacheControl(org.springframework.http.CacheControl.noStore())
                 .body(png);

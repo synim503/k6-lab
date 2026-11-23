@@ -97,7 +97,7 @@ public final class DocxBuilder {
         body.append("</w:tr>");
     }
 
-    /** PNG на всю ширину текста (до 24 см), пропорции сохраняются. */
+    /** PNG на всю ширину текста (до 24 см, высота не больше альбомной страницы A4), пропорции сохраняются. */
     public DocxBuilder image(byte[] png, String alt) throws IOException {
         BufferedImage bi = ImageIO.read(new ByteArrayInputStream(png));
         if (bi == null) {
@@ -107,7 +107,12 @@ public final class DocxBuilder {
         int n = images.size();
         long cx = 8_640_000L; // 24 см в EMU
         long cy = cx * bi.getHeight() / bi.getWidth();
-        body.append("<w:p><w:pPr><w:keepNext/><w:spacing w:before=\"120\" w:after=\"120\"/></w:pPr><w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">")
+        long maxCy = 5_900_000L; // ~16.4 см — помещается целиком на альбомной странице A4
+        if (cy > maxCy) {
+            cx = cx * maxCy / cy;
+            cy = maxCy;
+        }
+        body.append("<w:p><w:pPr><w:keepLines/><w:spacing w:before=\"120\" w:after=\"160\"/></w:pPr><w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">")
                 .append("<wp:extent cx=\"").append(cx).append("\" cy=\"").append(cy).append("\"/>")
                 .append("<wp:docPr id=\"").append(n).append("\" name=\"").append(esc(alt)).append("\" descr=\"").append(esc(alt)).append("\"/>")
                 .append("<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">")

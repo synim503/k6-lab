@@ -141,9 +141,15 @@
         var ops = currentMeta.ops || [];
         var dur = currentMeta.durationSec || 0;
         var envText = currentMeta.envText || '';
+        var errs = Array.isArray(currentMeta.errors) ? currentMeta.errors : [];
         if (pid) {
             var p = (currentMeta.profiles || []).find(function (x) { return String(x.id) === String(pid); });
-            if (p) { ops = p.ops || []; dur = p.durationSec || 0; envText = p.envText || ''; }
+            if (p) {
+                ops = p.ops || [];
+                dur = p.durationSec || 0;
+                envText = p.envText || '';
+                errs = Array.isArray(p.errors) ? p.errors : [];
+            }
         }
         renderQuickOps(ops);
         if (qEnv && !document.getElementById('qm-env-custom').checked) { qEnv.value = envText; }
@@ -153,10 +159,11 @@
                 '<span class="badge text-bg-light border"><i class="bi bi-layers me-1"></i>' + ops.length + ' оп.</span>';
         }
         if (qErr) {
-            var hasErr = Array.isArray(currentMeta.errors) && currentMeta.errors.length > 0 && !pid;
-            qErr.textContent = hasErr ? ('В скрипте есть ошибки нагрузки: ' + currentMeta.errors.join('; ')) : '';
+            var hasErr = errs.length > 0;
+            qErr.textContent = hasErr ? ('Ошибки нагрузки: ' + errs.join('; ')) : '';
             qErr.classList.toggle('d-none', !hasErr);
         }
+        if (qSubmit) { qSubmit.disabled = errs.length > 0; }
     }
 
     function loadScriptMeta(scriptId, wantedProfileId, wantedCount) {
@@ -171,13 +178,18 @@
             .then(function (d) {
                 currentMeta = d;
                 qCount.value = wantedCount || d.defaultCount || 1;
-                var opts = '<option value="">Нагрузка скрипта (как сохранена)</option>';
+                var baseErrs = Array.isArray(d.errors) && d.errors.length > 0;
+                var opts = '<option value="">' + (baseErrs ? 'Нагрузка скрипта (не описана)' : 'Нагрузка скрипта (как сохранена)') + '</option>';
                 (d.profiles || []).forEach(function (p) {
                     opts += '<option value="' + p.id + '">' + esc(p.name) + '</option>';
                 });
                 qProfile.innerHTML = opts;
-                if (wantedProfileId) { qProfile.value = String(wantedProfileId); }
-                qSubmit.disabled = false;
+                if (wantedProfileId) {
+                    qProfile.value = String(wantedProfileId);
+                } else if (baseErrs && Array.isArray(d.profiles)) {
+                    var valid = d.profiles.find(function (p) { return !Array.isArray(p.errors) || p.errors.length === 0; });
+                    if (valid) { qProfile.value = String(valid.id); }
+                }
                 applyQuickProfile();
             })
             .catch(function () {
@@ -225,4 +237,46 @@
             if (qScript.value) { loadScriptMeta(qScript.value, presetProf, presetCnt); }
         });
     }
+
+    // Опция последовательного запуска в модалке «Импорт профилей»
+    var impSeqCb = document.getElementById('sch-imp-seq');
+    var impSeqOpts = document.getElementById('sch-imp-seq-opts');
+    var impSeqBtn = document.getElementById('sch-imp-submit');
+    var impAt = document.getElementById('sch-imp-at');
+    var impIso = document.getElementById('sch-imp-iso');
+    if (impSeqCb && impSeqOpts) {
+        impSeqCb.addEventListener('change', function () {
+            var on = impSeqCb.checked;
+            impSeqOpts.classList.toggle('d-none', !on);
+            if (impSeqBtn) {
+                impSeqBtn.innerHTML = on
+                    ? '<i class="bi bi-calendar-plus me-1"></i>Импортировать и запланировать'
+                    : '<i class="bi bi-upload me-1"></i>Импортировать профили';
+            }
+        });
+    }
+    if (impAt && impIso) {
+        impAt.addEventListener('input', function () {
+            var d = new Date(impAt.value);
+            impIso.value = isNaN(d) ? '' : d.toISOString();
+        });
+    }
+    document.querySelectorAll('[data-fill-example]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var src = document.getElementById(btn.dataset.fillExample);
+            var dst = document.getElementById(btn.dataset.fillTarget);
+            if (src && dst) { dst.value = src.textContent.trim(); dst.focus(); }
+        });
+    });
+    document.querySelectorAll('[data-copy-example]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var src = document.getElementById(btn.dataset.copyExample);
+            if (!src || !navigator.clipboard) { return; }
+            navigator.clipboard.writeText(src.textContent.trim()).then(function () {
+                var prev = btn.innerHTML;
+                btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Скопировано';
+                setTimeout(function () { btn.innerHTML = prev; }, 1600);
+            });
+        });
+    });
 })();

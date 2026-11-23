@@ -9,9 +9,14 @@
     <div class="d-none" id="run-profile-details" th:text="${profileDetailsJson}">{}</div>
 
     <div class="alert alert-danger" th:if="${blockReason != null}" th:text="${blockReason}"></div>
-    <div class="alert alert-danger" th:each="e : ${errors}">
-        <span th:text="${e}"></span>
-        <a class="alert-link ms-1" th:href="@{/scripts/{id}/load(id=${script.id})}">Открыть нагрузку</a>
+    <div class="alert alert-info py-2 small" th:if="${autoSelectedProfile}">
+        <i class="bi bi-info-circle me-1"></i>Базовая нагрузка скрипта не задана, поэтому автоматически выбран готовый профиль нагрузки — можно сразу запускать или планировать.
+    </div>
+    <div id="run-plan-errors" th:attr="data-load-url=@{/scripts/{id}/load(id=${script.id})}">
+        <div class="alert alert-danger" th:each="e : ${errors}">
+            <span th:text="${e}"></span>
+            <a class="alert-link ms-1" th:href="@{/scripts/{id}/load(id=${script.id})}">Открыть нагрузку</a>
+        </div>
     </div>
     <div class="alert alert-warning py-2" th:each="w : ${warnings}" th:text="${w}"></div>
 
@@ -40,7 +45,7 @@
                             <div class="col-md-6" th:if="${!loadProfiles.isEmpty()}">
                                 <label class="form-label fw-semibold mb-1" for="run-profile"><i class="bi bi-collection me-1 text-primary"></i>Профиль нагрузки</label>
                                 <select class="form-select" name="profile" id="run-profile">
-                                    <option value="">Нагрузка скрипта (как сохранена)</option>
+                                    <option value="" th:text="${baseOk} ? 'Нагрузка скрипта (как сохранена)' : 'Нагрузка скрипта (не описана)'"></option>
                                     <option th:each="p : ${loadProfiles}" th:value="${p.id}" th:text="${p.name}"
                                             th:selected="${selectedProfileId != null and selectedProfileId == p.id}"></option>
                                 </select>
@@ -94,7 +99,7 @@
                         </details>
                     </div>
                     <div class="mt-3 pt-3 border-top d-flex align-items-center gap-2">
-                        <button class="btn btn-success" th:disabled="${generators.isEmpty() or !errors.isEmpty()}">
+                        <button class="btn btn-success" id="btn-run-now" th:attr="data-no-gens=${generators.isEmpty()}" th:disabled="${generators.isEmpty() or !errors.isEmpty()}">
                             <i class="bi bi-play-fill me-1"></i>Запустить сейчас
                         </button>
                         <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
@@ -167,7 +172,7 @@
                          th:attr="data-ops=${profileOpsJson},data-env=${profileEnvJson}">
                         <label class="form-label fw-semibold mb-1" for="sch-profile"><i class="bi bi-collection me-1 text-primary"></i>Профиль нагрузки</label>
                         <select class="form-select form-select-sm" style="max-width:420px" name="profile" id="sch-profile">
-                            <option value="">Нагрузка скрипта (как сохранена на момент запуска)</option>
+                            <option value="" th:text="${baseOk} ? 'Нагрузка скрипта (как сохранена на момент запуска)' : 'Нагрузка скрипта (не описана)'"></option>
                             <option th:each="p : ${loadProfiles}" th:value="${p.id}" th:text="${p.name}"
                                     th:selected="${selectedProfileId != null and selectedProfileId == p.id}"></option>
                         </select>
@@ -195,7 +200,7 @@
                                 <button type="button" class="sch-preset-chip" data-pct-all="200">200%</button>
                             </div>
                         </div>
-                        <div class="text-muted small" th:if="${ops.isEmpty()}">Нагрузка не описана.</div>
+                        <div class="text-muted small" id="sch-ops-empty" th:classappend="${!ops.isEmpty()} ? 'd-none'">Нагрузка не описана.</div>
                         <div class="row g-2" id="sch-ops">
                             <div class="col-md-6" th:each="o : ${ops}">
                                 <div class="input-group input-group-sm">
@@ -222,7 +227,7 @@
                     </details>
 
                     <div class="mt-3 pt-3 border-top">
-                        <button class="btn btn-primary" th:disabled="${generators.isEmpty() or !errors.isEmpty()}">
+                        <button class="btn btn-primary" id="btn-run-sch" th:attr="data-no-gens=${generators.isEmpty()}" th:disabled="${generators.isEmpty() or !errors.isEmpty()}">
                             <i class="bi bi-calendar-plus me-1"></i>Запланировать запуск
                         </button>
                     </div>
@@ -306,10 +311,26 @@
             var sumOps = document.getElementById('sum-ops-list');
             var sumEdit = document.getElementById('sum-edit-link');
             var baseLoadHref = sumEdit ? sumEdit.getAttribute('href') : '';
+            var errBox = document.getElementById('run-plan-errors');
+            var btnRunNow = document.getElementById('btn-run-now');
+            var btnRunSch = document.getElementById('btn-run-sch');
+            var noGens = (btnRunNow && btnRunNow.dataset.noGens === 'true') || (btnRunSch && btnRunSch.dataset.noGens === 'true');
 
             function syncSummary(profileKey) {
                 var d = detailsBy[profileKey || ''] || detailsBy[''];
                 if (!d) { return; }
+                var errs = Array.isArray(d.errors) ? d.errors : [];
+                if (errBox) {
+                    var loadHref = errBox.dataset.loadUrl || baseLoadHref || '';
+                    if (profileKey && loadHref) { loadHref += '?profile=' + encodeURIComponent(profileKey); }
+                    errBox.innerHTML = errs.map(function (e) {
+                        return '<div class="alert alert-danger"><span>' + esc(e) + '</span>' +
+                            (loadHref ? ' <a class="alert-link ms-1" href="' + esc(loadHref) + '">Открыть нагрузку</a>' : '') + '</div>';
+                    }).join('');
+                }
+                var blocked = noGens || errs.length > 0;
+                if (btnRunNow) { btnRunNow.disabled = blocked; }
+                if (btnRunSch) { btnRunSch.disabled = blocked; }
                 if (sumBadge) {
                     sumBadge.textContent = d.title || 'Нагрузка скрипта';
                     sumBadge.className = 'badge ' + (profileKey ? 'text-bg-primary' : 'text-bg-secondary');
@@ -369,6 +390,8 @@
                         + '" aria-label="Процент интенсивности"><span class="input-group-text">%</span></div></div>';
                 });
                 document.getElementById('sch-ops').innerHTML = html;
+                var schEmpty = document.getElementById('sch-ops-empty');
+                if (schEmpty) { schEmpty.classList.toggle('d-none', names.length > 0); }
                 if (env && !document.getElementById('env-custom').checked && envBy[key] !== undefined) { env.value = envBy[key]; }
                 syncSummary(key);
             }

@@ -8,9 +8,11 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
-/** Свои графики отчёта: имя, один или несколько PromQL-запросов (у каждого своя подпись в легенде) и единицы; привязаны к скрипту. */
+/** Свои графики отчёта: имя, один или несколько PromQL-запросов (у каждого своя подпись в легенде), локальные переменные и единицы; привязаны к скрипту. */
 @Repository
 public class ChartTemplateStore {
 
@@ -18,7 +20,12 @@ public class ChartTemplateStore {
     public record Query(String promql, String legend) {
     }
 
-    public record Template(long id, long scriptId, String name, List<Query> queries, String unit, int position, boolean enabled) {
+    public record Template(long id, long scriptId, String name, List<Query> queries, String unit, int position, boolean enabled,
+                           Map<String, String> variables) {
+
+        public Template {
+            variables = variables == null || variables.isEmpty() ? Map.of() : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(variables));
+        }
 
         /** Первый запрос (для краткого показа). */
         public String promql() {
@@ -29,7 +36,39 @@ public class ChartTemplateStore {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final RowMapper<Template> ROWS = (rs, n) -> new Template(rs.getLong("id"), rs.getLong("script_id"), rs.getString("name"),
-            parse(rs.getString("queries"), rs.getString("promql")), rs.getString("unit"), rs.getInt("position"), rs.getBoolean("enabled"));
+            parse(rs.getString("queries"), rs.getString("promql")), rs.getString("unit"), rs.getInt("position"), rs.getBoolean("enabled"),
+            parseVariables(rs.getString("variables")));
+
+    static Map<String, String> parseVariables(String json) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (json != null && !json.isBlank()) {
+            try {
+                JsonNode root = MAPPER.readTree(json);
+                if (root != null && root.isObject()) {
+                    root.fields().forEachRemaining(e -> {
+                        if (e.getKey() != null && !e.getKey().isBlank()) {
+                            out.put(e.getKey().strip(), e.getValue() == null || e.getValue().isNull() ? "" : e.getValue().asText(""));
+                        }
+                    });
+                }
+            } catch (JsonProcessingException ignored) {
+                // битый JSON - пустая карта переменных
+            }
+        }
+        return out;
+    }
+
+    private static String toVariablesJson(Map<String, String> vars) {
+        var obj = MAPPER.createObjectNode();
+        if (vars != null) {
+            vars.forEach((k, v) -> {
+                if (k != null && !k.isBlank()) {
+                    obj.put(k.strip(), v == null ? "" : v);
+                }
+            });
+        }
+        return obj.toString();
+    }
 
     static List<Query> parse(String json, String single) {
         List<Query> out = new ArrayList<>();
@@ -75,13 +114,20 @@ public class ChartTemplateStore {
 
     /** Новый график или обновление существующего с тем же именем. */
     public void save(long scriptId, String name, List<Query> queries, String unit, String user) {
-        save(scriptId, null, name, queries, unit, true, user);
+        save(scriptId, null, name, queries, unit, true, null, user);
     }
 
-    /** Сохранение графика: при заданном id — обновление (включая переименование), иначе — создание или обновление по имени. */
+    /** Сохранение графика без изменения/с передачей переменных (обратная совместимость). */
     public Template save(long scriptId, Long id, String name, List<Query> queries, String unit, Boolean enabled, String user) {
+        return save(scriptId, id, name, queries, unit, enabled, null, user);
+    }
+
+    /** Сохранение графика: при заданном id — обновление (включая переименование и локальные переменные), иначе — создание или обновление по имени. */
+    public Template save(long scriptId, Long id, String name, List<Query> queries, String unit, Boolean enabled,
+                         Map<String, String> variables, String user) {
         String first = queries.get(0).promql();
         String json = toJson(queries);
+        String varsJson = variables == null ? null : toVariablesJson(variables);
         if (id != null) {
             Integer clash = jdbc.queryForObject("select count(*) from chart_template where script_id = ? and name = ? and id <> ?",
                     Integer.class, scriptId, name, id);
@@ -89,9 +135,15 @@ public class ChartTemplateStore {
                 throw new IllegalArgumentException("График с именем «" + name + "» уже существует");
             }
             int upd;
-            if (enabled != null) {
+            if (enabled != null && varsJson != null) {
+                upd = jdbc.update("update chart_template set name = ?, promql = ?, queries = ?, unit = ?, enabled = ?, variables = ? where script_id = ? and id = ?",
+                        name, first, json, unit, enabled, varsJson, scriptId, id);
+            } else if (enabled != null) {
                 upd = jdbc.update("update chart_template set name = ?, promql = ?, queries = ?, unit = ?, enabled = ? where script_id = ? and id = ?",
                         name, first, json, unit, enabled, scriptId, id);
+            } else if (varsJson != null) {
+                upd = jdbc.update("update chart_template set name = ?, promql = ?, queries = ?, unit = ?, variables = ? where script_id = ? and id = ?",
+                        name, first, json, unit, varsJson, scriptId, id);
             } else {
                 upd = jdbc.update("update chart_template set name = ?, promql = ?, queries = ?, unit = ? where script_id = ? and id = ?",
                         name, first, json, unit, scriptId, id);
@@ -102,20 +154,23 @@ public class ChartTemplateStore {
             return get(scriptId, id).orElseThrow();
         }
         boolean en = enabled == null || enabled;
-        int upd = jdbc.update("update chart_template set promql = ?, queries = ?, unit = ?, enabled = ? where script_id = ? and name = ?",
-                first, json, unit, en, scriptId, name);
+        int upd = varsJson != null
+                ? jdbc.update("update chart_template set promql = ?, queries = ?, unit = ?, enabled = ?, variables = ? where script_id = ? and name = ?",
+                        first, json, unit, en, varsJson, scriptId, name)
+                : jdbc.update("update chart_template set promql = ?, queries = ?, unit = ?, enabled = ? where script_id = ? and name = ?",
+                        first, json, unit, en, scriptId, name);
         if (upd == 0) {
             int pos = jdbc.queryForObject("select coalesce(max(position), 0) + 1 from chart_template where script_id = ?", Integer.class, scriptId);
             Long newId = jdbc.queryForObject(
-                    "insert into chart_template (script_id, name, promql, queries, unit, position, enabled, created_by) values (?, ?, ?, ?, ?, ?, ?, ?) returning id",
-                    Long.class, scriptId, name, first, json, unit, pos, en, user);
+                    "insert into chart_template (script_id, name, promql, queries, unit, position, enabled, variables, created_by) values (?, ?, ?, ?, ?, ?, ?, ?, ?) returning id",
+                    Long.class, scriptId, name, first, json, unit, pos, en, varsJson == null ? "{}" : varsJson, user);
             return get(scriptId, newId).orElseThrow();
         }
         List<Template> found = jdbc.query("select * from chart_template where script_id = ? and name = ?", ROWS, scriptId, name);
         return found.get(0);
     }
 
-    /** Создаёт копию существующего графика сразу после оригинала. */
+    /** Создаёт копию существующего графика сразу после оригинала (вместе с его локальными переменными). */
     public Template duplicate(long scriptId, long id, String user) {
         Template src = get(scriptId, id).orElseThrow(() -> new IllegalArgumentException("График не найден"));
         java.util.Set<String> existing = new java.util.HashSet<>();
@@ -127,8 +182,9 @@ public class ChartTemplateStore {
         }
         jdbc.update("update chart_template set position = position + 1 where script_id = ? and position > ?", scriptId, src.position());
         Long newId = jdbc.queryForObject(
-                "insert into chart_template (script_id, name, promql, queries, unit, position, enabled, created_by) values (?, ?, ?, ?, ?, ?, ?, ?) returning id",
-                Long.class, scriptId, copyName, src.promql(), toJson(src.queries()), src.unit(), src.position() + 1, src.enabled(), user);
+                "insert into chart_template (script_id, name, promql, queries, unit, position, enabled, variables, created_by) values (?, ?, ?, ?, ?, ?, ?, ?, ?) returning id",
+                Long.class, scriptId, copyName, src.promql(), toJson(src.queries()), src.unit(), src.position() + 1, src.enabled(),
+                toVariablesJson(src.variables()), user);
         return get(scriptId, newId).orElseThrow();
     }
 

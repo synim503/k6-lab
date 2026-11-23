@@ -65,7 +65,6 @@ public class RunStartController {
         model.addAttribute("freeCount", all.stream().filter(Generator::isAvailableForRuns).count());
         model.addAttribute("ops", plan.operations());
         model.addAttribute("durationSec", totalDurationSec(plan));
-        model.addAttribute("errors", plan.errors());
         model.addAttribute("warnings", plan.warnings());
         model.addAttribute("blockReason", runs.blockReason().orElse(null));
         // запланированные запуски: переменные скрипта для редактирования и уже ожидающие этого скрипта
@@ -76,6 +75,10 @@ public class RunStartController {
         // профили нагрузки для планирования: выбор профиля меняет список операций (интенсивность), переменные и сводку справа
         var profilesList = profileStore.list(id);
         model.addAttribute("loadProfiles", profilesList);
+        model.addAttribute("baseOk", plan.ok());
+        Long selected = (Long) model.getAttribute("selectedProfileId");
+        Long firstValidProfileId = null;
+        java.util.Map<Long, List<String>> errorsByProfileId = new java.util.LinkedHashMap<>();
         try {
             java.util.Map<String, java.util.List<String>> opsByProfile = new java.util.LinkedHashMap<>();
             opsByProfile.put("", plan.operations().stream().map(o -> o.getName()).toList());
@@ -90,8 +93,20 @@ public class RunStartController {
                     var built = load.fromProfile(id, p.id());
                     RunPlan pp = planner.plan(id, script.getGeneratorCount(), built);
                     detailsByProfile.put(String.valueOf(p.id()), summaryOf("Профиль «" + p.name() + "»", pp, built.env().size()));
-                } catch (IllegalArgumentException | IllegalStateException ignored) {
-                    // повреждённый профиль пропускаем в превью
+                    errorsByProfileId.put(p.id(), pp.errors());
+                    if (firstValidProfileId == null && pp.ok()) {
+                        firstValidProfileId = p.id();
+                    }
+                } catch (IllegalArgumentException | IllegalStateException e) {
+                    List<String> errs = List.of(e.getMessage() == null ? "Профиль повреждён" : e.getMessage());
+                    errorsByProfileId.put(p.id(), errs);
+                    java.util.Map<String, Object> bad = new java.util.LinkedHashMap<>();
+                    bad.put("title", "Профиль «" + p.name() + "»");
+                    bad.put("durationSec", 0);
+                    bad.put("envCount", 0);
+                    bad.put("errors", errs);
+                    bad.put("ops", List.of());
+                    detailsByProfile.put(String.valueOf(p.id()), bad);
                 }
             }
             model.addAttribute("profileOpsJson", JSON.writeValueAsString(opsByProfile));
@@ -102,6 +117,16 @@ public class RunStartController {
             model.addAttribute("profileEnvJson", "{}");
             model.addAttribute("profileDetailsJson", "{}");
         }
+        // если базовая нагрузка скрипта не задана, но есть готовые профили — сразу выбираем первый валидный профиль
+        boolean autoSelected = false;
+        if (selected == null && !plan.ok() && firstValidProfileId != null) {
+            selected = firstValidProfileId;
+            autoSelected = true;
+            model.addAttribute("selectedProfileId", selected);
+        }
+        model.addAttribute("autoSelectedProfile", autoSelected);
+        List<String> activeErrors = selected != null ? errorsByProfileId.getOrDefault(selected, List.of()) : plan.errors();
+        model.addAttribute("errors", activeErrors);
     }
 
     private static int totalDurationSec(RunPlan p) {
@@ -190,6 +215,7 @@ public class RunStartController {
             return "redirect:/runs/" + run.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
+            model.addAttribute("selectedProfileId", profile);
             fill(id, model);
             return "scripts/run";
         }

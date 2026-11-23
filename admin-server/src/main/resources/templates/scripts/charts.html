@@ -44,8 +44,9 @@
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" id="cb-presets-menu" style="min-width:300px;max-height:420px;overflow-y:auto"></ul>
                 </div>
-                <button type="button" class="btn btn-outline-secondary btn-sm" id="cb-vars-btn">
-                    <i class="bi bi-braces me-1"></i>Переменные
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="cb-vars-btn"
+                        title="Общие переменные скрипта по умолчанию (используются, если не заданы на конкретном графике)">
+                    <i class="bi bi-braces me-1"></i>Общие переменные
                     <span class="badge text-bg-light ms-1" id="cb-vars-badge">0</span>
                 </button>
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#cb-grafana-modal">
@@ -65,7 +66,7 @@
                         <div class="fw-semibold mb-1"><i class="bi bi-terminal me-1 text-primary"></i>Подстановки в PromQL</div>
                         <div><code>{run_id}</code> — метка <code>test_run_id</code> текущего запуска.</div>
                         <div><code>{range}</code> — окно для <code>rate()</code> / <code>increase()</code> (например <code>45s</code>).</div>
-                        <div><code>$имя</code> / <code>${имя}</code> — переменная скрипта (можно менять в панели «Переменные»).</div>
+                        <div><code>$имя</code> / <code>${имя}</code> — переменная графика (задаётся прямо внутри каждого графика; если не задана — берётся из «Общих переменных» скрипта).</div>
                     </div>
                     <div class="col-md-4">
                         <div class="fw-semibold mb-1"><i class="bi bi-tags me-1 text-primary"></i>Легенда и заголовок</div>
@@ -82,11 +83,11 @@
             </div>
         </div>
 
-        <!-- Сворачиваемая панель переменных -->
+        <!-- Сворачиваемая панель общих переменных -->
         <div class="card cb-vars-card d-none" id="cb-vars-panel">
             <div class="card-header py-2 d-flex align-items-center justify-content-between">
-                <span class="small"><i class="bi bi-braces me-1 text-primary"></i>Переменные графиков скрипта
-                    <span class="text-muted fw-normal ms-1">Подставляются в PromQL как <code>$имя</code> или <code>${имя}</code></span></span>
+                <span class="small"><i class="bi bi-braces me-1 text-primary"></i>Общие переменные скрипта (по умолчанию)
+                    <span class="text-muted fw-normal ms-1">Подставляются, если переменная не задана у конкретного графика</span></span>
                 <button type="button" class="btn-close btn-sm" id="cb-vars-close" aria-label="Скрыть"></button>
             </div>
             <div class="card-body py-2">
@@ -215,6 +216,22 @@
                         </button>
                     </div>
                     <div class="cb-queries" id="cb-queries"></div>
+                </div>
+
+                <!-- Секция 2.5: Переменные конкретного графика -->
+                <div class="cb-section" id="cb-chart-vars-section">
+                    <div class="cb-section-head">
+                        <span class="cb-section-label">
+                            <i class="bi bi-sliders text-primary"></i>Переменные этого графика
+                            <span class="badge text-bg-light" id="cb-cv-count">0</span>
+                        </span>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="cb-cv-add-btn">
+                            <i class="bi bi-plus-lg me-1"></i>Переменная
+                        </button>
+                    </div>
+                    <div class="small text-muted mb-2">Действуют только на этот график (перекрывают общие переменные скрипта). Удобно дублировать одну панель с разными <code>$instance</code>, <code>$job</code>, <code>$pod</code> и т.д.</div>
+                    <div class="d-none mb-2 d-flex flex-wrap align-items-center gap-1" id="cb-cv-hints"></div>
+                    <div class="cb-cv-rows" id="cb-cv-rows"></div>
                 </div>
 
                 <!-- Секция 3: Живой WYSIWYG-предпросмотр -->

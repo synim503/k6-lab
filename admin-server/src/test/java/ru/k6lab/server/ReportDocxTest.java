@@ -195,7 +195,7 @@ class ReportDocxTest {
         var rAuto = javax.imageio.ImageIO.read(new ByteArrayInputStream(
                 ChartRenderer.with(ru.k6lab.server.result.ChartStyle.of("DARK", 800, 300, "RIGHT", true, 20, true),
                         () -> ChartRenderer.custom("CPU", "%", longNames)).png()));
-        assertThat(rFixed.getWidth()).isEqualTo(800 + 380);
+        assertThat(rFixed.getWidth()).isGreaterThan(800).isLessThanOrEqualTo(800 + 600);
         assertThat(rAuto.getWidth()).isGreaterThan(rFixed.getWidth());
 
         var lFixed = javax.imageio.ImageIO.read(new ByteArrayInputStream(

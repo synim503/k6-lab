@@ -119,6 +119,9 @@
             var span = hours * 3600000;
             var w1 = w0 + span, rows = 0, html = '';
             var stepMs = hours <= 3 ? 1800000 : hours <= 12 ? 3600000 : hours <= 24 ? 10800000 : 43200000;
+            var trkW = Math.max(120, (body.clientWidth || 700) - 230);
+            var minTickPx = hours > 24 ? 88 : 54;
+            while ((span / stepMs) > 2 && (trkW / (span / stepMs)) < minTickPx) { stepMs *= 2; }
             var mid = new Date(w0); mid.setHours(0, 0, 0, 0);
             var t = mid.getTime() + Math.ceil((w0 - mid.getTime()) / stepMs) * stepMs, ticks = [];
             for (; t < w1; t += stepMs) { ticks.push(t); }

@@ -94,6 +94,11 @@ public class ScheduledRunStore {
         return jdbc.query("select * from scheduled_run where id = ?", rows, id).stream().findFirst();
     }
 
+    /** Все активные записи расписания (PENDING и STARTING) по времени запуска — без ограничения limit. */
+    public List<Item> active() {
+        return jdbc.query("select * from scheduled_run where status in ('PENDING', 'STARTING') order by run_at asc", rows);
+    }
+
     /** Последние записи: сначала ожидающие по времени запуска, затем остальные от новых к старым. */
     public List<Item> recent(int limit) {
         return jdbc.query("select * from scheduled_run order by (status = 'PENDING') desc, "

@@ -25,7 +25,7 @@
         <div class="table-responsive" th:unless="${scripts.isEmpty()}"><table class="table table-hover align-middle mb-0" id="scripts-table">
             <thead><tr><th>Скрипт</th><th>Версия</th><th class="text-end">Операций</th><th>Состояние</th><th>Обновлён</th><th></th></tr></thead>
             <tbody>
-            <tr th:each="s : ${scripts}" th:with="v=${latest.get(s.id)}" class="run-row" th:attr="data-href=@{/scripts/{id}(id=${s.id})}" th:data-name="${#strings.toLowerCase(s.name)}">
+            <tr th:each="s : ${scripts}" th:with="v=${latest.get(s.id)},pCnt=${profileCounts.getOrDefault(s.id, 0)},ready=${loadDefined.get(s.id) or pCnt > 0}" class="run-row" th:attr="data-href=@{/scripts/{id}(id=${s.id})}" th:data-name="${#strings.toLowerCase(s.name)}">
                 <td><a class="fw-semibold" th:href="@{/scripts/{id}(id=${s.id})}" th:text="${s.name}"></a>
                     <div class="small text-muted text-truncate" style="max-width:420px" th:if="${s.description != null and !s.description.isBlank()}" th:text="${s.description}"></div></td>
                 <td class="text-nowrap"><span th:text="${v != '' ? 'v' + v.number : '—'}"></span>
@@ -33,14 +33,15 @@
                 <td class="num" th:text="${v != '' ? v.operations.size() : '—'}"></td>
                 <td><span class="badge text-bg-primary" th:if="${runningIds.contains(s.id)}"><span class="dot dot-busy me-1" style="width:7px;height:7px"></span>выполняется</span>
                     <span class="badge text-bg-success" th:if="${!runningIds.contains(s.id) and loadDefined.get(s.id)}">готов к запуску</span>
-                    <a class="badge text-bg-warning" th:if="${!loadDefined.get(s.id)}" th:href="@{/scripts/{id}/load(id=${s.id})}" title="Укажите, что и как нагружать">нужно описать нагрузку</a></td>
+                    <span class="badge text-bg-success" th:if="${!runningIds.contains(s.id) and !loadDefined.get(s.id) and pCnt > 0}" th:text="'готов · профили: ' + ${pCnt}"></span>
+                    <a class="badge text-bg-warning" th:if="${!ready}" th:href="@{/scripts/{id}/load(id=${s.id})}" title="Укажите, что и как нагружать">нужно описать нагрузку</a></td>
                 <td class="text-muted small text-nowrap" th:text="${#temporals.format(s.updatedAt, 'dd.MM.yyyy HH:mm')}"></td>
                 <td class="text-end text-nowrap">
                     <form class="d-inline" th:if="${runningIds.contains(s.id)}" th:action="@{/scripts/{id}/stop(id=${s.id})}" method="post"
                           onsubmit="return confirm('Остановить выполняющийся скрипт?')">
                         <button class="btn btn-sm btn-outline-danger"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form>
-                    <a class="btn btn-sm btn-success" th:if="${!runningIds.contains(s.id) and loadDefined.get(s.id)}" th:href="@{/scripts/{id}/run(id=${s.id})}"><i class="bi bi-play-fill me-1"></i>Запустить</a>
-                    <a class="btn btn-sm btn-outline-primary" th:if="${!loadDefined.get(s.id)}" th:href="@{/scripts/{id}/load(id=${s.id})}">Описать нагрузку</a></td>
+                    <a class="btn btn-sm btn-success" th:if="${!runningIds.contains(s.id) and ready}" th:href="@{/scripts/{id}/run(id=${s.id})}"><i class="bi bi-play-fill me-1"></i>Запустить</a>
+                    <a class="btn btn-sm btn-outline-primary" th:if="${!ready}" th:href="@{/scripts/{id}/load(id=${s.id})}">Описать нагрузку</a></td>
             </tr></tbody></table></div>
     </div>
     <p class="text-muted small mt-3">k6 на сервере (для проверки скриптов):

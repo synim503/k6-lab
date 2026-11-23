@@ -1730,6 +1730,46 @@
     if (impModal && impModal.dataset.autoOpen === 'true') {
         bootstrap.Modal.getOrCreateInstance(impModal).show();
     }
+    var impSeqCb = document.getElementById('ld-imp-seq');
+    var impSeqOpts = document.getElementById('ld-imp-seq-opts');
+    var impSeqBtn = document.getElementById('ld-imp-submit');
+    var impAt = document.getElementById('ld-imp-at');
+    var impIso = document.getElementById('ld-imp-iso');
+    if (impSeqCb && impSeqOpts) {
+        impSeqCb.addEventListener('change', function () {
+            var on = impSeqCb.checked;
+            impSeqOpts.classList.toggle('d-none', !on);
+            if (impSeqBtn) {
+                impSeqBtn.innerHTML = on
+                    ? '<i class="bi bi-calendar-plus me-1"></i>Импортировать и запланировать'
+                    : '<i class="bi bi-upload me-1"></i>Импортировать';
+            }
+        });
+    }
+    if (impAt && impIso) {
+        impAt.addEventListener('input', function () {
+            var d = new Date(impAt.value);
+            impIso.value = isNaN(d) ? '' : d.toISOString();
+        });
+    }
+    document.querySelectorAll('[data-fill-example]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var src = document.getElementById(btn.dataset.fillExample);
+            var dst = document.getElementById(btn.dataset.fillTarget);
+            if (src && dst) { dst.value = src.textContent.trim(); dst.focus(); }
+        });
+    });
+    document.querySelectorAll('[data-copy-example]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var src = document.getElementById(btn.dataset.copyExample);
+            if (!src || !navigator.clipboard) { return; }
+            navigator.clipboard.writeText(src.textContent.trim()).then(function () {
+                var prev = btn.innerHTML;
+                btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Скопировано';
+                setTimeout(function () { btn.innerHTML = prev; }, 1600);
+            });
+        });
+    });
 
     // ==================== Dirty State, Submit & Profiles ====================
     var form = body.closest('form');

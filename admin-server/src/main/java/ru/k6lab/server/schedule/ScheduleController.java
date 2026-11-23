@@ -50,18 +50,47 @@ public class ScheduleController {
         this.generators = generators;
     }
 
-    /** Общий импорт профилей разных скриптов: у каждого профиля в JSON указан script. */
+    /** Общий импорт профилей разных скриптов: у каждого профиля в JSON указан script. Опционально сразу планирует последовательный запуск. */
     @PostMapping("/schedule/import-profiles")
     public String importProfiles(@RequestParam(required = false) String json,
                                  @RequestParam(required = false) org.springframework.web.multipart.MultipartFile file,
+                                 @RequestParam(defaultValue = "false") boolean scheduleSequential,
+                                 @RequestParam(required = false) String runAt,
+                                 @RequestParam(required = false) Integer count,
+                                 @RequestParam(defaultValue = "5") int gapMinutes,
+                                 @RequestParam(defaultValue = "false") boolean shift,
                                  Principal user, RedirectAttributes ra) {
+        String by = user == null ? "system" : user.getName();
+        List<ru.k6lab.server.load.ProfileImportService.Imported> done;
         try {
             String body = file != null && !file.isEmpty() ? new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8) : json;
-            var done = profileImport.importProfiles(null, body, user == null ? "system" : user.getName());
-            ra.addFlashAttribute("info", "Импортировано профилей: " + done.size());
+            done = profileImport.importProfiles(null, body, by);
         } catch (IllegalArgumentException | IllegalStateException | java.io.IOException e) {
             ra.addFlashAttribute("error", "Импорт профилей не выполнен, ничего не сохранено. " + e.getMessage());
             ra.addFlashAttribute("importProfilesJson", json);
+            return "redirect:/schedule";
+        }
+        String baseMsg = "Импортировано профилей: " + done.size();
+        if (!scheduleSequential) {
+            ra.addFlashAttribute("info", baseMsg);
+            return "redirect:/schedule";
+        }
+        try {
+            Instant firstAt = null;
+            if (runAt != null && !runAt.isBlank()) {
+                try {
+                    firstAt = Instant.parse(runAt.trim());
+                } catch (DateTimeParseException e) {
+                    throw new IllegalArgumentException("Некорректная дата и время старта");
+                }
+            }
+            var specs = done.stream()
+                    .map(x -> new ScheduledRunService.SequentialSpec(x.scriptId(), x.profileId()))
+                    .toList();
+            var ids = service.scheduleSequential(specs, firstAt, count, Math.max(5, gapMinutes) * 60, shift, by);
+            ra.addFlashAttribute("info", baseMsg + ". Запланировано последовательно: " + ids.size() + " (пауза " + Math.max(5, gapMinutes) + " мин).");
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", baseMsg + ", но последовательный запуск не запланирован: " + e.getMessage());
         }
         return "redirect:/schedule";
     }
@@ -70,10 +99,11 @@ public class ScheduleController {
     @PostMapping("/schedule/import")
     public String importTests(@RequestParam(required = false) String json,
                               @RequestParam(required = false) org.springframework.web.multipart.MultipartFile file,
+                              @RequestParam(required = false) Integer gapMinutes,
                               Principal user, RedirectAttributes ra) {
         try {
             String body = file != null && !file.isEmpty() ? new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8) : json;
-            var created = importer.importTests(body, user == null ? "system" : user.getName());
+            var created = importer.importTests(body, gapMinutes, user == null ? "system" : user.getName());
             ra.addFlashAttribute("info", "Запланировано тестов: " + created.size());
         } catch (IllegalArgumentException | IllegalStateException | java.io.IOException e) {
             ra.addFlashAttribute("error", "Импорт не выполнен, ничего не запланировано. " + e.getMessage());
@@ -107,8 +137,17 @@ public class ScheduleController {
 
     @PostMapping("/schedule/resume")
     public String resume(Principal user, RedirectAttributes ra) {
-        int moved = service.resume(user == null ? "system" : user.getName());
-        ra.addFlashAttribute("info", "Пауза снята" + (moved > 0 ? ": записей, время которых прошло, перенесено на ближайшее свободное время: " + moved : ""));
+        var res = service.resume(user == null ? "system" : user.getName());
+        String msg;
+        if (res.startedRunId() != null) {
+            msg = "Пауза снята: сразу запущен тест «" + res.startedName() + "» (запуск #" + res.startedRunId() + ")"
+                    + (res.moved() > 0 ? ", сдвинуто в очереди: " + res.moved() : "");
+        } else if (res.moved() > 0) {
+            msg = "Пауза снята: генераторы заняты, записей в очереди перенесено на ближайшее свободное время: " + res.moved();
+        } else {
+            msg = "Пауза снята";
+        }
+        ra.addFlashAttribute("info", msg);
         return "redirect:/schedule";
     }
 
@@ -159,12 +198,14 @@ public class ScheduleController {
                         : (pp.steps() == null ? 0 : pp.steps().stream().mapToInt(ru.k6lab.core.profile.StepPlan::totalSec).sum());
                 pm.put("ops", pp.operations().stream().map(ru.k6lab.server.load.LoadOperation::getName).toList());
                 pm.put("durationSec", pdur);
+                pm.put("errors", pp.errors());
                 StringBuilder penv = new StringBuilder();
                 built.env().forEach((k, v) -> penv.append(k).append('=').append(v).append('\n'));
                 pm.put("envText", penv.toString());
             } catch (IllegalArgumentException | IllegalStateException e) {
                 pm.put("ops", List.of());
                 pm.put("durationSec", 0);
+                pm.put("errors", List.of(e.getMessage() == null ? "Профиль повреждён" : e.getMessage()));
                 pm.put("envText", "");
             }
             profs.add(pm);

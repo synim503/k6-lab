@@ -48,11 +48,14 @@ public class LoadController {
     private final AdminHelper helper;
     private final LoadProfileStore profiles;
     private final ProfileImportService profileImport;
+    private final ru.k6lab.server.schedule.ScheduledRunService scheduledRuns;
 
     public LoadController(ScriptService scripts, LoadService load, RunPlanner planner, SecretService secrets, K6Tool k6,
-                          AdminHelper helper, LoadProfileStore profiles, ProfileImportService profileImport) {
+                          AdminHelper helper, LoadProfileStore profiles, ProfileImportService profileImport,
+                          ru.k6lab.server.schedule.ScheduledRunService scheduledRuns) {
         this.profiles = profiles;
         this.profileImport = profileImport;
+        this.scheduledRuns = scheduledRuns;
         this.scripts = scripts;
         this.load = load;
         this.planner = planner;
@@ -66,6 +69,7 @@ public class LoadController {
                        @RequestParam(required = false) Long profile, Model model) {
         // без параметра - число генераторов, заданное в скрипте
         LoadForm f = load.toForm(id);
+        Long loadedProfileId = null;
         if (profile != null) {
             // профиль открывается в форме, но нагрузка скрипта не меняется, пока не нажато «Сохранить нагрузку»
             var p = profiles.find(id, profile);
@@ -73,8 +77,9 @@ public class LoadController {
                 try {
                     f = LoadJson.fromJson(p.get().data());
                     load.completeWithScriptFunctions(id, f);
+                    loadedProfileId = p.get().id();
                     model.addAttribute("loadedProfile", p.get().name());
-                    model.addAttribute("loadedProfileId", p.get().id());
+                    model.addAttribute("loadedProfileId", loadedProfileId);
                     model.addAttribute("formDirty", true);
                     model.addAttribute("info", "Открыт профиль «" + p.get().name() + "». В нагрузку скрипта он попадёт после «Сохранить нагрузку».");
                 } catch (IllegalArgumentException e) {
@@ -84,7 +89,7 @@ public class LoadController {
                 model.addAttribute("error", "Профиль не найден");
             }
         }
-        fill(model, id, f, generators != null ? generators : scripts.get(id).getGeneratorCount());
+        fill(model, id, f, generators != null ? generators : scripts.get(id).getGeneratorCount(), loadedProfileId);
         return "scripts/load";
     }
 
@@ -101,6 +106,7 @@ public class LoadController {
     @PostMapping("/load/profile")
     public String saveProfile(@PathVariable Long id, @ModelAttribute("form") LoadForm f, @RequestParam String profileName,
                               java.security.Principal user, Model model) {
+        Long savedProfileId = null;
         try {
             String name = profileName == null ? "" : profileName.strip();
             if (name.isEmpty() || name.length() > 120) {
@@ -113,32 +119,63 @@ public class LoadController {
             }
             LoadForm toStore = LoadJson.fromJson(LoadJson.toJson(f));
             var saved = profiles.save(id, name, LoadJson.toJson(toStore), user == null ? "system" : user.getName());
+            savedProfileId = saved.id();
             model.addAttribute("info", (saved.updated() ? "Профиль «" + name + "» обновлён" : "Профиль «" + name + "» сохранён"));
             model.addAttribute("loadedProfile", name);
-            model.addAttribute("loadedProfileId", saved.id());
+            model.addAttribute("loadedProfileId", savedProfileId);
             model.addAttribute("formDirty", true);
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
         }
-        fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()));
+        fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()), savedProfileId);
         return "scripts/load";
     }
 
-    /** Импорт профилей скрипта из JSON (текстом или файлом); всё или ничего. */
+    /** Импорт профилей скрипта из JSON (текстом или файлом); всё или ничего. Опционально сразу планирует их последовательный запуск. */
     @PostMapping("/load/profiles/import")
     public String importProfiles(@PathVariable Long id, @RequestParam(required = false) String json,
                                  @RequestParam(required = false) org.springframework.web.multipart.MultipartFile file,
+                                 @RequestParam(defaultValue = "false") boolean scheduleSequential,
+                                 @RequestParam(required = false) String runAt,
+                                 @RequestParam(required = false) Integer count,
+                                 @RequestParam(defaultValue = "5") int gapMinutes,
+                                 @RequestParam(defaultValue = "false") boolean shift,
                                  java.security.Principal user, RedirectAttributes ra) {
+        String by = user == null ? "system" : user.getName();
+        List<ProfileImportService.Imported> done;
         try {
             String body = file != null && !file.isEmpty() ? new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8) : json;
-            var done = profileImport.importProfiles(id, body, user == null ? "system" : user.getName());
-            long upd = done.stream().filter(ProfileImportService.Imported::updated).count();
-            ra.addFlashAttribute("info", "Импортировано профилей: " + done.size() + (upd > 0 ? " (обновлено существующих: " + upd + ")" : ""));
+            done = profileImport.importProfiles(id, body, by);
         } catch (IllegalArgumentException | IllegalStateException | java.io.IOException e) {
             ra.addFlashAttribute("error", "Импорт профилей не выполнен, ничего не сохранено. " + e.getMessage());
             ra.addFlashAttribute("importJson", json);
+            return "redirect:/scripts/" + id + "/load";
         }
-        return "redirect:/scripts/" + id + "/load";
+        long upd = done.stream().filter(ProfileImportService.Imported::updated).count();
+        String baseMsg = "Импортировано профилей: " + done.size() + (upd > 0 ? " (обновлено существующих: " + upd + ")" : "");
+        if (!scheduleSequential) {
+            ra.addFlashAttribute("info", baseMsg);
+            return "redirect:/scripts/" + id + "/load";
+        }
+        try {
+            java.time.Instant firstAt = null;
+            if (runAt != null && !runAt.isBlank()) {
+                try {
+                    firstAt = java.time.Instant.parse(runAt.trim());
+                } catch (java.time.format.DateTimeParseException e) {
+                    throw new IllegalArgumentException("Некорректная дата и время старта");
+                }
+            }
+            var specs = done.stream()
+                    .map(x -> new ru.k6lab.server.schedule.ScheduledRunService.SequentialSpec(x.scriptId(), x.profileId()))
+                    .toList();
+            var ids = scheduledRuns.scheduleSequential(specs, firstAt, count, Math.max(5, gapMinutes) * 60, shift, by);
+            ra.addFlashAttribute("info", baseMsg + ". Запланировано последовательно: " + ids.size() + " (пауза " + Math.max(5, gapMinutes) + " мин).");
+            return "redirect:/schedule";
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", baseMsg + ", но последовательный запуск не запланирован: " + e.getMessage());
+            return "redirect:/scripts/" + id + "/load";
+        }
     }
 
     /** Профили скрипта в формате импорта. */
@@ -319,14 +356,30 @@ public class LoadController {
     }
 
     private void fill(Model model, Long id, LoadForm f, int generators) {
+        fill(model, id, f, generators, null);
+    }
+
+    private void fill(Model model, Long id, LoadForm f, int generators, Long loadedProfileId) {
         var profList = profiles.list(id);
+        int gens = Math.max(1, generators);
         model.addAttribute("profiles", profList);
         model.addAttribute("profilesJson", profilesJson(profList));
         model.addAttribute("formJson", LoadJson.toJson(f));
-        RunPlan plan = planner.plan(id, Math.max(1, generators));
+        RunPlan plan = planFor(id, gens, loadedProfileId);
+        boolean baseDefined = load.isDefined(id);
+        boolean hasReadyProfile = !baseDefined && profList.stream().anyMatch(p -> {
+            try {
+                return planner.plan(id, gens, load.fromProfile(id, p.id())).ok();
+            } catch (IllegalArgumentException e) {
+                return false;
+            }
+        });
         model.addAttribute("script", scripts.get(id));
         model.addAttribute("form", f);
         model.addAttribute("plan", plan);
+        model.addAttribute("planFromProfile", loadedProfileId != null);
+        model.addAttribute("baseDefined", baseDefined);
+        model.addAttribute("hasReadyProfile", hasReadyProfile);
         model.addAttribute("generators", plan.generatorCount());
         model.addAttribute("secretNames", secrets.list().stream().map(Secret::getName).toList());
         model.addAttribute("modes", ScriptDataFile.Mode.values());
@@ -343,21 +396,38 @@ public class LoadController {
         }
     }
 
+    /** План запуска для базовой нагрузки скрипта или открытого профиля. */
+    private RunPlan planFor(Long id, int generators, Long profileId) {
+        int gens = Math.max(1, generators);
+        if (profileId == null) {
+            return planner.plan(id, gens);
+        }
+        try {
+            return planner.plan(id, gens, load.fromProfile(id, profileId));
+        } catch (IllegalArgumentException e) {
+            var script = scripts.get(id);
+            var version = scripts.latest(id).orElse(null);
+            return new RunPlan(script, version, List.of(), List.of(), RunPlanner.GRACEFUL_STOP_SEC, RunPlanner.GRACEFUL_RAMP_DOWN_SEC,
+                    null, null, null, List.of(e.getMessage()), List.of(), gens, null, List.of());
+        }
+    }
+
     @GetMapping(value = "/config.json", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> configJson(@PathVariable Long id) {
-        RunPlan plan = planner.plan(id, scripts.get(id).getGeneratorCount());
+    public ResponseEntity<String> configJson(@PathVariable Long id, @RequestParam(required = false) Long profile) {
+        RunPlan plan = planFor(id, scripts.get(id).getGeneratorCount(), profile);
         if (plan.configJson() == null) {
             return ResponseEntity.unprocessableEntity().body("{\"error\":\"" + String.join("; ", plan.errors()).replace("\"", "'") + "\"}");
         }
+        String fname = profile == null ? "k6-config-" + id + ".json" : "k6-config-" + id + "-profile-" + profile + ".json";
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("k6-config-" + id + ".json").build().toString())
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(fname).build().toString())
                 .body(plan.configJson());
     }
 
     /** «Требования к ресурсам»: k6 inspect --execution-requirements с итоговым конфигом (htmx). */
     @PostMapping("/requirements")
-    public String requirements(@PathVariable Long id, Model model) {
-        RunPlan plan = planner.plan(id, scripts.get(id).getGeneratorCount());
+    public String requirements(@PathVariable Long id, @RequestParam(required = false) Long profile, Model model) {
+        RunPlan plan = planFor(id, scripts.get(id).getGeneratorCount(), profile);
         if (plan.configJson() == null || plan.version() == null) {
             model.addAttribute("error", String.join("; ", plan.errors()));
             return "scripts/_requirements :: requirements";

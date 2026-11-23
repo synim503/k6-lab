@@ -7,6 +7,11 @@
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='load')}"></th:block>
 
     <div class="alert alert-danger py-2" th:each="e : ${plan.errors}" th:text="${e}"></div>
+    <div class="alert alert-info py-2 small d-flex flex-wrap align-items-center justify-content-between gap-2"
+         th:if="${!baseDefined and hasReadyProfile and loadedProfileId == null}">
+        <span><i class="bi bi-collection me-1"></i>Базовая нагрузка скрипта не задана, но у скрипта есть готовые профили (<b th:text="${profiles.size()}"></b>) — можно запускать тест прямо по любому профилю или выбрать профиль ниже, чтобы посмотреть его конфиг k6.</span>
+        <a class="btn btn-sm btn-success" th:href="@{/scripts/{id}/run(id=${script.id})}"><i class="bi bi-play-fill me-1"></i>Запустить по профилю</a>
+    </div>
     <div class="alert alert-warning py-2 small" th:if="${!staleOps.isEmpty()}">
         <i class="bi bi-info-circle me-1"></i>В последней версии скрипта нет функций операций:
         <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
@@ -435,14 +440,152 @@
                     </div>
                     <label class="form-label small mb-1" for="ld-import-json">Или вставьте JSON-текст</label>
                     <textarea class="form-control form-control-sm font-monospace" id="ld-import-json" name="json" rows="7" th:text="${importJson}"
-                              placeholder='[{"name": "Максимум", "operations": [{"name": "work", "execFn": "work", "ratePerSec": 40}], "env": {"BASE": "x"}}]'></textarea>
+                              placeholder='{"profiles": [{"name": "Поиск максимума", "operations": [...], "env": {...}, "stop": {...}}]}'></textarea>
+
+                    <details class="mt-2 border rounded p-2 bg-light-subtle">
+                        <summary class="small fw-semibold text-primary" style="cursor:pointer">
+                            <i class="bi bi-code-square me-1"></i>Полный пример JSON (все доступные параметры: ступени, прогрев, SLA, env/секреты, файлы данных, автостоп)
+                        </summary>
+                        <div class="d-flex justify-content-end gap-2 mt-2 mb-1">
+                            <button type="button" class="btn btn-outline-primary btn-sm py-0 px-2" data-fill-example="ld-imp-example" data-fill-target="ld-import-json">
+                                <i class="bi bi-arrow-up-circle me-1"></i>Вставить в поле
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" data-copy-example="ld-imp-example">
+                                <i class="bi bi-clipboard me-1"></i>Копировать
+                            </button>
+                        </div>
+                        <pre class="mb-0 p-2 rounded border bg-white font-monospace" id="ld-imp-example" style="font-size:.73rem;max-height:260px;overflow:auto">{
+  "profiles": [
+    {
+      "name": "Поиск максимума (3 ступени)",
+      "generatorCount": 2,
+      "operations": [
+        {
+          "name": "createOrder",
+          "execFn": "createOrder",
+          "enabled": true,
+          "executor": "ramping-arrival-rate",
+          "scenario": {
+            "startRate": 0,
+            "timeUnit": "1s",
+            "preAllocatedVUs": 20,
+            "maxVUs": 120,
+            "startTime": "0s",
+            "gracefulStop": "30s",
+            "warmup": { "stages": 1 },
+            "stages": [
+              { "duration": "2m", "target": 30 },
+              { "duration": "0s", "target": 100 },
+              { "duration": "5m", "target": 100 },
+              { "duration": "0s", "target": 120 },
+              { "duration": "5m", "target": 120 },
+              { "duration": "0s", "target": 140 },
+              { "duration": "5m", "target": 140 }
+            ],
+            "tags": { "profile": "max" }
+          },
+          "slaPercentile": 95,
+          "slaThresholdMs": 500,
+          "maxErrorPct": 1.0,
+          "failureSource": "HTTP"
+        }
+      ],
+      "env": {
+        "BASE_URL": "https://stand.example",
+        "API_TOKEN": "${secret:API_TOKEN}"
+      },
+      "dataFiles": [
+        {
+          "path": "data/users.csv",
+          "mode": "SPLIT",
+          "hasHeader": true,
+          "consumed": true
+        }
+      ],
+      "stop": {
+        "rateEnabled": true,
+        "minRatePct": 90,
+        "droppedEnabled": true,
+        "maxDroppedPct": 1,
+        "errorsEnabled": true,
+        "percentileEnabled": true,
+        "slaMultiplier": 1.5,
+        "consecutive": 4,
+        "windowSec": 60
+      }
+    },
+    {
+      "name": "Стабильность 1ч (постоянная нагрузка)",
+      "operations": [
+        {
+          "name": "createOrder",
+          "execFn": "createOrder",
+          "enabled": true,
+          "executor": "constant-arrival-rate",
+          "scenario": {
+            "rate": 80,
+            "timeUnit": "1s",
+            "duration": "1h",
+            "preAllocatedVUs": 15,
+            "maxVUs": 80,
+            "warmup": { "duration": "2m" }
+          },
+          "slaPercentile": 99,
+          "slaThresholdMs": 800,
+          "maxErrorPct": 0.5,
+          "failureSource": "CHECKS"
+        }
+      ],
+      "env": {
+        "BASE_URL": "https://stand.example"
+      },
+      "stop": {
+        "errorsEnabled": true,
+        "consecutive": 4,
+        "windowSec": 60
+      }
+    }
+  ]
+}</pre>
+                    </details>
+
+                    <div class="mt-3 p-3 rounded border bg-light-subtle">
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" type="checkbox" role="switch" id="ld-imp-seq" name="scheduleSequential" value="true">
+                            <label class="form-check-label fw-semibold small" for="ld-imp-seq">
+                                <i class="bi bi-list-ol me-1 text-primary"></i>Сразу запланировать последовательный запуск всех импортированных профилей
+                            </label>
+                        </div>
+                        <div class="small text-muted mt-1">Тесты встанут в расписание строго друг за другом в порядке из JSON (следующий начнётся после завершения предыдущего + пауза).</div>
+                        <div class="row g-2 mt-2 d-none" id="ld-imp-seq-opts">
+                            <div class="col-md-5">
+                                <label class="form-label small mb-1" for="ld-imp-at">Старт первого теста (пусто — сразу)</label>
+                                <input class="form-control form-control-sm" type="datetime-local" id="ld-imp-at">
+                                <input type="hidden" name="runAt" id="ld-imp-iso">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small mb-1" for="ld-imp-gap">Пауза между тестами, мин</label>
+                                <input class="form-control form-control-sm" type="number" min="5" max="120" value="5" name="gapMinutes" id="ld-imp-gap">
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small mb-1" for="ld-imp-cnt">Генераторов (пусто — как в скрипте)</label>
+                                <input class="form-control form-control-sm" type="number" min="1" name="count" id="ld-imp-cnt" th:placeholder="${script.generatorCount}">
+                            </div>
+                            <div class="col-12">
+                                <div class="form-check form-switch m-0">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="ld-imp-shift" name="shift" value="true" checked>
+                                    <label class="form-check-label small" for="ld-imp-shift">Сдвигать следующий тест вперёд, если предыдущий закончится раньше плана</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <a class="btn btn-outline-secondary btn-sm me-auto" th:href="@{/scripts/{id}/load/profiles.json(id=${script.id})}">
                         <i class="bi bi-download me-1"></i>Скачать текущие профили
                     </a>
                     <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
-                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать</button>
+                    <button type="submit" class="btn btn-primary btn-sm" id="ld-imp-submit"><i class="bi bi-upload me-1"></i>Импортировать</button>
                 </div>
             </form>
         </div>
@@ -451,36 +594,56 @@
     <!-- Для опытных: итоговый конфиг k6 и ресурсы -->
     <details class="adv-box mt-4" id="adv-box" th:attr="data-open=${configTabOpen != null}">
         <summary><i class="bi bi-sliders2 me-1"></i>Для опытных: конфиг k6 и ресурсы
+            <span class="badge text-bg-info ms-2" th:if="${planFromProfile and loadedProfile != null}" th:text="'профиль: ' + ${loadedProfile}"></span>
             <span class="badge text-bg-warning ms-2" th:if="${!plan.warnings.isEmpty()}" th:text="${plan.warnings.size()} + ' ' + (${plan.warnings.size() == 1} ? 'замечание' : 'замечаний')"></span>
             <span class="badge text-bg-primary ms-2" th:if="${!overridePaths.isEmpty()}">есть ручные правки</span></summary>
         <div class="pt-3">
             <div class="alert alert-warning py-2 small" th:each="w : ${plan.warnings}" th:text="${w}"></div>
-            <ul class="nav nav-tabs mb-3">
-                <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#t-config" type="button">Конфиг k6</button></li>
-                <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t-req" type="button">Требования к ресурсам</button></li>
+            <ul class="nav nav-tabs mb-3" id="adv-tabs">
+                <li class="nav-item"><button class="nav-link active" id="adv-tab-config" data-bs-toggle="tab" data-bs-target="#t-config" type="button">Конфиг k6</button></li>
+                <li class="nav-item"><button class="nav-link" id="adv-tab-req" data-bs-toggle="tab" data-bs-target="#t-req" type="button">Требования к ресурсам</button></li>
             </ul>
             <div class="tab-content">
                 <div class="tab-pane fade show active" id="t-config">
-                    <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!overridePaths.isEmpty()}">
+                    <div class="alert alert-info py-2 small" th:if="${planFromProfile}">
+                        <i class="bi bi-collection me-1"></i>Показан расчётный конфиг k6 для открытого профиля
+                        <strong th:if="${loadedProfile != null}" th:text="'«' + ${loadedProfile} + '»'"></strong> (режим просмотра).
+                        Чтобы вносить и сохранять ручные правки поверх расчётного конфига, сначала нажмите «Сохранить нагрузку».
+                    </div>
+                    <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!planFromProfile and !overridePaths.isEmpty()}">
                         <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
                         <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" onsubmit="return confirm('Сбросить ручные правки и вернуть расчётный конфиг?')">
                             <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button>
                         </form>
                     </div>
-                    <div class="small text-muted mb-2">Итоговый конфиг k6, который уйдёт на генераторы. Правится только то, чего нет в конструкторе: сохраняется лишь отличие от расчётного конфига, поэтому правки остаются при изменении операций. Конфиг проверяет сам k6.</div>
-                    <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post">
-                        <input type="hidden" name="config" id="cfg-value">
-                        <div id="config-editor" style="height: 55vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden"
-                             th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson}"></div>
-                        <div class="d-flex gap-2 mt-2 align-items-center">
-                            <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Сохранить конфиг</button>
-                            <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/config.json(id=${script.id})}">Скачать</a>
-                        </div>
-                    </form>
+                    <div class="alert alert-secondary py-2 small mb-0" th:if="${editedConfig == null and plan.configJson == null}">
+                        <div class="fw-semibold mb-1"><i class="bi bi-info-circle me-1"></i>Конфиг k6 пока не сформирован</div>
+                        <ul class="mb-0 ps-3" th:unless="${plan.errors.isEmpty()}">
+                            <li th:each="e : ${plan.errors}" th:text="${e}"></li>
+                        </ul>
+                        <div th:if="${plan.errors.isEmpty()}">Включите хотя бы одну операцию и нажмите «Сохранить нагрузку» (или откройте готовый профиль выше).</div>
+                    </div>
+                    <th:block th:if="${editedConfig != null or plan.configJson != null}">
+                        <div class="small text-muted mb-2" th:unless="${planFromProfile}">Итоговый конфиг k6, который уйдёт на генераторы. Правится только то, чего нет в конструкторе: сохраняется лишь отличие от расчётного конфига, поэтому правки остаются при изменении операций. Конфиг проверяет сам k6.</div>
+                        <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post">
+                            <input type="hidden" name="config" id="cfg-value" th:value="${editedConfig != null ? editedConfig : plan.configJson}">
+                            <div id="config-editor" style="height: 55vh; min-height: 320px; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden"
+                                 th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson},
+                                          data-readonly=${planFromProfile},
+                                          data-vs-base=@{/webjars/monaco-editor/min/vs}"></div>
+                            <div class="d-flex gap-2 mt-2 align-items-center">
+                                <button class="btn btn-primary btn-sm" th:unless="${planFromProfile}"><i class="bi bi-check-lg me-1"></i>Сохранить конфиг</button>
+                                <a class="btn btn-sm btn-outline-secondary"
+                                   th:href="${loadedProfileId != null} ? @{/scripts/{id}/config.json(id=${script.id},profile=${loadedProfileId})} : @{/scripts/{id}/config.json(id=${script.id})}">
+                                    <i class="bi bi-download me-1"></i>Скачать
+                                </a>
+                            </div>
+                        </form>
+                    </th:block>
                 </div>
                 <div class="tab-pane fade" id="t-req">
                     <button class="btn btn-outline-primary btn-sm mb-2" type="button" hx-post=""
-                            th:attr="hx-post=@{/scripts/{id}/requirements(id=${script.id})}"
+                            th:attr="hx-post=${loadedProfileId != null} ? @{/scripts/{id}/requirements(id=${script.id},profile=${loadedProfileId})} : @{/scripts/{id}/requirements(id=${script.id})}"
                             hx-target="#req-out" hx-indicator="#req-out">Рассчитать (k6 inspect --execution-requirements)</button>
                     <div id="req-out"></div>
                 </div>
@@ -494,19 +657,118 @@
     <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script th:inline="none">
         (function () {
-            var adv = document.getElementById('adv-box'), box = document.getElementById('config-editor'), ed = null;
-            if (adv && (location.hash === '#t-config' || adv.dataset.open === 'true')) { adv.open = true; }
-            if (!box || !window.require) { return; }
-            var base = location.origin + '/webjars/monaco-editor/min/vs';
-            require.config({paths: {vs: base}});
-            window.MonacoEnvironment = {getWorkerUrl: function () {
-                return 'data:text/javascript;charset=utf-8,' + encodeURIComponent("self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
-            }};
-            require(['vs/editor/editor.main'], function () {
-                ed = monaco.editor.create(box, {value: box.dataset.config || '', language: 'json', automaticLayout: true, minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
-                document.getElementById('cfg-form').addEventListener('submit', function () { document.getElementById('cfg-value').value = ed.getValue(); });
-                if (adv) { adv.addEventListener('toggle', function () { ed.layout(); }); }
-            });
+            var adv = document.getElementById('adv-box');
+            var box = document.getElementById('config-editor');
+            var cfgForm = document.getElementById('cfg-form');
+            var cfgVal = document.getElementById('cfg-value');
+            var ed = null, fallbackTa = null, loading = false;
+
+            function relayout() {
+                if (!ed) { return; }
+                requestAnimationFrame(function () {
+                    if (ed) { ed.layout(); }
+                });
+                setTimeout(function () {
+                    if (ed) { ed.layout(); }
+                }, 80);
+            }
+
+            function mountFallback(text, readOnly) {
+                if (!box || fallbackTa || ed) { return; }
+                box.innerHTML = '';
+                var ta = document.createElement('textarea');
+                ta.className = 'form-control font-monospace border-0 rounded-0 h-100 w-100';
+                ta.style.cssText = 'resize:none;background:#1e1e1e;color:#d4d4d4;font-size:13px;padding:12px;';
+                ta.value = text;
+                ta.readOnly = readOnly;
+                box.appendChild(ta);
+                fallbackTa = ta;
+            }
+
+            function ensureEditor() {
+                if (!box || ed || fallbackTa || loading) {
+                    relayout();
+                    return;
+                }
+                if (adv && !adv.open) { return; }
+                var initial = box.dataset.config || (cfgVal ? cfgVal.value : '') || '';
+                var readOnly = box.dataset.readonly === 'true';
+                if (!window.require) {
+                    mountFallback(initial, readOnly);
+                    return;
+                }
+                loading = true;
+                var vsPath = box.dataset.vsBase || '/webjars/monaco-editor/min/vs';
+                var base = new URL(vsPath, location.origin).href.replace(/\/+$/, '');
+                require.config({paths: {vs: base}});
+                window.MonacoEnvironment = {
+                    getWorkerUrl: function () {
+                        return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(
+                            "self.MonacoEnvironment={baseUrl:'" + base + "/../'};importScripts('" + base + "/base/worker/workerMain.js');");
+                    }
+                };
+                require(['vs/editor/editor.main'], function () {
+                    loading = false;
+                    if (!box || ed) { return; }
+                    ed = monaco.editor.create(box, {
+                        value: initial,
+                        language: 'json',
+                        readOnly: readOnly,
+                        automaticLayout: true,
+                        minimap: {enabled: false},
+                        theme: 'vs-dark',
+                        tabSize: 2,
+                        scrollBeyondLastLine: false
+                    });
+                    relayout();
+                }, function () {
+                    loading = false;
+                    mountFallback(initial, readOnly);
+                });
+            }
+
+            if (cfgForm && cfgVal) {
+                cfgForm.addEventListener('submit', function () {
+                    if (ed) { cfgVal.value = ed.getValue(); }
+                    else if (fallbackTa) { cfgVal.value = fallbackTa.value; }
+                });
+            }
+
+            function openConfigSection() {
+                if (!adv) { return; }
+                adv.open = true;
+                var tabBtn = document.getElementById('adv-tab-config');
+                if (tabBtn && window.bootstrap && bootstrap.Tab) {
+                    bootstrap.Tab.getOrCreateInstance(tabBtn).show();
+                }
+                ensureEditor();
+                relayout();
+            }
+
+            if (adv) {
+                adv.addEventListener('toggle', function () {
+                    if (adv.open) {
+                        ensureEditor();
+                        relayout();
+                    }
+                });
+                var tabBtn = document.getElementById('adv-tab-config');
+                if (tabBtn) {
+                    tabBtn.addEventListener('shown.bs.tab', function () {
+                        ensureEditor();
+                        relayout();
+                    });
+                }
+                document.querySelectorAll('a[href="#adv-box"], a[href="#t-config"]').forEach(function (a) {
+                    a.addEventListener('click', function () { openConfigSection(); });
+                });
+                window.addEventListener('hashchange', function () {
+                    if (location.hash === '#adv-box' || location.hash === '#t-config') { openConfigSection(); }
+                });
+                if (location.hash === '#t-config' || location.hash === '#adv-box' || adv.dataset.open === 'true') {
+                    openConfigSection();
+                }
+            }
         })();
     </script>
 </th:block>

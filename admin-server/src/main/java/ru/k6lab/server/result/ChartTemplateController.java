@@ -46,10 +46,12 @@ public class ChartTemplateController {
     public record QueryDto(String promql, String legend) {
     }
 
-    public record SaveChartReq(Long id, String name, String unit, Boolean enabled, List<QueryDto> queries) {
+    public record SaveChartReq(Long id, String name, String unit, Boolean enabled, List<QueryDto> queries,
+                               Map<String, String> variables) {
     }
 
-    public record PreviewReq(String name, String unit, List<QueryDto> queries, Long runId, Integer minutes) {
+    public record PreviewReq(String name, String unit, List<QueryDto> queries, Map<String, String> variables,
+                             Long runId, Integer minutes) {
     }
 
     public record IdsReq(List<Long> ids) {
@@ -114,7 +116,10 @@ public class ChartTemplateController {
                         + (res.skipped().isEmpty() ? "" : ". Пропущено: " + String.join("; ", res.skipped())));
             }
             String by = user == null ? "system" : user.getName();
-            res.panels().forEach(pn -> store.save(id, pn.name(), pn.queries(), pn.unit().isEmpty() ? null : pn.unit(), by));
+            for (var pn : res.panels()) {
+                Map<String, String> panelVars = panelVariables(pn, res.variables());
+                store.save(id, null, pn.name(), pn.queries(), pn.unit().isEmpty() ? null : pn.unit(), true, panelVars, by);
+            }
             long newVars = res.variables().entrySet().stream().filter(e -> variables.addIfAbsent(id, e.getKey(), e.getValue())).count();
             ra.addFlashAttribute("info", "Из дашборда" + (res.dashboardTitle().isBlank() ? "" : " «" + res.dashboardTitle() + "»")
                     + " создано графиков: " + res.panels().size()
@@ -125,6 +130,31 @@ public class ChartTemplateController {
             ra.addFlashAttribute("grafanaJson", json);
         }
         return "redirect:/scripts/" + id + "/charts";
+    }
+
+    private static final Pattern VAR_REF = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)(?::[^}]*)?}|\\$([A-Za-z_][A-Za-z0-9_]*)");
+
+    /** Отбирает из переменных дашборда Grafana те, что реально используются в имени или PromQL конкретной панели. */
+    private static Map<String, String> panelVariables(GrafanaDashboardImport.Panel pn, Map<String, String> dashVars) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (dashVars == null || dashVars.isEmpty()) {
+            return out;
+        }
+        java.util.function.Consumer<String> scan = txt -> {
+            if (txt == null || txt.isEmpty()) {
+                return;
+            }
+            var m = VAR_REF.matcher(txt);
+            while (m.find()) {
+                String k = m.group(1) != null ? m.group(1) : m.group(2);
+                if (k != null && dashVars.containsKey(k)) {
+                    out.putIfAbsent(k, dashVars.get(k));
+                }
+            }
+        };
+        scan.accept(pn.name());
+        pn.queries().forEach(q -> scan.accept(q.promql()));
+        return out;
     }
 
     /** Сохранение через стандартную HTML-форму (обратная совместимость). */
@@ -221,9 +251,15 @@ public class ChartTemplateController {
         if (err != null) {
             return ResponseEntity.badRequest().body(Map.of("ok", false, "error", err));
         }
+        Map<String, String> chartVars;
+        try {
+            chartVars = cleanChartVars(req.variables());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("ok", false, "error", e.getMessage()));
+        }
         try {
             boolean isUpdate = req.id() != null;
-            ChartTemplateStore.Template saved = store.save(id, req.id(), n, queries, u, req.enabled(),
+            ChartTemplateStore.Template saved = store.save(id, req.id(), n, queries, u, req.enabled(), chartVars,
                     user == null ? "system" : user.getName());
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("ok", true);
@@ -234,6 +270,24 @@ public class ChartTemplateController {
         } catch (IllegalArgumentException | org.springframework.dao.InvalidDataAccessApiUsageException e) {
             return ResponseEntity.badRequest().body(Map.of("ok", false, "error", rootMessage(e)));
         }
+    }
+
+    private static Map<String, String> cleanChartVars(Map<String, String> raw) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (raw == null) {
+            return out;
+        }
+        for (var e : raw.entrySet()) {
+            String k = e.getKey() == null ? "" : e.getKey().strip().replaceFirst("^\\$", "");
+            if (k.isEmpty()) {
+                continue;
+            }
+            if (!VAR_NAME.matcher(k).matches()) {
+                throw new IllegalArgumentException("Имя переменной «" + k + "»: буквы, цифры и _, не с цифры (в запросе пишется $имя)");
+            }
+            out.put(k, e.getValue() == null ? "" : e.getValue().strip());
+        }
+        return out;
     }
 
     @PostMapping("/scripts/{id}/charts/api/{tid}/toggle")
@@ -299,7 +353,14 @@ public class ChartTemplateController {
             return new CustomChartService.PreviewResult(false, req.name() == null ? "" : req.name(), null, "", 0, 0,
                     "Добавьте хотя бы один PromQL-запрос для предпросмотра", List.of());
         }
-        return customCharts.preview(id, req.name(), req.unit(), queries, req.runId(), req.minutes());
+        Map<String, String> chartVars;
+        try {
+            chartVars = cleanChartVars(req.variables());
+        } catch (IllegalArgumentException e) {
+            return new CustomChartService.PreviewResult(false, req.name() == null ? "" : req.name(), null, "", 0, 0,
+                    e.getMessage(), List.of());
+        }
+        return customCharts.preview(id, req.name(), req.unit(), queries, chartVars, req.runId(), req.minutes());
     }
 
     @GetMapping("/scripts/{id}/charts/api/metrics")

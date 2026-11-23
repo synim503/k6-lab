@@ -40,11 +40,14 @@ public class ScriptController {
     private final AdminHelper helper;
     private final K6Tool k6;
     private final LoadService load;
+    private final ru.k6lab.server.load.LoadProfileStore profiles;
     private final RunService runs;
 
     public ScriptController(ScriptService service, GitRepoService gitRepos,
-                            AdminHelper helper, K6Tool k6, LoadService load, RunService runs) {
+                            AdminHelper helper, K6Tool k6, LoadService load,
+                            ru.k6lab.server.load.LoadProfileStore profiles, RunService runs) {
         this.load = load;
+        this.profiles = profiles;
         this.runs = runs;
         this.service = service;
         this.gitRepos = gitRepos;
@@ -62,6 +65,7 @@ public class ScriptController {
                 s -> service.latest(s.getId()).map(v -> (Object) v).orElse(""))));
         model.addAttribute("k6Version", k6.version().orElse(null));
         model.addAttribute("loadDefined", all.stream().collect(java.util.stream.Collectors.toMap(Script::getId, x -> load.isDefined(x.getId()))));
+        model.addAttribute("profileCounts", profiles.countsByScript());
         model.addAttribute("runningIds", runningScriptIds());
         return "scripts/list";
     }
@@ -123,6 +127,7 @@ public class ScriptController {
         List<LoadOperation> ops = load.activeOperations(id);
         model.addAttribute("ops", ops);
         model.addAttribute("loadDefined", ops.stream().anyMatch(LoadOperation::isEnabled));
+        model.addAttribute("profiles", profiles.list(id));
         model.addAttribute("running", runningScriptIds().contains(id));
         model.addAttribute("history", runs.search(id, null, 20));
         model.addAttribute("fmt", new ru.k6lab.server.result.ReportFormat());

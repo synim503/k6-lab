@@ -39,7 +39,7 @@
             <b><i class="bi bi-pause-circle me-1"></i>Планировщик на паузе.</b>
             Новые запуски по расписанию не стартуют, записи ждут.
             <span th:if="${!activeRuns.isEmpty()}">Идёт тест (<a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id} + (${st.last} ? '' : ', ')"></a>): он закончится сам.</span>
-            <span th:if="${activeRuns.isEmpty()}">При снятии паузы записи, время которых прошло, встанут на ближайшее свободное время.</span>
+            <span th:if="${activeRuns.isEmpty()}">При снятии паузы первый тест из очереди запустится сразу, а остальные сдвинутся следом.</span>
         </div>
         <form class="m-0" th:action="@{/schedule/resume}" method="post">
             <button class="btn btn-success btn-sm"><i class="bi bi-play-fill me-1"></i>Снять с паузы</button>
@@ -320,21 +320,60 @@
                 </div>
                 <div class="modal-body">
                     <div class="small text-muted mb-3">
-                        Каждый тест — скрипт и профиль нагрузки; все тесты сразу планируются на ближайшее свободное время с паузой 5 минут.
-                        Необязательные поля: <code>runAt</code>, <code>generators</code>, <code>count</code>, <code>env</code>, <code>shift</code>.
+                        Каждый тест — скрипт и профиль нагрузки; тесты без <code>runAt</code> встают в расписание строго друг за другом с паузой не менее 5 минут.
+                        Необязательные поля: <code>gapMinutes</code>, <code>runAt</code>, <code>generators</code>, <code>count</code>, <code>env</code>, <code>shift</code>.
                     </div>
                     <div class="dropzone mb-3" id="sch-imp-tests-dz">
                         <i class="bi bi-filetype-json"></i>
                         <div id="sch-imp-tests-lbl">Перетащите JSON-файл списка тестов сюда или <u>выберите на компьютере</u></div>
                         <input class="d-none" type="file" name="file" id="sch-imp-tests-file" accept=".json,application/json">
                     </div>
-                    <label class="form-label small mb-1">Или вставьте JSON-текст</label>
-                    <textarea class="form-control form-control-sm font-monospace" name="json" rows="7" th:text="${importJson}"
-                              placeholder='[
-  {"script": "Платежи", "profile": "Максимальная"},
-  {"script": "Платежи", "profile": "Стабильность 4ч", "runAt": "2026-11-22T22:00:00+03:00"},
-  {"script": "Каталог", "profile": "Базовая", "count": 2}
-]'></textarea>
+                    <label class="form-label small mb-1" for="sch-imp-tests-json">Или вставьте JSON-текст</label>
+                    <textarea class="form-control form-control-sm font-monospace" id="sch-imp-tests-json" name="json" rows="7" th:text="${importJson}"
+                              placeholder='{"gapMinutes": 5, "tests": [{"script": "Платежи", "profile": "Максимальная"}, ...]}'></textarea>
+                    <div class="d-flex align-items-center gap-2 mt-2">
+                        <label class="form-label small mb-0 text-nowrap" for="sch-imp-tests-gap">Пауза между тестами без <code>runAt</code>, мин:</label>
+                        <input class="form-control form-control-sm" style="width:90px" type="number" min="5" max="120" value="5" name="gapMinutes" id="sch-imp-tests-gap">
+                    </div>
+                    <details class="mt-2 border rounded p-2 bg-light-subtle">
+                        <summary class="small fw-semibold text-primary" style="cursor:pointer">
+                            <i class="bi bi-code-square me-1"></i>Полный пример JSON (все поля: gapMinutes, script, profile, runAt, count, generators, env/секреты, shift)
+                        </summary>
+                        <div class="d-flex justify-content-end gap-2 mt-2 mb-1">
+                            <button type="button" class="btn btn-outline-primary btn-sm py-0 px-2" data-fill-example="sch-tests-example" data-fill-target="sch-imp-tests-json">
+                                <i class="bi bi-arrow-up-circle me-1"></i>Вставить в поле
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" data-copy-example="sch-tests-example">
+                                <i class="bi bi-clipboard me-1"></i>Копировать
+                            </button>
+                        </div>
+                        <pre class="mb-0 p-2 rounded border bg-white font-monospace" id="sch-tests-example" style="font-size:.73rem;max-height:240px;overflow:auto">{
+  "gapMinutes": 5,
+  "tests": [
+    {
+      "script": "Платежи",
+      "profile": "Поиск максимума (3 ступени)",
+      "count": 2,
+      "shift": true
+    },
+    {
+      "script": "Платежи",
+      "profile": "Стабильность 1ч",
+      "runAt": "2026-11-23T22:00:00+03:00",
+      "generators": ["gen-01", "gen-02"],
+      "env": {
+        "BASE_URL": "https://stand.example",
+        "API_TOKEN": "${secret:API_TOKEN}"
+      },
+      "shift": false
+    },
+    {
+      "script": "Каталог",
+      "count": 1
+    }
+  ]
+}</pre>
+                    </details>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
@@ -363,13 +402,152 @@
                         <div id="sch-imp-prof-lbl">Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u></div>
                         <input class="d-none" type="file" name="file" id="sch-imp-prof-file" accept=".json,application/json">
                     </div>
-                    <label class="form-label small mb-1">Или вставьте JSON-текст</label>
-                    <textarea class="form-control form-control-sm font-monospace" name="json" rows="7" th:text="${importProfilesJson}"
-                              placeholder='[{"script": "Платежи", "name": "Максимум", "operations": [{"name": "pay", "execFn": "pay", "ratePerSec": 40}]}]'></textarea>
+                    <label class="form-label small mb-1" for="sch-imp-prof-json">Или вставьте JSON-текст</label>
+                    <textarea class="form-control form-control-sm font-monospace" id="sch-imp-prof-json" name="json" rows="7" th:text="${importProfilesJson}"
+                              placeholder='{"profiles": [{"script": "Платежи", "name": "Максимум", "operations": [...], "env": {...}, "stop": {...}}]}'></textarea>
+                    <details class="mt-2 border rounded p-2 bg-light-subtle">
+                        <summary class="small fw-semibold text-primary" style="cursor:pointer">
+                            <i class="bi bi-code-square me-1"></i>Полный пример JSON (все параметры: script, ступени, прогрев, SLA, env/секреты, файлы данных, автостоп)
+                        </summary>
+                        <div class="d-flex justify-content-end gap-2 mt-2 mb-1">
+                            <button type="button" class="btn btn-outline-primary btn-sm py-0 px-2" data-fill-example="sch-prof-example" data-fill-target="sch-imp-prof-json">
+                                <i class="bi bi-arrow-up-circle me-1"></i>Вставить в поле
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" data-copy-example="sch-prof-example">
+                                <i class="bi bi-clipboard me-1"></i>Копировать
+                            </button>
+                        </div>
+                        <pre class="mb-0 p-2 rounded border bg-white font-monospace" id="sch-prof-example" style="font-size:.73rem;max-height:240px;overflow:auto">{
+  "profiles": [
+    {
+      "script": "Платежи",
+      "name": "Поиск максимума (3 ступени)",
+      "generatorCount": 2,
+      "operations": [
+        {
+          "name": "pay",
+          "execFn": "pay",
+          "enabled": true,
+          "executor": "ramping-arrival-rate",
+          "scenario": {
+            "startRate": 0,
+            "timeUnit": "1s",
+            "preAllocatedVUs": 20,
+            "maxVUs": 120,
+            "startTime": "0s",
+            "gracefulStop": "30s",
+            "warmup": { "stages": 1 },
+            "stages": [
+              { "duration": "2m", "target": 30 },
+              { "duration": "0s", "target": 100 },
+              { "duration": "5m", "target": 100 },
+              { "duration": "0s", "target": 120 },
+              { "duration": "5m", "target": 120 },
+              { "duration": "0s", "target": 140 },
+              { "duration": "5m", "target": 140 }
+            ],
+            "tags": { "profile": "max" }
+          },
+          "slaPercentile": 95,
+          "slaThresholdMs": 500,
+          "maxErrorPct": 1.0,
+          "failureSource": "HTTP"
+        }
+      ],
+      "env": {
+        "BASE_URL": "https://stand.example",
+        "API_TOKEN": "${secret:API_TOKEN}"
+      },
+      "dataFiles": [
+        {
+          "path": "data/users.csv",
+          "mode": "SPLIT",
+          "hasHeader": true,
+          "consumed": true
+        }
+      ],
+      "stop": {
+        "rateEnabled": true,
+        "minRatePct": 90,
+        "droppedEnabled": true,
+        "maxDroppedPct": 1,
+        "errorsEnabled": true,
+        "percentileEnabled": true,
+        "slaMultiplier": 1.5,
+        "consecutive": 4,
+        "windowSec": 60
+      }
+    },
+    {
+      "script": "Каталог",
+      "name": "Стабильность 1ч",
+      "operations": [
+        {
+          "name": "catalog",
+          "execFn": "catalog",
+          "enabled": true,
+          "executor": "constant-arrival-rate",
+          "scenario": {
+            "rate": 80,
+            "timeUnit": "1s",
+            "duration": "1h",
+            "preAllocatedVUs": 15,
+            "maxVUs": 80,
+            "warmup": { "duration": "2m" }
+          },
+          "slaPercentile": 99,
+          "slaThresholdMs": 800,
+          "maxErrorPct": 0.5,
+          "failureSource": "CHECKS"
+        }
+      ],
+      "env": {
+        "BASE_URL": "https://stand.example"
+      },
+      "stop": {
+        "errorsEnabled": true,
+        "consecutive": 4,
+        "windowSec": 60
+      }
+    }
+  ]
+}</pre>
+                    </details>
+
+                    <div class="mt-3 p-3 rounded border bg-light-subtle">
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" type="checkbox" role="switch" id="sch-imp-seq" name="scheduleSequential" value="true">
+                            <label class="form-check-label fw-semibold small" for="sch-imp-seq">
+                                <i class="bi bi-list-ol me-1 text-primary"></i>Сразу запланировать последовательный запуск всех импортированных профилей
+                            </label>
+                        </div>
+                        <div class="small text-muted mt-1">Тесты встанут в расписание строго друг за другом в порядке из JSON (следующий начнётся после завершения предыдущего + пауза).</div>
+                        <div class="row g-2 mt-2 d-none" id="sch-imp-seq-opts">
+                            <div class="col-md-5">
+                                <label class="form-label small mb-1" for="sch-imp-at">Старт первого теста (пусто — сразу)</label>
+                                <input class="form-control form-control-sm" type="datetime-local" id="sch-imp-at">
+                                <input type="hidden" name="runAt" id="sch-imp-iso">
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label small mb-1" for="sch-imp-gap">Пауза между тестами, мин</label>
+                                <input class="form-control form-control-sm" type="number" min="5" max="120" value="5" name="gapMinutes" id="sch-imp-gap">
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label small mb-1" for="sch-imp-cnt">Генераторов (пусто — как в скрипте)</label>
+                                <input class="form-control form-control-sm" type="number" min="1" name="count" id="sch-imp-cnt" placeholder="из скрипта">
+                            </div>
+                            <div class="col-12">
+                                <div class="form-check form-switch m-0">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="sch-imp-shift" name="shift" value="true" checked>
+                                    <label class="form-check-label small" for="sch-imp-shift">Сдвигать следующий тест вперёд, если предыдущий закончится раньше плана</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Отмена</button>
-                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i>Импортировать профили</button>
+                    <button type="submit" class="btn btn-primary btn-sm" id="sch-imp-submit"><i class="bi bi-upload me-1"></i>Импортировать профили</button>
                 </div>
             </form>
         </div>

@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 /**
@@ -33,6 +34,35 @@ public class ScheduleTimelineService {
     static final int TAIL_SEC = 300;
     /** Если длительность запланированного запуска не удалось рассчитать. */
     static final int FALLBACK_SEC = 30 * 60;
+
+    /** Лёгкий снимок занятости генераторов для быстрого расчёта слотов (в памяти, без повторных запросов к БД и планировщику). */
+    static final class Snapshot {
+        record GenSlot(long id, String name, boolean online, int slots) {
+        }
+
+        record SlotBar(long fromMs, long toMs, Long generatorId, Long scheduleId, int count) {
+        }
+
+        final List<GenSlot> generators;
+        final List<SlotBar> bars;
+
+        Snapshot(List<GenSlot> generators, List<SlotBar> bars) {
+            this.generators = generators;
+            this.bars = bars;
+        }
+
+        void book(long scheduleId, List<Long> genIds, Instant runAt, int durationSec) {
+            long from = runAt.toEpochMilli();
+            long to = from + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
+            if (genIds == null || genIds.isEmpty()) {
+                bars.add(new SlotBar(from, to, null, scheduleId, 1));
+            } else {
+                for (Long gid : genIds) {
+                    bars.add(new SlotBar(from, to, gid, scheduleId, 1));
+                }
+            }
+        }
+    }
 
     private final RunService runs;
     private final ScheduledRunStore store;
@@ -107,10 +137,7 @@ public class ScheduleTimelineService {
         }
 
         Map<String, Integer> durations = new HashMap<>();
-        for (ScheduledRunStore.Item it : store.recent(200)) {
-            if (it.status() != ScheduledRunStore.Status.PENDING && it.status() != ScheduledRunStore.Status.STARTING) {
-                continue;
-            }
+        for (ScheduledRunStore.Item it : store.active()) {
             int n = !it.generatorIds().isEmpty() ? it.generatorIds().size() : it.generatorCount() == null ? 1 : it.generatorCount();
             int sec = durations.computeIfAbsent(it.scriptId() + ":" + it.profileId() + ":" + n,
                     k -> durationSec(it.scriptId(), it.profileId(), n));
@@ -139,39 +166,126 @@ public class ScheduleTimelineService {
     }
 
     /**
-     * Бронирование при планировании: выбирает n генераторов, свободных на весь интервал запуска (с запасом на остановку).
-     * Генератор свободен, если он в сети, не на обслуживании и занятых на этот интервал слотов меньше, чем у него всего
-     * (запуски и уже забронированные записи расписания). Старые записи «любые свободные» вычитаются из общего числа.
-     *
-     * @throws IllegalArgumentException если свободных генераторов на это время не хватает
+     * Снимок занятости генераторов для расчёта слотов и сдвига очереди: активные запуски, недавно завершившиеся запуски
+     * (держат 5-минутную паузу охлаждения после окончания, чтобы сдвиг очереди не запускал следующий тест вплотную)
+     * и все ожидающие/стартующие записи расписания.
      */
-    /**
-     * Самое раннее время не раньше notBefore, когда свободны выбранные генераторы (ids) или любые n штук (ids пусты) на весь запуск с паузой.
-     * Кандидаты: сам notBefore и моменты окончания существующих полос (с учётом паузы).
-     */
-    public Instant earliestSlot(List<Long> ids, int n, int durationSec, Instant notBefore) {
-        List<Long> cand = new ArrayList<>();
-        cand.add(notBefore.toEpochMilli());
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> bars = (List<Map<String, Object>>) overview().get("bars");
-        for (Map<String, Object> b : bars) {
-            long to = (long) b.get("to");
-            if (to > notBefore.toEpochMilli()) {
-                cand.add(to);
+    Snapshot snapshot() {
+        long now = Instant.now().toEpochMilli();
+        List<Generator> all = generators.findAll().stream().sorted(Comparator.comparing(Generator::getName)).toList();
+        List<Snapshot.GenSlot> gens = new ArrayList<>(all.size());
+        for (Generator g : all) {
+            gens.add(new Snapshot.GenSlot(g.getId(), g.getName(),
+                    g.getStatus() == Generator.Status.ONLINE && !g.isMaintenance(),
+                    Math.max(1, g.getMaxConcurrentRuns())));
+        }
+        List<Snapshot.SlotBar> bars = new ArrayList<>();
+        java.util.Set<Long> activeRunIds = new java.util.HashSet<>();
+        for (Run r : runs.activeRuns()) {
+            activeRunIds.add(r.getId());
+            long from = (r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getStartedAt() != null ? r.getStartedAt() : r.getQueuedAt())
+                    .toEpochMilli();
+            long span = ConfigDuration.of(r.getK6Config()).totalSec();
+            long to = Math.max(now + 30_000, from + (span + TAIL_SEC) * 1000L);
+            for (RunGenerator rg : runs.generatorsOf(r.getId())) {
+                if (rg.getGeneratorId() != null && !rg.getStatus().isDone()) {
+                    bars.add(new Snapshot.SlotBar(from, to, rg.getGeneratorId(), null, 1));
+                }
             }
         }
-        cand.sort(Long::compare);
+        // недавно завершившиеся запуски держат паузу TAIL_SEC (5 мин) на своих генераторах, чтобы shiftQueue не запускал следующий тест без перерыва
+        long cooldownCutoff = now - TAIL_SEC * 1000L;
+        for (Run r : runs.search(null, null, 20)) {
+            if (activeRunIds.contains(r.getId()) || r.getFinishedAt() == null) {
+                continue;
+            }
+            long fin = r.getFinishedAt().toEpochMilli();
+            if (fin <= cooldownCutoff) {
+                continue;
+            }
+            long to = fin + TAIL_SEC * 1000L;
+            for (RunGenerator rg : runs.generatorsOf(r.getId())) {
+                if (rg.getGeneratorId() != null) {
+                    bars.add(new Snapshot.SlotBar(fin, to, rg.getGeneratorId(), null, 1));
+                }
+            }
+        }
+        Map<String, Integer> durations = new HashMap<>();
+        for (ScheduledRunStore.Item it : store.active()) {
+            int n = !it.generatorIds().isEmpty() ? it.generatorIds().size() : it.generatorCount() == null ? 1 : it.generatorCount();
+            int sec = durations.computeIfAbsent(it.scriptId() + ":" + it.profileId() + ":" + n,
+                    k -> durationSec(it.scriptId(), it.profileId(), n));
+            long from = it.runAt().toEpochMilli();
+            long to = from + (sec + TAIL_SEC) * 1000L;
+            if (it.generatorIds().isEmpty()) {
+                bars.add(new Snapshot.SlotBar(from, to, null, it.id(), n));
+            } else {
+                for (Long gid : it.generatorIds()) {
+                    bars.add(new Snapshot.SlotBar(from, to, gid, it.id(), 1));
+                }
+            }
+        }
+        return new Snapshot(gens, bars);
+    }
+
+    /**
+     * Снимок только активных (текущих) запусков — без ожидающих записей расписания и без остывания завершившихся тестов.
+     * Используется при снятии паузы для перекладки всей очереди в исходном порядке.
+     */
+    Snapshot snapshotRunningOnly() {
+        long now = Instant.now().toEpochMilli();
+        List<Generator> all = generators.findAll().stream().sorted(Comparator.comparing(Generator::getName)).toList();
+        List<Snapshot.GenSlot> gens = new ArrayList<>(all.size());
+        for (Generator g : all) {
+            gens.add(new Snapshot.GenSlot(g.getId(), g.getName(),
+                    g.getStatus() == Generator.Status.ONLINE && !g.isMaintenance(),
+                    Math.max(1, g.getMaxConcurrentRuns())));
+        }
+        List<Snapshot.SlotBar> bars = new ArrayList<>();
+        for (Run r : runs.activeRuns()) {
+            long from = (r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getStartedAt() != null ? r.getStartedAt() : r.getQueuedAt())
+                    .toEpochMilli();
+            long span = ConfigDuration.of(r.getK6Config()).totalSec();
+            long to = Math.max(now + 30_000, from + (span + TAIL_SEC) * 1000L);
+            for (RunGenerator rg : runs.generatorsOf(r.getId())) {
+                if (rg.getGeneratorId() != null && !rg.getStatus().isDone()) {
+                    bars.add(new Snapshot.SlotBar(from, to, rg.getGeneratorId(), null, 1));
+                }
+            }
+        }
+        return new Snapshot(gens, bars);
+    }
+
+    int durationSecFor(ScheduledRunStore.Item it) {
+        int n = !it.generatorIds().isEmpty() ? it.generatorIds().size() : it.generatorCount() == null ? 1 : it.generatorCount();
+        return durationSec(it.scriptId(), it.profileId(), Math.max(1, n));
+    }
+
+    /**
+     * Самое раннее время не раньше notBefore, когда свободны выбранные генераторы (ids) или любые n штук (ids пусты) на весь запуск с паузой.
+     * Кандидаты: сам notBefore и уникальные моменты окончания существующих полос (с учётом паузы).
+     */
+    public Instant earliestSlot(List<Long> ids, int n, int durationSec, Instant notBefore) {
+        return earliestSlot(snapshot(), ids, n, durationSec, notBefore);
+    }
+
+    Instant earliestSlot(Snapshot snap, List<Long> ids, int n, int durationSec, Instant notBefore) {
+        long minMs = notBefore.toEpochMilli();
+        TreeSet<Long> cand = new TreeSet<>();
+        cand.add(minMs);
+        for (Snapshot.SlotBar b : snap.bars) {
+            if (b.toMs() > minMs) {
+                cand.add(b.toMs());
+            }
+        }
         for (long t : cand) {
             Instant at = Instant.ofEpochMilli(t);
-            try {
-                if (ids.isEmpty()) {
-                    pickFree(at, durationSec, n);
-                } else {
-                    requireFree(ids, at, durationSec);
+            if (ids.isEmpty()) {
+                if (findFree(snap, t, durationSec, n) != null) {
+                    return at;
                 }
+            } else if (busyNames(snap, ids, t, durationSec).isEmpty()) {
                 return at;
-            } catch (IllegalArgumentException busy) {
-                // этот момент занят - пробуем следующий
             }
         }
         throw new IllegalArgumentException("Не удалось найти время, когда свободно нужное число генераторов (нужно " + (ids.isEmpty() ? n : ids.size())
@@ -179,64 +293,101 @@ public class ScheduleTimelineService {
     }
 
     public void requireFree(List<Long> ids, Instant runAt, int durationSec) {
-        long start = runAt.toEpochMilli();
-        long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
-        Map<String, Object> ov = overview();
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> gens = (List<Map<String, Object>>) ov.get("generators");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> bars = (List<Map<String, Object>>) ov.get("bars");
-        List<String> busy = new ArrayList<>();
-        for (Map<String, Object> g : gens) {
-            Long gid = (Long) g.get("id");
-            if (!ids.contains(gid)) {
-                continue;
-            }
-            long n = bars.stream().filter(b -> gid.equals(b.get("generatorId")) && (long) b.get("from") < end && (long) b.get("to") > start).count();
-            if (n >= (Integer) g.get("slots")) {
-                busy.add((String) g.get("name"));
-            }
-        }
+        requireFree(snapshot(), ids, runAt, durationSec);
+    }
+
+    void requireFree(Snapshot snap, List<Long> ids, Instant runAt, int durationSec) {
+        List<String> busy = busyNames(snap, ids, runAt.toEpochMilli(), durationSec);
         if (!busy.isEmpty()) {
             throw new IllegalArgumentException("Генераторы заняты на это время (с паузой " + TAIL_SEC / 60 + " мин между запусками): " + String.join(", ", busy)
                     + ". Выберите другое время или нажмите «Ближайшее свободное» на таймлайне");
         }
     }
 
-    public List<Long> pickFree(Instant runAt, int durationSec, int n) {
-        long start = runAt.toEpochMilli();
+    private static List<String> busyNames(Snapshot snap, List<Long> ids, long start, int durationSec) {
         long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
-        Map<String, Object> ov = overview();
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> gens = (List<Map<String, Object>>) ov.get("generators");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> bars = (List<Map<String, Object>>) ov.get("bars");
-        Map<Long, Integer> busy = new HashMap<>();
-        Map<Long, Integer> pool = new HashMap<>();
-        for (Map<String, Object> b : bars) {
-            if ((long) b.get("from") >= end || (long) b.get("to") <= start) {
+        List<String> busy = new ArrayList<>();
+        for (Snapshot.GenSlot g : snap.generators) {
+            if (!ids.contains(g.id())) {
                 continue;
             }
-            Long gid = (Long) b.get("generatorId");
-            if (gid != null) {
-                busy.merge(gid, 1, Integer::sum);
-            } else if (b.get("scheduleId") != null) {
-                pool.putIfAbsent((Long) b.get("scheduleId"), (Integer) b.get("count"));
+            int used = 0;
+            for (Snapshot.SlotBar b : snap.bars) {
+                if (b.generatorId() != null && b.generatorId() == g.id() && b.fromMs() < end && b.toMs() > start) {
+                    used++;
+                }
+            }
+            if (used >= g.slots()) {
+                busy.add(g.name());
+            }
+        }
+        return busy;
+    }
+
+    public List<Long> pickFree(Instant runAt, int durationSec, int n) {
+        return pickFree(snapshot(), runAt, durationSec, n);
+    }
+
+    List<Long> pickFree(Snapshot snap, Instant runAt, int durationSec, int n) {
+        long start = runAt.toEpochMilli();
+        List<Long> picked = findFree(snap, start, durationSec, n);
+        if (picked == null) {
+            int avail = countFree(snap, start, durationSec);
+            throw new IllegalArgumentException("На это время свободно генераторов: " + Math.max(0, avail) + ", а нужно " + n
+                    + ". Выберите другое время или нажмите «Ближайшее свободное» на таймлайне");
+        }
+        return picked;
+    }
+
+    private static List<Long> findFree(Snapshot snap, long start, int durationSec, int n) {
+        long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
+        Map<Long, Integer> busy = new HashMap<>();
+        Map<Long, Integer> pool = new HashMap<>();
+        for (Snapshot.SlotBar b : snap.bars) {
+            if (b.fromMs() >= end || b.toMs() <= start) {
+                continue;
+            }
+            if (b.generatorId() != null) {
+                busy.merge(b.generatorId(), 1, Integer::sum);
+            } else if (b.scheduleId() != null) {
+                pool.putIfAbsent(b.scheduleId(), b.count());
             }
         }
         List<Long> free = new ArrayList<>();
-        for (Map<String, Object> g : gens) {
-            if (Boolean.TRUE.equals(g.get("online")) && busy.getOrDefault((Long) g.get("id"), 0) < (Integer) g.get("slots")) {
-                free.add((Long) g.get("id"));
+        for (Snapshot.GenSlot g : snap.generators) {
+            if (g.online() && busy.getOrDefault(g.id(), 0) < g.slots()) {
+                free.add(g.id());
             }
         }
         int reservedByPool = pool.values().stream().mapToInt(Integer::intValue).sum();
-        int available = free.size() - reservedByPool;
-        if (available < n) {
-            throw new IllegalArgumentException("На это время свободно генераторов: " + Math.max(0, available) + ", а нужно " + n
-                    + ". Выберите другое время или нажмите «Ближайшее свободное» на таймлайне");
+        if (free.size() - reservedByPool < n) {
+            return null;
         }
-        return free.subList(0, n);
+        return new ArrayList<>(free.subList(0, n));
+    }
+
+    private static int countFree(Snapshot snap, long start, int durationSec) {
+        long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
+        Map<Long, Integer> busy = new HashMap<>();
+        Map<Long, Integer> pool = new HashMap<>();
+        for (Snapshot.SlotBar b : snap.bars) {
+            if (b.fromMs() >= end || b.toMs() <= start) {
+                continue;
+            }
+            if (b.generatorId() != null) {
+                busy.merge(b.generatorId(), 1, Integer::sum);
+            } else if (b.scheduleId() != null) {
+                pool.putIfAbsent(b.scheduleId(), b.count());
+            }
+        }
+        int free = 0;
+        for (Snapshot.GenSlot g : snap.generators) {
+            if (g.online() && busy.getOrDefault(g.id(), 0) < g.slots()) {
+                free++;
+            }
+        }
+        int reservedByPool = pool.values().stream().mapToInt(Integer::intValue).sum();
+        return Math.max(0, free - reservedByPool);
     }
 
     /**
@@ -261,33 +412,35 @@ public class ScheduleTimelineService {
             return null;
         }
         long span = (durationSec(it.scriptId(), it.profileId(), it.generatorIds().size()) + TAIL_SEC) * 1000L;
-        Map<String, Object> ov = overview();
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> gens = (List<Map<String, Object>>) ov.get("generators");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> all = (List<Map<String, Object>>) ov.get("bars");
+        Snapshot snap = snapshot();
         Map<Long, Integer> slots = new HashMap<>();
-        for (Map<String, Object> g : gens) {
-            slots.put((Long) g.get("id"), (Integer) g.get("slots"));
+        for (Snapshot.GenSlot g : snap.generators) {
+            slots.put(g.id(), g.slots());
         }
-        List<Map<String, Object>> bars = all.stream().filter(b -> b.get("generatorId") != null && it.generatorIds().contains((Long) b.get("generatorId"))
-                && !(b.get("scheduleId") != null && ((Long) b.get("scheduleId")) == it.id())).toList();
-        List<Long> candidates = new ArrayList<>();
-        candidates.add(notBefore.toEpochMilli());
-        for (Map<String, Object> b : bars) {
-            long to = (long) b.get("to");
-            if (to > notBefore.toEpochMilli()) {
-                candidates.add(to);
+        List<Snapshot.SlotBar> bars = snap.bars.stream()
+                .filter(b -> b.generatorId() != null && it.generatorIds().contains(b.generatorId())
+                        && !(b.scheduleId() != null && b.scheduleId() == it.id()))
+                .toList();
+        TreeSet<Long> candidates = new TreeSet<>();
+        long minMs = notBefore.toEpochMilli();
+        candidates.add(minMs);
+        for (Snapshot.SlotBar b : bars) {
+            if (b.toMs() > minMs) {
+                candidates.add(b.toMs());
             }
         }
-        candidates.sort(Long::compare);
         for (long t : candidates) {
             if (onlyBeforeRunAt && t >= it.runAt().toEpochMilli()) {
                 return null;
             }
             boolean ok = true;
             for (Long gid : it.generatorIds()) {
-                long busy = bars.stream().filter(b -> gid.equals(b.get("generatorId")) && (long) b.get("from") < t + span && (long) b.get("to") > t).count();
+                int busy = 0;
+                for (Snapshot.SlotBar b : bars) {
+                    if (b.generatorId() == gid.longValue() && b.fromMs() < t + span && b.toMs() > t) {
+                        busy++;
+                    }
+                }
                 if (busy >= slots.getOrDefault(gid, 1)) {
                     ok = false;
                     break;

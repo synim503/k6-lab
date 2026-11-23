@@ -29,11 +29,14 @@ public class DistributionImporter {
 
     private final DistributionService distributions;
     private final DistributionRepository repo;
+    private final ru.k6lab.server.common.StorageService storage;
     private final AppProperties props;
 
-    public DistributionImporter(DistributionService distributions, DistributionRepository repo, AppProperties props) {
+    public DistributionImporter(DistributionService distributions, DistributionRepository repo,
+                                ru.k6lab.server.common.StorageService storage, AppProperties props) {
         this.distributions = distributions;
         this.repo = repo;
+        this.storage = storage;
         this.props = props;
     }
 
@@ -77,7 +80,21 @@ public class DistributionImporter {
                 log.warn("Дистрибутив из manifest пропущен (файла нет или путь вне каталога): {}", item.path("file").asText());
                 continue;
             }
-            if (repo.findFirstByKindAndVersionAndArchAndLabel(kind, version, arch, label).isPresent()) {
+            var existing = repo.findFirstByKindAndVersionAndArchAndLabel(kind, version, arch, label);
+            if (existing.isPresent()) {
+                DistributionArtifact art = existing.get();
+                if (!storage.exists(art.getStorageKey())) {
+                    // запись в БД есть, а файл в data/storage пропал (например, перенос без data/): восстанавливаем из dist/
+                    try (InputStream in = Files.newInputStream(file)) {
+                        var stored = storage.store("artifacts", file.getFileName().toString(), in);
+                        art.setStorageKey(stored.key());
+                        art.setSha256(stored.sha256());
+                        art.setSizeBytes(stored.size());
+                        repo.save(art);
+                        imported++;
+                        log.info("Восстановлен отсутствующий файл дистрибутива {} {} ({}) из {}", kind, version, arch, item.path("file").asText());
+                    }
+                }
                 continue;
             }
             try (InputStream in = Files.newInputStream(file)) {

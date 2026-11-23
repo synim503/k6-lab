@@ -289,21 +289,28 @@
             tb.innerHTML = html || '<tr><td colspan="6" class="text-muted">Нет данных</td></tr>';
         }
         var ph = document.getElementById('metric-phase');
-        if (ph && m.phase === 'init') {
+        var isFinal = root.dataset.final === 'true';
+        if (ph && !isFinal && m.phase === 'init') {
             ph.textContent = 'Инициализация скрипта k6: ' + m.initSec + ' с';
         } else if (ph) {
-            var lag = m.lagSec === undefined ? '' : '. Данные на ' + t + ', задержка метрик ' + m.lagSec + ' с';
-            ph.textContent = (m.phase === 'warmup' ? 'Идёт прогрев: ошибки и время ответа пока не оцениваются'
-                : m.phase ? 'Идёт нагрузка, ' + (all ? 'показатели за весь тест (' + span(m.wholeSec) + ')'
-                    : 'окно расчёта ' + m.windowSec + ' с' + (range === 'all' ? ' (за весь тест данных пока нет)' : '')) : 'Ожидание данных') + lag;
+            var lag = isFinal || m.lagSec === undefined ? '' : '. Данные на ' + t + ', задержка метрик ' + m.lagSec + ' с';
+            if (isFinal) {
+                ph.textContent = 'Тест завершён, ' + (all ? 'показатели за весь тест (' + span(m.wholeSec) + ')'
+                    : 'окно расчёта ' + m.windowSec + ' с' + (range === 'all' ? ' (за весь тест данных пока нет)' : ''));
+            } else {
+                ph.textContent = (m.phase === 'warmup' ? 'Идёт прогрев: ошибки и время ответа пока не оцениваются'
+                    : m.phase ? 'Идёт нагрузка, ' + (all ? 'показатели за весь тест (' + span(m.wholeSec) + ')'
+                        : 'окно расчёта ' + m.windowSec + ' с' + (range === 'all' ? ' (за весь тест данных пока нет)' : '')) : 'Ожидание данных') + lag;
+            }
         }
     }
 
-    // сначала вся история с начала теста (одним куском), затем live-поток
+    // сначала вся история с начала теста (одним куском), затем live-поток (только для идущего теста)
     function startLive() {
+        if (root.dataset.final === 'true') { return; }
         var es = new EventSource(root.dataset.metricsStream);
         es.addEventListener('metrics', function (ev) { onMetrics(JSON.parse(ev.data)); });
-        if (root.dataset.final === 'true') { es.close(); }
+        window.addEventListener('beforeunload', function () { es.close(); });
     }
     var historyUrl = root.dataset.metricsHistory;
     if (!historyUrl) { startLive(); return; }

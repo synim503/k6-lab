@@ -23,6 +23,8 @@ class DistImportIT extends AbstractIT {
     DistributionService distributions;
     @Autowired
     DistributionRepository repo;
+    @Autowired
+    ru.k6lab.server.common.StorageService storage;
 
     /** Фиктивные дистрибутивы теста не должны мешать другим тестам, которые ставят агента по умолчанию. */
     @AfterEach
@@ -52,7 +54,7 @@ class DistImportIT extends AbstractIT {
                 ]}""");
         AppProperties props = new AppProperties();
         props.setDistDir(dir);
-        DistributionImporter importer = new DistributionImporter(distributions, repo, props);
+        DistributionImporter importer = new DistributionImporter(distributions, repo, storage, props);
 
         // старая версия агента, загруженная раньше: после импорта новой остаётся только актуальная
         distributions.upload(DistributionArtifact.Kind.AGENT, "", "9.0.0", DistributionArtifact.Arch.LINUX_AMD64, "k6-agent",
@@ -68,6 +70,12 @@ class DistImportIT extends AbstractIT {
         var k6 = repo.findFirstByKindAndVersionAndArchAndLabel(DistributionArtifact.Kind.K6, "9.9.9", DistributionArtifact.Arch.LINUX_AMD64, "");
         assertThat(k6).isPresent();
         assertThat(k6.get().getSizeBytes()).isEqualTo(7);
+        // если файл в хранилище пропал (обновление без переноса data/), повторный импорт восстанавливает его из dist/
+        storage.delete(k6.get().getStorageKey());
+        assertThat(storage.exists(k6.get().getStorageKey())).isFalse();
+        assertThat(importer.importAll()).isEqualTo(1);
+        var restoredK6 = repo.findFirstByKindAndVersionAndArchAndLabel(DistributionArtifact.Kind.K6, "9.9.9", DistributionArtifact.Arch.LINUX_AMD64, "").orElseThrow();
+        assertThat(storage.exists(restoredK6.getStorageKey())).isTrue();
         var agent = repo.findFirstByKindAndVersionAndArchAndLabel(DistributionArtifact.Kind.AGENT, "9.9.9", DistributionArtifact.Arch.LINUX_AMD64, "");
         assertThat(agent).isPresent();
         assertThat(agent.get().isNativeAgent()).isTrue(); // бинарь Go: JRE не нужна

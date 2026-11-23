@@ -43,6 +43,10 @@ class ProfileImportIT extends AbstractIT {
     @Autowired
     ru.k6lab.server.result.ChartVariableStore vars;
     @Autowired
+    ru.k6lab.server.generator.GeneratorRepository generators;
+    @Autowired
+    ru.k6lab.server.schedule.ScheduledRunStore scheduleStore;
+    @Autowired
     MockMvc mvc;
 
     private static final String SCRIPT = """
@@ -185,5 +189,111 @@ class ProfileImportIT extends AbstractIT {
         mvc.perform(get("/scripts/" + s.getId() + "/charts")).andExpect(status().isOk()).andExpect(content().string(containsString("Удалить выбранные")));
         mvc.perform(post("/scripts/" + s.getId() + "/charts/delete-all").with(csrf())).andExpect(status().is3xxRedirection());
         assertThat(charts.list(s.getId())).isEmpty();
+    }
+
+    private ru.k6lab.server.generator.Generator onlineGen(String name) {
+        var g = new ru.k6lab.server.generator.Generator();
+        g.setName(name);
+        g.setHost("127.0.0.1");
+        g.setInstallDir("/opt/k6-agent");
+        g.setServerUrl("ws://127.0.0.1:1/agent/ws");
+        g.setStatus(ru.k6lab.server.generator.Generator.Status.ONLINE);
+        return generators.save(g);
+    }
+
+    @Test
+    void scriptWithoutBaseLoadCanRunViaSavedProfileAndImportSchedulesSequentially() throws Exception {
+        String n = UUID.randomUUID().toString().substring(0, 8);
+        // скрипт БЕЗ базовой нагрузки (операции не заданы)
+        ScriptVersion v = scripts.createFromUpload("noload-" + n, "", "s.js",
+                new ByteArrayInputStream(SCRIPT.getBytes(StandardCharsets.UTF_8)), "", null);
+        Script s = scripts.get(v.getScriptId());
+        // два свободных онлайн-генератора: при ошибке логики тесты могли бы встать параллельно, но должны идти строго последовательно
+        var g1 = onlineGen("seq-g1-" + n);
+        var g2 = onlineGen("seq-g2-" + n);
+        try {
+            String json = "[{\"name\": \"Тест 1\", \"operations\": [{\"name\": \"work\", \"execFn\": \"work\", \"executor\": \"constant-arrival-rate\", "
+                    + "\"scenario\": {\"rate\": 10, \"timeUnit\": \"1s\", \"duration\": \"2m\", \"preAllocatedVUs\": 2, \"maxVUs\": 5}, "
+                    + "\"slaThresholdMs\": 500, \"slaPercentile\": 95, \"maxErrorPct\": 1}]},"
+                    + "{\"name\": \"Тест 2\", \"operations\": [{\"name\": \"work\", \"execFn\": \"work\", \"executor\": \"constant-arrival-rate\", "
+                    + "\"scenario\": {\"rate\": 20, \"timeUnit\": \"1s\", \"duration\": \"3m\", \"preAllocatedVUs\": 2, \"maxVUs\": 5}, "
+                    + "\"slaThresholdMs\": 500, \"slaPercentile\": 95, \"maxErrorPct\": 1}]},"
+                    + "{\"name\": \"Тест 3\", \"operations\": [{\"name\": \"work\", \"execFn\": \"work\", \"executor\": \"constant-arrival-rate\", "
+                    + "\"scenario\": {\"rate\": 30, \"timeUnit\": \"1s\", \"duration\": \"2m\", \"preAllocatedVUs\": 2, \"maxVUs\": 5}, "
+                    + "\"slaThresholdMs\": 500, \"slaPercentile\": 95, \"maxErrorPct\": 1}]}]";
+
+            mvc.perform(post("/scripts/" + s.getId() + "/load/profiles/import").with(csrf())
+                            .param("json", json)
+                            .param("scheduleSequential", "true")
+                            .param("count", "1")
+                            .param("gapMinutes", "5")
+                            .param("shift", "true"))
+                    .andExpect(status().is3xxRedirection());
+
+            // 1) Все 3 профиля импортированы и запланированы строго последовательно друг за другом
+            var scheduled = scheduleStore.pendingOfScript(s.getId()).stream()
+                    .sorted(java.util.Comparator.comparing(ru.k6lab.server.schedule.ScheduledRunStore.Item::runAt))
+                    .toList();
+            assertThat(scheduled).hasSize(3);
+            assertThat(scheduled).extracting(ru.k6lab.server.schedule.ScheduledRunStore.Item::profileName)
+                    .containsExactly("Тест 1", "Тест 2", "Тест 3");
+            // Тест 2 начинается не раньше конца Теста 1 (2 мин) + пауза (5 мин) = 7 мин = 420 с
+            long gap12 = java.time.Duration.between(scheduled.get(0).runAt(), scheduled.get(1).runAt()).getSeconds();
+            long gap23 = java.time.Duration.between(scheduled.get(1).runAt(), scheduled.get(2).runAt()).getSeconds();
+            assertThat(gap12).isGreaterThanOrEqualTo(420);
+            assertThat(gap23).isGreaterThanOrEqualTo(480); // 3 мин + 5 мин
+            // Все три забронированы на один и тот же генератор — сдвиг очереди не запустит их параллельно
+            assertThat(scheduled.get(1).generatorIds()).isEqualTo(scheduled.get(0).generatorIds());
+            assertThat(scheduled.get(2).generatorIds()).isEqualTo(scheduled.get(0).generatorIds());
+
+            // 2) Страница запуска (/scripts/{id}/run) у скрипта без базовой нагрузки автоматически выбирает готовый профиль и НЕ блокирует кнопку запуска
+            String runHtml = mvc.perform(get("/scripts/" + s.getId() + "/run"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("автоматически выбран готовый профиль")))
+                    .andReturn().getResponse().getContentAsString();
+            assertThat(runHtml).doesNotContain("id=\"btn-run-now\" data-no-gens=\"false\" disabled");
+            // Страница нагрузки тоже предлагает запуск по профилю
+            mvc.perform(get("/scripts/" + s.getId() + "/load"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("Запустить по профилю")));
+
+            // 2b) При открытии профиля на /load конфиг k6 в «Для опытных» и /config.json?profile=... рассчитываются по профилю даже при пустой базовой нагрузке
+            long p1Id = profiles.list(s.getId()).stream().filter(p -> p.name().equals("Тест 1")).findFirst().orElseThrow().id();
+            mvc.perform(get("/scripts/" + s.getId() + "/load").param("profile", String.valueOf(p1Id)))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("id=\"config-editor\"")))
+                    .andExpect(content().string(containsString("constant-arrival-rate")))
+                    .andExpect(content().string(containsString("режим просмотра")));
+            mvc.perform(get("/scripts/" + s.getId() + "/config.json").param("profile", String.valueOf(p1Id)))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("\"scenarios\"")))
+                    .andExpect(content().string(containsString("\"constant-arrival-rate\"")));
+
+            // 2c) В списке /scripts и карточке /scripts/{id} скрипт с профилями показан как готовый к запуску
+            mvc.perform(get("/scripts"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("готов · профили: 3")));
+            mvc.perform(get("/scripts/" + s.getId()))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("профили: 3")))
+                    .andExpect(content().string(containsString("Тест 1")));
+
+            // 3) Общий импорт на /schedule с последовательным запуском и снятым чекбоксом shift -> shiftForward == false
+            String globalJson = "[{\"script\": \"" + s.getName() + "\", \"name\": \"Серия А\", \"operations\": [" + op("work", 15) + "]},"
+                    + "{\"script\": \"" + s.getName() + "\", \"name\": \"Серия Б\", \"operations\": [" + op("work", 25) + "]}]";
+            mvc.perform(post("/schedule/import-profiles").with(csrf())
+                            .param("json", globalJson)
+                            .param("scheduleSequential", "true")
+                            .param("count", "1")
+                            .param("gapMinutes", "6"))
+                    .andExpect(status().is3xxRedirection());
+            var allPending = scheduleStore.pendingOfScript(s.getId());
+            assertThat(allPending).hasSize(5);
+            assertThat(allPending.stream().filter(it -> "Серия А".equals(it.profileName())).findFirst().orElseThrow().shiftForward()).isFalse();
+        } finally {
+            scheduleStore.pendingOfScript(s.getId()).forEach(it -> scheduleStore.cancel(it.id()));
+            generators.deleteById(g1.getId());
+            generators.deleteById(g2.getId());
+        }
     }
 }

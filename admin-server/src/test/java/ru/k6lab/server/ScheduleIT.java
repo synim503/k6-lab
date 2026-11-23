@@ -286,35 +286,78 @@ class ScheduleIT extends AbstractIT {
     }
 
     @Test
-    void pausedSchedulerStartsNothingKeepsOverdueEntriesAndResumeMovesThemToTheNearestFreeTime() throws Exception {
+    void pausedSchedulerStartsNothingKeepsOverdueEntriesAndResumeStartsFirstAndShiftsRest() throws Exception {
         Script s = scriptWithLoad();
         Generator g = generator();
-        long id = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(g.getId()), null, null, Map.of(), "tester");
+        long id1 = schedule.schedule(s.getId(), Instant.now().plusSeconds(120), List.of(g.getId()), null, null, Map.of(), "tester");
+        long id2 = schedule.schedule(s.getId(), Instant.now().plusSeconds(900), List.of(g.getId()), null, null, Map.of(), "tester");
+        long id3 = schedule.schedule(s.getId(), Instant.now().plusSeconds(1800), List.of(g.getId()), null, null, Map.of(), "tester");
         try {
             mvc.perform(post("/schedule/pause").with(csrf())).andExpect(status().is3xxRedirection());
             assertThat(schedule.paused()).isTrue();
             mvc.perform(get("/schedule")).andExpect(status().isOk()).andExpect(content().string(containsString("Планировщик на паузе")))
                     .andExpect(content().string(containsString("Снять с паузы")));
             // время прошло намного дольше допустимого опоздания: без паузы запись была бы пропущена с ошибкой, на паузе - ждёт
-            makeDue(id, 600);
+            makeDue(id1, 600);
             schedule.tick();
-            ScheduledRunStore.Item waiting = store.find(id).orElseThrow();
+            ScheduledRunStore.Item waiting = store.find(id1).orElseThrow();
             assertThat(waiting.status()).as(String.valueOf(waiting.error())).isEqualTo(ScheduledRunStore.Status.PENDING);
 
             mvc.perform(post("/schedule/resume").with(csrf())).andExpect(status().is3xxRedirection());
             assertThat(schedule.paused()).isFalse();
-            // просроченная запись не пропущена, а перенесена на ближайшее свободное время
-            ScheduledRunStore.Item moved = store.find(id).orElseThrow();
-            assertThat(moved.status()).isEqualTo(ScheduledRunStore.Status.PENDING);
-            assertThat(moved.runAt()).isAfter(Instant.now().plusSeconds(30));
-            // дальше работает как обычно: в назначенное время запись стартует
-            makeDue(id, 1);
-            schedule.tick();
-            ScheduledRunStore.Item done = store.find(id).orElseThrow();
-            assertThat(done.status()).as(String.valueOf(done.error())).isEqualTo(ScheduledRunStore.Status.STARTED);
+            // первый тест очереди стартует СРАЗУ после снятия паузы
+            ScheduledRunStore.Item first = store.find(id1).orElseThrow();
+            assertThat(first.status()).as(String.valueOf(first.error())).isEqualTo(ScheduledRunStore.Status.STARTED);
+            assertThat(first.runId()).isNotNull();
+            // остальные сдвинулись за ним в том же порядке с паузой не меньше 5 минут
+            ScheduledRunStore.Item second = store.find(id2).orElseThrow();
+            ScheduledRunStore.Item third = store.find(id3).orElseThrow();
+            assertThat(second.status()).isEqualTo(ScheduledRunStore.Status.PENDING);
+            assertThat(third.status()).isEqualTo(ScheduledRunStore.Status.PENDING);
+            assertThat(second.runAt()).isAfter(Instant.now().plusSeconds(290));
+            assertThat(java.time.Duration.between(second.runAt(), third.runAt()).toSeconds()).isGreaterThanOrEqualTo(300);
             mvc.perform(get("/schedule")).andExpect(status().isOk()).andExpect(content().string(containsString("Поставить на паузу")));
         } finally {
+            schedule.cancel(id2, "test");
+            schedule.cancel(id3, "test");
             schedule.resume("test"); // настройка общая для всех тестов: пауза не должна остаться
+        }
+    }
+
+    @Test
+    void resumeWhenGeneratorBusyPostponesWithoutFailingAndShiftsQueue() throws Exception {
+        Script s = scriptWithLoad();
+        Generator g = generator();
+        // имитируем активный запуск, который ещё идёт на генераторе g
+        Run active = runService.create(new RunService.CreateRequest(s.getId(), List.of(new RunService.GeneratorSel(g.getId(), 1)),
+                Run.FailurePolicy.CONTINUE, 120));
+        runService.update(active.getId(), r -> {
+            r.setStatus(ru.k6lab.core.runstate.RunStatus.RUNNING);
+            r.setStartedAt(Instant.now());
+            r.setPlannedStartAt(Instant.now());
+        });
+        jdbc.update("update generator set active_runs = 1 where id = ?", g.getId());
+        long id1 = schedule.schedule(s.getId(), Instant.now().plusSeconds(900), List.of(g.getId()), null, null, Map.of(), "tester");
+        long id2 = schedule.schedule(s.getId(), Instant.now().plusSeconds(1800), List.of(g.getId()), null, null, Map.of(), "tester");
+        try {
+            schedule.pause("tester");
+            makeDue(id1, 600);
+            var res = schedule.resume("tester");
+            assertThat(schedule.paused()).isFalse();
+            assertThat(res.startedRunId()).isNull();
+            assertThat(res.moved()).isGreaterThanOrEqualTo(1);
+            // пока генератор занят active, первая запись не падает в FAILED, а ждёт ближайший свободный слот, вторая сдвинута следом
+            ScheduledRunStore.Item first = store.find(id1).orElseThrow();
+            ScheduledRunStore.Item second = store.find(id2).orElseThrow();
+            assertThat(first.status()).isEqualTo(ScheduledRunStore.Status.PENDING);
+            assertThat(first.runAt()).isAfter(Instant.now().plusSeconds(30));
+            assertThat(second.runAt()).isAfter(first.runAt().plusSeconds(300));
+        } finally {
+            schedule.cancel(id1, "test");
+            schedule.cancel(id2, "test");
+            jdbc.update("update generator set active_runs = 0 where id = ?", g.getId());
+            runService.update(active.getId(), r -> r.setStatus(ru.k6lab.core.runstate.RunStatus.FINISHED));
+            schedule.resume("test");
         }
     }
 
@@ -493,5 +536,38 @@ class ScheduleIT extends AbstractIT {
                 .andExpect(content().string(containsString("Максимум")));
         mvc.perform(post("/schedule/cancel-all-pending").with(csrf())).andExpect(status().is3xxRedirection());
         assertThat(schedule.pendingOf(s.getId())).isEmpty();
+    }
+
+    @Test
+    void importingThirtyTestsWithoutRunAtIsFastAndKeepsAtLeastFiveMinuteGapEvenWithMultipleGenerators() throws Exception {
+        Script s = scriptWithLoad();
+        saveProfile(s, "Короткий", 20, ""); // duration = 3m (180s)
+        generator();
+        generator();
+        generator();
+        StringBuilder sb = new StringBuilder("{\"tests\":[");
+        for (int i = 0; i < 30; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append("{\"script\":\"").append(s.getName()).append("\",\"profile\":\"Короткий\",\"count\":1}");
+        }
+        sb.append("]}");
+
+        long t0 = System.nanoTime();
+        var created = importer.importTests(sb.toString(), "tester");
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000L;
+
+        assertThat(created).hasSize(30);
+        assertThat(elapsedMs).as("импорт 30 тестов должен быть быстрым (<5 с)").isLessThan(5_000L);
+
+        var items = created.stream().map(c -> store.find(c.scheduleId()).orElseThrow()).toList();
+        for (int i = 1; i < items.size(); i++) {
+            long deltaSec = java.time.Duration.between(items.get(i - 1).runAt(), items.get(i).runAt()).getSeconds();
+            // 3 мин длительность профиля + >= 5 мин пауза = >= 480 с
+            assertThat(deltaSec).as("пауза между тестами #%d и #%d", i, i + 1).isGreaterThanOrEqualTo(480L);
+            assertThat(items.get(i).generatorIds()).isEqualTo(items.get(0).generatorIds());
+        }
+        mvc.perform(post("/schedule/cancel-all-pending").with(csrf())).andExpect(status().is3xxRedirection());
     }
 }

@@ -68,8 +68,12 @@ public class RunResultController {
 
     @GetMapping(value = "/report.html", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<byte[]> html(@PathVariable Long id, @RequestParam(defaultValue = "false") boolean download,
-                                       @RequestParam(required = false) String time) {
-        byte[] body = reports.renderHtml(id, absTime(time)).getBytes(StandardCharsets.UTF_8);
+                                       @RequestParam(required = false) String time,
+                                       @RequestParam(required = false) String sort,
+                                       @RequestParam(required = false) String dir,
+                                       @RequestParam(required = false) String warmup) {
+        byte[] body = reports.renderHtml(id, absTime(time), parseSortBy(sort), parseSortDir(dir), parseSkipWarmup(warmup))
+                .getBytes(StandardCharsets.UTF_8);
         ResponseEntity.BodyBuilder b = ResponseEntity.ok().contentType(new MediaType("text", "html", StandardCharsets.UTF_8));
         if (download) {
             b.header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("run-" + id + "-report.html").build().toString());
@@ -82,21 +86,64 @@ public class RunResultController {
         return time == null || time.isBlank() ? null : "abs".equalsIgnoreCase(time.trim());
     }
 
+    /** Прогрев на графиках: skip/after/true - от конца прогрева, include/all/false - с начала теста, пусто - из настроек. */
+    private static Boolean parseSkipWarmup(String warmup) {
+        if (warmup == null || warmup.isBlank()) {
+            return null;
+        }
+        String v = warmup.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("skip".equals(v) || "after".equals(v) || "true".equals(v) || "1".equals(v)) {
+            return Boolean.TRUE;
+        }
+        if ("include".equals(v) || "all".equals(v) || "false".equals(v) || "0".equals(v)) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
+    private static ChartStyle.SortBy parseSortBy(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return ChartStyle.SortBy.valueOf(s.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static ChartStyle.SortDir parseSortDir(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return ChartStyle.SortDir.valueOf(s.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
     private static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     /** Отчёт в Word: имя файла «сценарий - профиль». */
     @GetMapping(value = "/report.docx", produces = DOCX)
-    public ResponseEntity<byte[]> docx(@PathVariable Long id, @RequestParam(required = false) String time) {
+    public ResponseEntity<byte[]> docx(@PathVariable Long id, @RequestParam(required = false) String time,
+                                       @RequestParam(required = false) String sort,
+                                       @RequestParam(required = false) String dir,
+                                       @RequestParam(required = false) String warmup) {
         String name = ReportService.title(runService.get(id)).replaceAll("[\\\\/:*?\"<>|\\r\\n]", "_");
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(DOCX))
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(name + " (запуск " + id + ").docx", StandardCharsets.UTF_8).build().toString())
-                .body(reports.renderDocx(id, absTime(time)));
+                .body(reports.renderDocx(id, absTime(time), parseSortBy(sort), parseSortDir(dir), parseSkipWarmup(warmup)));
     }
 
     @GetMapping(value = "/report.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
-    public ResponseEntity<byte[]> pdf(@PathVariable Long id, @RequestParam(required = false) String time) {
+    public ResponseEntity<byte[]> pdf(@PathVariable Long id, @RequestParam(required = false) String time,
+                                      @RequestParam(required = false) String sort,
+                                      @RequestParam(required = false) String dir,
+                                      @RequestParam(required = false) String warmup) {
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename("run-" + id + "-report.pdf").build().toString())
-                .body(reports.renderPdf(id, absTime(time)));
+                .body(reports.renderPdf(id, absTime(time), parseSortBy(sort), parseSortDir(dir), parseSkipWarmup(warmup)));
     }
 }

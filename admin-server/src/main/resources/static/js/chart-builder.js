@@ -125,6 +125,7 @@
     var searchText = '';
     var editorBaseline = '';
     var queryRows = []; // [{promql, legend, diag: null, labelKeys: []}]
+    var chartVarRows = []; // [{name, value}] — локальные переменные конкретного графика
     var metricNames = null; // null = not fetched yet
     var metricFetchInFlight = false;
     var previewController = null;
@@ -157,6 +158,10 @@
     var elEnabled = document.getElementById('cb-enabled');
     var elQueries = document.getElementById('cb-queries');
     var elQCount = document.getElementById('cb-q-count');
+    var elCvRows = document.getElementById('cb-cv-rows');
+    var elCvCount = document.getElementById('cb-cv-count');
+    var elCvHints = document.getElementById('cb-cv-hints');
+    var elCvAddBtn = document.getElementById('cb-cv-add-btn');
     var elSaveBtn = document.getElementById('cb-save-btn');
     var elResetBtn = document.getElementById('cb-reset-btn');
     var elStudioErr = document.getElementById('cb-studio-err');
@@ -222,6 +227,26 @@
         return m;
     }
 
+    function chartVarMap() {
+        var m = {};
+        chartVarRows.forEach(function (r) {
+            var k = (r.name || '').trim().replace(/^\$/, '');
+            if (k) { m[k] = (r.value == null ? '' : String(r.value)).trim(); }
+        });
+        return m;
+    }
+
+    function effectiveVarMap(localMap) {
+        var m = varMap();
+        if (localMap && typeof localMap === 'object') {
+            Object.keys(localMap).forEach(function (k) {
+                var clean = k.trim().replace(/^\$/, '');
+                if (clean) { m[clean] = localMap[k]; }
+            });
+        }
+        return m;
+    }
+
     function extractVarsFromText(text) {
         var found = [];
         if (!text) { return found; }
@@ -236,8 +261,20 @@
         return found;
     }
 
+    function draftReferencedVars() {
+        var found = [];
+        var add = function (txt) {
+            extractVarsFromText(txt).forEach(function (v) {
+                if (found.indexOf(v) === -1) { found.push(v); }
+            });
+        };
+        add(elName.value);
+        queryRows.forEach(function (q) { add(q.promql); });
+        return found;
+    }
+
     function missingVarsForTemplate(t) {
-        var defined = varMap();
+        var defined = effectiveVarMap(t.variables);
         var missing = [];
         var check = function (txt) {
             extractVarsFromText(txt).forEach(function (v) {
@@ -250,29 +287,23 @@
     }
 
     function allMissingVars() {
-        var defined = varMap();
         var missing = [];
         templates.forEach(function (t) {
             missingVarsForTemplate(t).forEach(function (v) {
                 if (missing.indexOf(v) === -1) { missing.push(v); }
             });
         });
-        // also check currently edited draft
-        var draft = collectDraft();
-        extractVarsFromText(draft.name).forEach(function (v) {
-            if (!(v in defined) && missing.indexOf(v) === -1) { missing.push(v); }
-        });
-        draft.queries.forEach(function (q) {
-            extractVarsFromText(q.promql).forEach(function (v) {
-                if (!(v in defined) && missing.indexOf(v) === -1) { missing.push(v); }
-            });
+        // also check currently edited draft with its own local variables
+        var definedDraft = effectiveVarMap(chartVarMap());
+        draftReferencedVars().forEach(function (v) {
+            if (!(v in definedDraft) && missing.indexOf(v) === -1) { missing.push(v); }
         });
         return missing;
     }
 
     function resolveTitlePreview(name) {
         if (!name) { return ''; }
-        var map = varMap();
+        var map = effectiveVarMap(chartVarMap());
         return name.replace(VAR_RE, function (full, g1, g2, g3) {
             var k = g1 || g2 || g3;
             if (k in map && map[k] && map[k].indexOf('{') === -1) {
@@ -290,7 +321,8 @@
             enabled: elEnabled.checked,
             queries: queryRows.map(function (r) {
                 return { promql: (r.promql || '').trim(), legend: (r.legend || '').trim() };
-            })
+            }),
+            variables: chartVarMap()
         };
     }
 
@@ -300,7 +332,8 @@
             name: elName.value,
             unit: elUnit.value,
             enabled: elEnabled.checked,
-            queries: queryRows.map(function (r) { return [r.promql || '', r.legend || '']; })
+            queries: queryRows.map(function (r) { return [r.promql || '', r.legend || '']; }),
+            variables: chartVarRows.map(function (r) { return [r.name || '', r.value || '']; })
         });
     }
 
@@ -401,6 +434,12 @@
             if (!q) { return true; }
             if ((t.name || '').toLowerCase().indexOf(q) >= 0) { return true; }
             if ((t.unit || '').toLowerCase().indexOf(q) >= 0) { return true; }
+            if (t.variables && typeof t.variables === 'object') {
+                var hitVar = Object.keys(t.variables).some(function (k) {
+                    return k.toLowerCase().indexOf(q) >= 0 || String(t.variables[k] || '').toLowerCase().indexOf(q) >= 0;
+                });
+                if (hitVar) { return true; }
+            }
             return (t.queries || []).some(function (qr) {
                 return (qr.promql || '').toLowerCase().indexOf(q) >= 0 || (qr.legend || '').toLowerCase().indexOf(q) >= 0;
             });
@@ -446,6 +485,14 @@
             var missing = missingVarsForTemplate(t);
             var qCount = (t.queries || []).length;
             var firstQ = qCount > 0 ? t.queries[0].promql : '';
+            var tVarKeys = t.variables && typeof t.variables === 'object' ? Object.keys(t.variables) : [];
+            var varPill = '';
+            if (tVarKeys.length > 0) {
+                var firstK = tVarKeys[0], firstV = t.variables[firstK];
+                var allSummary = tVarKeys.map(function (k) { return '$' + k + '=' + t.variables[k]; }).join(', ');
+                var shortTxt = '$' + firstK + '=' + (firstV || '""') + (tVarKeys.length > 1 ? ' +' + (tVarKeys.length - 1) : '');
+                varPill = '<span class="cb-item-pill is-var" title="Переменные графика: ' + esc(allSummary) + '"><i class="bi bi-sliders"></i>' + esc(shortTxt) + '</span>';
+            }
             var cls = 'cb-item' + (isSel ? ' active' : '') + (t.enabled ? '' : ' is-off');
             return '<div class="' + cls + '" data-id="' + t.id + '"' + (reorderable ? ' draggable="true"' : '') + '>' +
                 (reorderable ? '<span class="cb-drag" title="Перетащите для смены порядка в отчёте"><i class="bi bi-grip-vertical"></i></span>' : '') +
@@ -458,6 +505,7 @@
                     '<div class="cb-item-meta">' +
                         (t.unit ? '<span class="cb-item-pill">' + esc(t.unit) + '</span>' : '') +
                         '<span class="cb-item-pill">' + qCount + ' запр.</span>' +
+                        varPill +
                         (!t.enabled ? '<span class="cb-item-pill">выкл</span>' : '') +
                         (missing.length > 0 ? '<span class="cb-item-pill warn" title="Не заданы переменные: ' + esc(missing.map(function (v) { return '$' + v; }).join(', ')) + '"><i class="bi bi-exclamation-triangle-fill"></i>$' + esc(missing[0]) + (missing.length > 1 ? ' +' + (missing.length - 1) : '') + '</span>' : '') +
                     '</div>' +
@@ -508,7 +556,8 @@
     // ==================== Render: Query Cards ====================
     function renderQueries() {
         elQCount.textContent = String(queryRows.length);
-        var vars = variables;
+        var effMap = effectiveVarMap(chartVarMap());
+        var effNames = Object.keys(effMap);
         elQueries.innerHTML = queryRows.map(function (q, i) {
             var letter = String.fromCharCode(65 + (i % 26));
             var color = PALETTE[i % PALETTE.length];
@@ -525,8 +574,8 @@
             }
 
             var labelChips = (q.labelKeys && q.labelKeys.length > 0) ? q.labelKeys.slice(0, 8) : ['instance', 'scenario', 'status'];
-            var varChips = vars.map(function (v) {
-                return '<button type="button" class="cb-chip-ins is-var" data-ins-q="' + i + '" data-ins-text="$' + esc(v.name) + '" title="Переменная скрипта: ' + esc(v.value || '(пусто)') + '">$' + esc(v.name) + '</button>';
+            var varChips = effNames.map(function (vName) {
+                return '<button type="button" class="cb-chip-ins is-var" data-ins-q="' + i + '" data-ins-text="$' + esc(vName) + '" title="Переменная: ' + esc(effMap[vName] || '(пусто)') + '">$' + esc(vName) + '</button>';
             }).join('');
 
             var snippetItems = PROMQL_SNIPPETS.map(function (sn, si) {
@@ -583,6 +632,53 @@
         elQueries.querySelectorAll('textarea.cb-promql').forEach(autoResize);
     }
 
+    // ==================== Render: Per-Chart Variables ====================
+    function renderChartVars() {
+        if (!elCvRows) { return; }
+        var definedLocal = chartVarMap();
+        var scriptDefaults = varMap();
+        var localCount = Object.keys(definedLocal).length;
+        if (elCvCount) { elCvCount.textContent = String(localCount); }
+
+        // подсказки для переменных $var, используемых в запросах/имени этого графика, но ещё не переопределённых на графике
+        if (elCvHints) {
+            var refVars = draftReferencedVars().filter(function (v) { return !(v in definedLocal); });
+            if (refVars.length > 0) {
+                elCvHints.classList.remove('d-none');
+                elCvHints.innerHTML = '<span class="small text-muted me-1">Найдены в запросах:</span>' +
+                    refVars.map(function (v) {
+                        var hasDef = v in scriptDefaults;
+                        var defHint = hasDef ? ' (общее: ' + scriptDefaults[v] + ')' : ' (не задана)';
+                        var cls = hasDef ? 'btn-outline-primary' : 'btn-outline-warning text-dark';
+                        return '<button type="button" class="btn btn-sm py-0 px-2 ' + cls + '" data-cv-quick="' + esc(v) + '">' +
+                            '<i class="bi bi-plus-lg me-1"></i>$' + esc(v) + '<span class="opacity-75 ms-1" style="font-size:.75em">' + esc(defHint) + '</span></button>';
+                    }).join('');
+            } else {
+                elCvHints.classList.add('d-none');
+                elCvHints.innerHTML = '';
+            }
+        }
+
+        if (chartVarRows.length === 0) {
+            elCvRows.innerHTML = '<div class="text-muted small">Своих переменных у графика нет — используются общие переменные скрипта. Нажмите «+ Переменная» или кнопку выше, чтобы задать значение только для этого графика.</div>';
+            return;
+        }
+        elCvRows.innerHTML = chartVarRows.map(function (r, idx) {
+            return '<div class="cb-cv-row" data-cv-idx="' + idx + '">' +
+                '<div class="input-group input-group-sm" style="width:190px;flex:0 0 auto">' +
+                    '<span class="input-group-text text-primary fw-bold">$</span>' +
+                    '<input class="form-control cb-cv-name" data-cv-name="' + idx + '" maxlength="64" value="' + esc(r.name) + '" placeholder="instance">' +
+                '</div>' +
+                '<input class="form-control form-control-sm cb-cv-val" data-cv-val="' + idx + '" value="' + esc(r.value) + '" placeholder="значение (например app-01, .* или {run_id})">' +
+                '<div class="d-flex gap-1 align-items-center">' +
+                    '<button type="button" class="cb-chip-ins" data-cv-preset="' + idx + '" data-cv-pval="{run_id}">{run_id}</button>' +
+                    '<button type="button" class="cb-chip-ins" data-cv-preset="' + idx + '" data-cv-pval=".*">.*</button>' +
+                '</div>' +
+                '<button type="button" class="btn btn-sm btn-outline-danger py-0 px-2" data-cv-del="' + idx + '" title="Убрать переменную графика"><i class="bi bi-x-lg"></i></button>' +
+            '</div>';
+        }).join('');
+    }
+
     function pluralSeries(n) {
         var m10 = n % 10, m100 = n % 100;
         if (m10 === 1 && m100 !== 11) { return 'ряд'; }
@@ -608,9 +704,14 @@
         queryRows = preset && preset.queries && preset.queries.length > 0
             ? preset.queries.map(function (q) { return { promql: q.promql || '', legend: q.legend || '', diag: null, labelKeys: [] }; })
             : [{ promql: '', legend: '', diag: null, labelKeys: [] }];
+        chartVarRows = [];
+        if (preset && preset.variables && typeof preset.variables === 'object') {
+            Object.keys(preset.variables).forEach(function (k) { chartVarRows.push({ name: k, value: preset.variables[k] }); });
+        }
         showStudioError('');
         renderUnitPills();
         renderQueries();
+        renderChartVars();
         resetPreviewStage();
         renderList();
         renderVariables();
@@ -637,9 +738,14 @@
         queryRows = (t.queries && t.queries.length > 0 ? t.queries : [{ promql: t.promql || '', legend: '' }]).map(function (q) {
             return { promql: q.promql || '', legend: q.legend || '', diag: null, labelKeys: [] };
         });
+        chartVarRows = [];
+        if (t.variables && typeof t.variables === 'object') {
+            Object.keys(t.variables).forEach(function (k) { chartVarRows.push({ name: k, value: t.variables[k] }); });
+        }
         showStudioError('');
         renderUnitPills();
         renderQueries();
+        renderChartVars();
         resetPreviewStage();
         renderList();
         renderVariables();
@@ -689,6 +795,7 @@
             name: draft.name || 'Предпросмотр',
             unit: draft.unit,
             queries: draft.queries,
+            variables: draft.variables,
             runId: runId,
             minutes: minutes
         }).then(function (res) {
@@ -770,7 +877,8 @@
             name: draft.name,
             unit: draft.unit,
             enabled: draft.enabled,
-            queries: nonEmpty
+            queries: nonEmpty,
+            variables: draft.variables
         }).then(function (res) {
             elSaveBtn.disabled = false;
             if (!res.ok || !res.data.ok) {
@@ -1143,9 +1251,77 @@
     });
 
     // Studio fields
-    elName.addEventListener('input', function () { syncDirty(); updateNameVarHint(); renderVariables(); });
+    elName.addEventListener('input', function () { syncDirty(); updateNameVarHint(); renderChartVars(); renderVariables(); });
     elUnit.addEventListener('input', function () { renderUnitPills(); syncDirty(); });
     elEnabled.addEventListener('change', syncDirty);
+
+    // Per-chart variables interactions
+    if (elCvAddBtn) {
+        elCvAddBtn.addEventListener('click', function () {
+            chartVarRows.push({ name: '', value: '' });
+            renderChartVars();
+            syncDirty();
+            var lastName = elCvRows.querySelector('input[data-cv-name="' + (chartVarRows.length - 1) + '"]');
+            if (lastName) { lastName.focus(); }
+        });
+    }
+    if (elCvHints) {
+        elCvHints.addEventListener('click', function (e) {
+            var btn = e.target.closest('[data-cv-quick]');
+            if (!btn) { return; }
+            var name = btn.dataset.cvQuick;
+            var defMap = varMap();
+            var val = name in defMap ? defMap[name]
+                : (/^(testid|test_id|run_id|runid|test_run_id)$/i.test(name) ? '{run_id}' : '.*');
+            chartVarRows.push({ name: name, value: val });
+            renderChartVars();
+            renderQueries();
+            renderVariables();
+            syncDirty();
+            var valInp = elCvRows.querySelector('input[data-cv-val="' + (chartVarRows.length - 1) + '"]');
+            if (valInp) { valInp.focus(); valInp.select(); }
+        });
+    }
+    if (elCvRows) {
+        elCvRows.addEventListener('input', function (e) {
+            if (e.target.dataset.cvName != null) {
+                chartVarRows[+e.target.dataset.cvName].name = e.target.value;
+                syncDirty();
+                updateNameVarHint();
+                renderVariables();
+            } else if (e.target.dataset.cvVal != null) {
+                chartVarRows[+e.target.dataset.cvVal].value = e.target.value;
+                syncDirty();
+                updateNameVarHint();
+                renderVariables();
+            }
+        });
+        elCvRows.addEventListener('change', function (e) {
+            if (e.target.dataset.cvName != null) {
+                renderChartVars();
+                renderQueries();
+            }
+        });
+        elCvRows.addEventListener('click', function (e) {
+            var del = e.target.closest('[data-cv-del]');
+            if (del) {
+                chartVarRows.splice(+del.dataset.cvDel, 1);
+                renderChartVars();
+                renderQueries();
+                renderVariables();
+                syncDirty();
+                return;
+            }
+            var preset = e.target.closest('[data-cv-preset]');
+            if (preset) {
+                var idx = +preset.dataset.cvPreset;
+                chartVarRows[idx].value = preset.dataset.cvPval;
+                renderChartVars();
+                renderVariables();
+                syncDirty();
+            }
+        });
+    }
 
     elUnitPills.addEventListener('click', function (e) {
         var pill = e.target.closest('.cb-unit-pill');
@@ -1177,6 +1353,7 @@
             autoResize(e.target);
             updateAc(e.target, idx);
             syncDirty();
+            renderChartVars();
             renderVariables();
         } else if (e.target.dataset.qLegend != null) {
             queryRows[+e.target.dataset.qLegend].legend = e.target.value;
@@ -1237,7 +1414,7 @@
             var idx = +btn.dataset.qDel;
             if (queryRows.length > 1) { queryRows.splice(idx, 1); }
             else { queryRows[0] = { promql: '', legend: '', diag: null, labelKeys: [] }; }
-            renderQueries(); syncDirty(); renderVariables();
+            renderQueries(); syncDirty(); renderChartVars(); renderVariables();
             return;
         }
         if ((btn = e.target.closest('[data-q-dup]'))) {
@@ -1265,6 +1442,8 @@
                 queryRows[qi].promql = ta.value;
                 autoResize(ta);
                 syncDirty();
+                renderChartVars();
+                renderVariables();
             }
             return;
         }
@@ -1293,6 +1472,8 @@
                 queryRows[si].promql = ta2.value;
                 autoResize(ta2);
                 syncDirty();
+                renderChartVars();
+                renderVariables();
             }
         }
     });
@@ -1355,7 +1536,7 @@
             api('/api/variables/' + item.dataset.vid + '/delete', 'POST').then(function (res) {
                 if (res.ok && res.data.variables) {
                     variables = res.data.variables;
-                    renderVariables(); renderQueries(); renderList();
+                    renderVariables(); renderChartVars(); renderQueries(); renderList();
                     toast('Переменная $' + item.dataset.vname + ' удалена', 'info');
                 }
             });
@@ -1393,6 +1574,7 @@
             }
             variables = res.data.variables || variables;
             renderVariables();
+            renderChartVars();
             renderQueries();
             renderList();
             toast('Переменная $' + res.data.name + ' сохранена', 'ok');

@@ -29,6 +29,15 @@ public class LoadProfileStore {
         return jdbc.query("select * from load_profile where script_id = ? order by lower(name)", ROWS, scriptId);
     }
 
+    /** Число сохранённых профилей нагрузки по каждому скрипту. */
+    public java.util.Map<Long, Integer> countsByScript() {
+        java.util.Map<Long, Integer> out = new java.util.HashMap<>();
+        jdbc.query("select script_id, count(*) as cnt from load_profile group by script_id", rs -> {
+            out.put(rs.getLong("script_id"), rs.getInt("cnt"));
+        });
+        return out;
+    }
+
     public Optional<Profile> find(long scriptId, long id) {
         return jdbc.query("select * from load_profile where script_id = ? and id = ?", ROWS, scriptId, id).stream().findFirst();
     }

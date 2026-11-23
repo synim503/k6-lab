@@ -70,6 +70,10 @@ public class K6Tool {
         if (fromArtifact.isPresent()) {
             return remember(fromArtifact.get());
         }
+        Optional<Path> fromDist = fromDistDir();
+        if (fromDist.isPresent()) {
+            return remember(fromDist.get());
+        }
         Optional<Path> fromPath = fromPath();
         fromPath.ifPresent(this::remember);
         return fromPath;
@@ -113,6 +117,33 @@ public class K6Tool {
             log.warn("Не удалось подготовить k6 из дистрибутива: {}", e.toString());
             return Optional.empty();
         }
+    }
+
+    /** Запасной поиск k6 прямо в каталоге dist/ портативной сборки (если в data/storage файла нет или раздел noexec). */
+    private Optional<Path> fromDistDir() {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (!os.contains("linux")) {
+            return Optional.empty();
+        }
+        String arch = System.getProperty("os.arch", "");
+        String dirArch = arch.equals("amd64") || arch.equals("x86_64") ? "linux-amd64"
+                : arch.equals("aarch64") ? "linux-arm64" : null;
+        if (dirArch == null || props.getDistDir() == null) {
+            return Optional.empty();
+        }
+        Path dist = props.getDistDir().toAbsolutePath();
+        for (Path candidate : List.of(dist.resolve("k6").resolve(dirArch).resolve("k6"),
+                dist.resolve("xk6").resolve("full").resolve(dirArch).resolve("k6"))) {
+            if (Files.isRegularFile(candidate)) {
+                if (!Files.isExecutable(candidate)) {
+                    candidate.toFile().setExecutable(true, false);
+                }
+                if (Files.isExecutable(candidate)) {
+                    return Optional.of(candidate);
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     private Optional<Path> fromPath() {

@@ -84,7 +84,23 @@ public class CustomChartService {
         return GrafanaDashboardImport.substitute(name, shown);
     }
 
+    /** Объединение переменных: локальные переменные графика имеют приоритет над общими переменными скрипта. */
+    static Map<String, String> mergeVars(Map<String, String> scriptVars, Map<String, String> chartVars) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (scriptVars != null) {
+            out.putAll(scriptVars);
+        }
+        if (chartVars != null) {
+            out.putAll(chartVars);
+        }
+        return out;
+    }
+
     public List<ChartRenderer.Img> charts(Run run) {
+        return charts(run, 0, false);
+    }
+
+    public List<ChartRenderer.Img> charts(Run run, long warmupSec, boolean skipWarmup) {
         List<ChartTemplateStore.Template> templates = store.enabled(run.getScriptId());
         Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
         SettingsService.Prometheus p = settings.prometheus();
@@ -92,14 +108,19 @@ public class CustomChartService {
             return List.of();
         }
         Instant end = run.getFinishedAt() != null ? run.getFinishedAt() : Instant.now();
-        long total = Math.max(1, end.getEpochSecond() - start.getEpochSecond());
+        boolean hasWarmup = warmupSec > 0 && start.plusSeconds(warmupSec).isBefore(end);
+        Instant queryStart = (skipWarmup && hasWarmup) ? start.plusSeconds(warmupSec) : start;
+        double warmupMarkerMin = (!skipWarmup && hasWarmup) ? warmupSec / 60.0 : 0;
+        long total = Math.max(1, end.getEpochSecond() - queryStart.getEpochSecond());
         int push = settings.pushIntervalSec();
         int step = (int) Math.max(push, (long) Math.ceil(total / (double) MAX_POINTS));
         long window = Math.max(15, 3L * push);
         List<ChartRenderer.Img> out = new ArrayList<>();
-        Map<String, String> vars = variables.map(run.getScriptId());
+        Map<String, String> scriptVars = variables.map(run.getScriptId());
         long t0 = start.getEpochSecond();
+        long minTs = queryStart.getEpochSecond();
         for (ChartTemplateStore.Template t : templates) {
+            Map<String, String> vars = mergeVars(scriptVars, t.variables());
             Map<String, List<RunSeriesService.Pt>> series = new LinkedHashMap<>();
             // несколько запросов на одном графике: сбой одного не отменяет остальные
             for (ChartTemplateStore.Query q : t.queries()) {
@@ -107,10 +128,10 @@ public class CustomChartService {
                     continue;
                 }
                 try {
-                    List<PrometheusClient.Series> raw = prom.rangeSeries(p, expand(q.promql(), run.getId(), window, vars), start, end, step);
+                    List<PrometheusClient.Series> raw = prom.rangeSeries(p, expand(q.promql(), run.getId(), window, vars), queryStart, end, step);
                     for (PrometheusClient.Series sr : raw) {
                         String label = seriesName(q.legend(), sr.labels(), sr.labelText(), raw.size());
-                        List<RunSeriesService.Pt> mapped = sr.points().stream().filter(pt -> pt.ts() >= t0)
+                        List<RunSeriesService.Pt> mapped = sr.points().stream().filter(pt -> pt.ts() >= minTs)
                                 .map(pt -> new RunSeriesService.Pt((pt.ts() - t0) / 60.0, pt.value())).toList();
                         String key = label;
                         for (int i = 2; series.containsKey(key); i++) {
@@ -123,7 +144,7 @@ public class CustomChartService {
                 }
             }
             try {
-                ChartRenderer.Img img = ChartRenderer.custom(title(t.name(), vars), t.unit(), series);
+                ChartRenderer.Img img = ChartRenderer.custom(title(t.name(), vars), t.unit(), series, warmupMarkerMin);
                 if (img != null) {
                     out.add(img);
                 }
@@ -144,13 +165,19 @@ public class CustomChartService {
                                 int totalSeries, long elapsedMs, String error, List<QueryDiag> queries) {
     }
 
-    /**
-     * Выполняет запросы конструктора на выбранном запуске скрипта или за последние N минут и рисует точную копию графика отчёта.
-     */
     public PreviewResult preview(long scriptId, String name, String unit, List<ChartTemplateStore.Query> queries,
                                  Long runId, Integer minutes) {
+        return preview(scriptId, name, unit, queries, null, runId, minutes);
+    }
+
+    /**
+     * Выполняет запросы конструктора на выбранном запуске скрипта или за последние N минут и рисует точную копию графика отчёта.
+     * Локальные переменные {@code chartVars} перекрывают общие переменные скрипта.
+     */
+    public PreviewResult preview(long scriptId, String name, String unit, List<ChartTemplateStore.Query> queries,
+                                 Map<String, String> chartVars, Long runId, Integer minutes) {
         long tStartNs = System.nanoTime();
-        Map<String, String> vars = variables.map(scriptId);
+        Map<String, String> vars = mergeVars(variables.map(scriptId), chartVars);
         String renderedTitle = title(name == null || name.isBlank() ? "Предпросмотр" : name.strip(), vars);
         int push = settings.pushIntervalSec();
         long window = Math.max(15, 3L * push);

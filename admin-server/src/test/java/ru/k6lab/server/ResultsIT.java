@@ -236,11 +236,13 @@ class ResultsIT extends AbstractIT {
         assertThat(html).contains("Переменные запуска").contains("BASE_URL").contains("http://sut.example").contains("API_TOKEN").doesNotContain("s3cr3tval");
         mvc.perform(get("/runs/" + run.getId())).andExpect(content().string(containsString("http://sut.example")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("s3cr3tval"))));
-        // абсолютное время на графиках: переключатель в отчёте, те же графики, docx тоже строится
-        String abs = mvc.perform(get("/runs/" + run.getId() + "/report.html").param("time", "abs")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        assertThat(abs).contains("абсолютное время").contains("data:image/png;base64");
-        mvc.perform(get("/runs/" + run.getId() + "/report.docx").param("time", "abs")).andExpect(status().isOk());
-        byte[] pdf = mvc.perform(get("/runs/" + run.getId() + "/report.pdf")).andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
+        // абсолютное время, прогрев и сортировка легенды на графиках: переключатели в отчёте, те же графики, pdf/docx тоже строятся
+        String abs = mvc.perform(get("/runs/" + run.getId() + "/report.html").param("time", "abs").param("warmup", "skip").param("sort", "max").param("dir", "asc"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(abs).contains("абсолютное время").contains("От конца прогрева").contains("Сортировка легенды").contains("data:image/png;base64");
+        mvc.perform(get("/runs/" + run.getId() + "/report.docx").param("time", "abs").param("warmup", "skip").param("sort", "mean").param("dir", "desc")).andExpect(status().isOk());
+        byte[] pdf = mvc.perform(get("/runs/" + run.getId() + "/report.pdf").param("warmup", "skip").param("sort", "last").param("dir", "desc"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
         assertThat(new String(pdf, 0, 5, StandardCharsets.ISO_8859_1)).isEqualTo("%PDF-");
         assertThat(pdf.length).isGreaterThan(5_000);
         var docxResp = mvc.perform(get("/runs/" + run.getId() + "/report.docx")).andExpect(status().isOk()).andReturn().getResponse();

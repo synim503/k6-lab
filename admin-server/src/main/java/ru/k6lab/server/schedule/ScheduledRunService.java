@@ -58,6 +58,13 @@ public class ScheduledRunService {
     /** Ключ настройки: значение «1» - планировщик на паузе. */
     public static final String PAUSED_KEY = "schedule.paused";
 
+    /** Защита от гонки между фоновым tick() и снятием паузы resume(). */
+    private final Object schedulerLock = new Object();
+
+    /** Результат снятия паузы планировщика: немедленно запущенный тест (если генераторы свободны) и число сдвинутых записей очереди. */
+    public record ResumeResult(Long startedScheduleId, Long startedRunId, String startedName, int moved) {
+    }
+
     public ScheduledRunService(ScheduledRunStore store, RunService runs, RunPlanner planner, ScriptService scripts,
                                GeneratorRepository generators, SecretService secrets, AuditService audit, LoadService load,
                                ScheduleTimelineService timeline, SettingsService settings) {
@@ -136,20 +143,120 @@ public class ScheduledRunService {
             secrets.requireExist(SecretService.referencedNames(cleanEnv));
         }
         int dur = plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC;
+        ScheduleTimelineService.Snapshot snap = timeline.snapshot();
         if (runAt == null) {
             // время не выбрано: самое раннее, когда нужные генераторы свободны на весь запуск
-            runAt = timeline.earliestSlot(ids, n, dur, Instant.now().plus(MIN_LEAD).plusSeconds(30));
+            runAt = timeline.earliestSlot(snap, ids, n, dur, Instant.now().plus(MIN_LEAD).plusSeconds(30));
         }
         if (!ids.isEmpty()) {
-            timeline.requireFree(ids, runAt, dur);
+            timeline.requireFree(snap, ids, runAt, dur);
         } else {
             // «любые свободные»: генераторы бронируются сразу, чтобы другие запуски и записи расписания их не заняли
-            ids = timeline.pickFree(runAt, dur, n).stream().sorted().toList();
+            ids = timeline.pickFree(snap, runAt, dur, n).stream().sorted().toList();
         }
         long id = store.create(scriptId, script.getName(), runAt, user, ids, null, cleanEnv, pct, profileId,
                 built == null ? null : built.profileName(), shiftForward);
         audit.record("run.schedule", "script", scriptId, Map.of("scheduleId", id, "runAt", runAt.toString()));
         return id;
+    }
+
+    /** Результат пакетного создания записи расписания (без повторного чтения из БД). */
+    record BatchCreated(long id, Instant runAt, List<Long> generatorIds, int durationSec) {
+    }
+
+    /**
+     * Быстрое планирование одного теста внутри пакета (импорт списка тестов или последовательная серия):
+     * переиспользует общий {@link ScheduleTimelineService.Snapshot} и кэш {@link RunPlan}, обновляя занятость в памяти.
+     */
+    BatchCreated scheduleInBatch(ScheduleTimelineService.Snapshot snap, Map<String, RunPlan> planCache,
+                                 Map<String, LoadService.BuiltLoad> builtCache,
+                                 ru.k6lab.server.script.Script script, Instant runAt, Instant notBefore,
+                                 List<Long> generatorIds, Integer count, Map<String, String> env,
+                                 Long profileId, String user, boolean shiftForward) {
+        if (runAt != null && runAt.isBefore(Instant.now().plus(MIN_LEAD))) {
+            throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
+        }
+        List<Long> ids = generatorIds == null ? List.of() : generatorIds.stream().distinct().sorted().toList();
+        int n = !ids.isEmpty() ? ids.size() : count == null ? script.getGeneratorCount() : count;
+        if (n < 1) {
+            throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
+        }
+        String builtKey = script.getId() + ":" + profileId;
+        LoadService.BuiltLoad built = profileId == null ? null
+                : builtCache.computeIfAbsent(builtKey, k -> load.fromProfile(script.getId(), profileId));
+        String planKey = builtKey + ":" + n;
+        RunPlan plan = planCache.computeIfAbsent(planKey, k -> planner.plan(script.getId(), n, built));
+        if (!plan.ok()) {
+            throw new IllegalArgumentException("Скрипт нельзя запустить: " + String.join("; ", plan.errors()));
+        }
+        Map<String, String> cleanEnv = env == null ? null : cleanEnv(env);
+        if (cleanEnv != null) {
+            secrets.requireExist(SecretService.referencedNames(cleanEnv));
+        }
+        int dur = plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC;
+        Instant slot = runAt != null ? runAt
+                : timeline.earliestSlot(snap, ids, n, dur, notBefore != null ? notBefore : Instant.now().plus(MIN_LEAD).plusSeconds(30));
+        if (!ids.isEmpty()) {
+            timeline.requireFree(snap, ids, slot, dur);
+        } else {
+            ids = timeline.pickFree(snap, slot, dur, n).stream().sorted().toList();
+        }
+        long id = store.create(script.getId(), script.getName(), slot, user, ids, null, cleanEnv, Map.of(), profileId,
+                built == null ? null : built.profileName(), shiftForward);
+        snap.book(id, ids, slot, dur);
+        audit.record("run.schedule", "script", script.getId(), Map.of("scheduleId", id, "runAt", slot.toString()));
+        return new BatchCreated(id, slot, ids, dur);
+    }
+
+    /** Элемент последовательной серии запусков (скрипт + опциональный профиль). */
+    public record SequentialSpec(long scriptId, Long profileId) {
+    }
+
+    /**
+     * Последовательное планирование серии тестов: каждый следующий тест стартует строго после окончания предыдущего
+     * плюс пауза (не меньше {@link ScheduleTimelineService#TAIL_SEC}), даже если свободных генераторов больше, чем нужно.
+     * Для последующих тестов с тем же или меньшим числом генераторов переиспользуются генераторы предыдущего теста,
+     * чтобы сдвиг очереди ({@code shiftForward}) не запускал серию параллельно.
+     * Всё или ничего: при ошибке на любом элементе уже созданные в этой серии записи отменяются.
+     */
+    public List<Long> scheduleSequential(List<SequentialSpec> items, Instant firstRunAt, Integer countOverride,
+                                         int gapSec, boolean shiftForward, String user) {
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException("Список тестов для планирования пуст");
+        }
+        if (firstRunAt != null && firstRunAt.isBefore(Instant.now().plus(MIN_LEAD))) {
+            throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
+        }
+        if (countOverride != null && countOverride < 1) {
+            throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
+        }
+        int pauseSec = Math.max(ScheduleTimelineService.TAIL_SEC, Math.min(24 * 3600, gapSec));
+        Instant cursor = firstRunAt != null ? firstRunAt : Instant.now().plus(MIN_LEAD).plusSeconds(30);
+        ScheduleTimelineService.Snapshot snap = timeline.snapshot();
+        Map<String, RunPlan> planCache = new java.util.HashMap<>();
+        Map<String, LoadService.BuiltLoad> builtCache = new java.util.HashMap<>();
+        Map<Long, ru.k6lab.server.script.Script> scriptCache = new java.util.HashMap<>();
+        List<Long> created = new ArrayList<>();
+        List<Long> prevBooked = List.of();
+        try {
+            for (SequentialSpec spec : items) {
+                var script = scriptCache.computeIfAbsent(spec.scriptId(), scripts::get);
+                int n = countOverride != null ? countOverride : Math.max(1, script.getGeneratorCount());
+                List<Long> targetIds = !prevBooked.isEmpty() && n <= prevBooked.size() ? prevBooked.subList(0, n) : List.of();
+                boolean itemShift = shiftForward && (created.isEmpty() || !targetIds.isEmpty());
+                BatchCreated res = scheduleInBatch(snap, planCache, builtCache, script, null, cursor, targetIds, n,
+                        null, spec.profileId(), user, itemShift);
+                created.add(res.id());
+                if (!res.generatorIds().isEmpty()) {
+                    prevBooked = res.generatorIds();
+                }
+                cursor = res.runAt().plusSeconds((long) res.durationSec() + pauseSec);
+            }
+            return created;
+        } catch (RuntimeException e) {
+            created.forEach(id -> cancel(id, user));
+            throw e;
+        }
     }
 
     /** Переменные: имена как у переменных окружения, значения - строки. */
@@ -187,42 +294,157 @@ public class ScheduledRunService {
     }
 
     public void pause(String user) {
-        if (!paused()) {
-            settings.set(PAUSED_KEY, "1");
-            audit.record("schedule.pause", "schedule", 0L, Map.of("by", String.valueOf(user)));
+        synchronized (schedulerLock) {
+            if (!paused()) {
+                settings.set(PAUSED_KEY, "1");
+                audit.record("schedule.pause", "schedule", 0L, Map.of("by", String.valueOf(user)));
+            }
         }
     }
 
     /**
-     * Снимает паузу. Записи, время которых прошло за паузу, не пропускаются как «просроченные»: каждая переносится на самое раннее
-     * время, когда её генераторы свободны (с паузой между запусками), в прежнем порядке. Остальные остаются на своём времени.
+     * Снимает паузу планировщика:
+     * - если в очереди есть ожидающий тест и его генераторы свободны прямо сейчас — он запускается немедленно;
+     * - все остальные тесты очереди сдвигаются следом в исходном порядке с соблюдением паузы между запусками;
+     * - если генераторы сейчас заняты активным тестом (или недоступны), первый тест не падает в ошибку, а вся очередь
+     *   выстраивается от ближайшего свободного слота после окончания текущего запуска.
      */
-    public int resume(String user) {
-        if (!paused()) {
-            return 0;
+    public ResumeResult resume(String user) {
+        synchronized (schedulerLock) {
+            if (!paused()) {
+                return new ResumeResult(null, null, null, 0);
+            }
+            List<ScheduledRunStore.Item> pending = store.active().stream()
+                    .filter(ScheduledRunStore.Item::pending)
+                    .toList();
+            if (pending.isEmpty()) {
+                settings.delete(PAUSED_KEY);
+                audit.record("schedule.resume", "schedule", 0L, Map.of("by", String.valueOf(user), "moved", 0));
+                return new ResumeResult(null, null, null, 0);
+            }
+
+            Instant now = Instant.now();
+            ScheduledRunStore.Item first = pending.get(0);
+            Long startedScheduleId = null;
+            Long startedRunId = null;
+            String startedName = null;
+            int moved = 0;
+
+            boolean startedFirst = false;
+            if (canStartNow(first)) {
+                store.reschedule(first.id(), now);
+                if (store.claim(first.id())) {
+                    ScheduledRunStore.Item fresh = store.find(first.id()).orElse(first);
+                    startOne(fresh);
+                    ScheduledRunStore.Item after = store.find(first.id()).orElse(fresh);
+                    if (after.status() == ScheduledRunStore.Status.STARTED) {
+                        startedFirst = true;
+                        startedScheduleId = first.id();
+                        startedRunId = after.runId();
+                        startedName = first.profileName() == null || first.profileName().isBlank()
+                                ? first.scriptName() : first.scriptName() + " · " + first.profileName();
+                    }
+                }
+            }
+
+            ScheduleTimelineService.Snapshot snap = timeline.snapshotRunningOnly();
+            int startIdx;
+            Duration delta;
+            Instant prevEnd;
+            if (startedFirst) {
+                int firstDur = timeline.durationSecFor(first);
+                delta = Duration.between(first.runAt(), now);
+                prevEnd = now.plusSeconds((long) firstDur + ScheduleTimelineService.TAIL_SEC);
+                startIdx = 1;
+            } else {
+                delta = null;
+                prevEnd = now.plus(MIN_LEAD).plusSeconds(30);
+                startIdx = 0;
+            }
+
+            for (int i = startIdx; i < pending.size(); i++) {
+                ScheduledRunStore.Item item = pending.get(i);
+                int n = !item.generatorIds().isEmpty() ? item.generatorIds().size()
+                        : item.generatorCount() == null ? 1 : item.generatorCount();
+                int dur = timeline.durationSecFor(item);
+                Instant notBefore;
+                if (delta == null) {
+                    notBefore = prevEnd;
+                } else {
+                    Instant shifted = item.runAt().plus(delta);
+                    notBefore = shifted.isAfter(prevEnd) ? shifted : prevEnd;
+                }
+                Instant slot = findSlotOrFallback(snap, item.generatorIds(), n, dur, notBefore);
+                if (delta == null) {
+                    delta = Duration.between(item.runAt(), slot);
+                }
+                if (!slot.equals(item.runAt()) && store.reschedule(item.id(), slot)) {
+                    moved++;
+                }
+                snap.book(item.id(), item.generatorIds(), slot, dur);
+                prevEnd = slot.plusSeconds((long) dur + ScheduleTimelineService.TAIL_SEC);
+            }
+
+            // снимаем паузу после перекладки очереди, чтобы фоновый tick() не успел пометить просроченные записи как FAILED
+            settings.delete(PAUSED_KEY);
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("by", String.valueOf(user));
+            details.put("moved", moved);
+            if (startedRunId != null) {
+                details.put("startedRunId", startedRunId);
+                details.put("startedScheduleId", startedScheduleId);
+            }
+            audit.record("schedule.resume", "schedule", 0L, details);
+            return new ResumeResult(startedScheduleId, startedRunId, startedName, moved);
         }
-        settings.delete(PAUSED_KEY);
-        int moved = 0;
-        Instant notBefore = Instant.now().plus(MIN_LEAD).plusSeconds(30);
-        for (ScheduledRunStore.Item item : store.due(notBefore.plus(MIN_SHIFT))) {
-            Instant t = timeline.earliestFreeStart(item, notBefore);
-            if (store.reschedule(item.id(), t)) {
-                moved++;
+    }
+
+    /** Проверяет, свободны ли нужные генераторы прямо сейчас (без учёта остывания уже завершившихся тестов). */
+    private boolean canStartNow(ScheduledRunStore.Item item) {
+        List<Generator> all = generators.findAll();
+        Map<Long, Integer> activeByGen = new java.util.HashMap<>();
+        for (Run r : runs.activeRuns()) {
+            for (var rg : runs.generatorsOf(r.getId())) {
+                if (rg.getGeneratorId() != null && !rg.getStatus().isDone()) {
+                    activeByGen.merge(rg.getGeneratorId(), 1, Integer::sum);
+                }
             }
         }
-        audit.record("schedule.resume", "schedule", 0L, Map.of("by", String.valueOf(user), "moved", moved));
-        return moved;
+        java.util.function.Predicate<Generator> freeNow = g -> g.isAvailableForRuns()
+                && activeByGen.getOrDefault(g.getId(), 0) < Math.max(1, g.getMaxConcurrentRuns());
+        if (!item.generatorIds().isEmpty()) {
+            for (Long id : item.generatorIds()) {
+                Generator g = all.stream().filter(x -> x.getId().equals(id)).findFirst().orElse(null);
+                if (g == null || !freeNow.test(g)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        int n = item.generatorCount() == null ? 1 : Math.max(1, item.generatorCount());
+        long free = all.stream().filter(freeNow).count();
+        return free >= n;
+    }
+
+    private Instant findSlotOrFallback(ScheduleTimelineService.Snapshot snap, List<Long> genIds, int n, int dur, Instant notBefore) {
+        try {
+            return timeline.earliestSlot(snap, genIds, n, dur, notBefore);
+        } catch (IllegalArgumentException e) {
+            return notBefore;
+        }
     }
 
     @Scheduled(fixedDelay = 10_000, initialDelay = 20_000)
     public void tick() {
-        if (paused()) {
-            return; // на паузе: ничего не стартуем и не помечаем просроченным
-        }
-        shiftQueue();
-        for (ScheduledRunStore.Item item : store.due(Instant.now())) {
-            if (store.claim(item.id())) {
-                startOne(item);
+        synchronized (schedulerLock) {
+            if (paused()) {
+                return; // на паузе: ничего не стартуем и не помечаем просроченным
+            }
+            shiftQueue();
+            for (ScheduledRunStore.Item item : store.due(Instant.now())) {
+                if (store.claim(item.id())) {
+                    startOne(item);
+                }
             }
         }
     }

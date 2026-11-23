@@ -49,24 +49,45 @@ public class ReportService {
         return abs != null ? abs : chartStyle.absoluteTime();
     }
 
-    private List<ChartRenderer.Img> charts(Run run, RunSnapshot snap, ResultData data, Boolean abs) {
+    /** Обрезка прогрева на графиках: skip == null - как в настройках. */
+    private boolean skipWarmup(Boolean skip) {
+        return skip != null ? skip : chartStyle.skipWarmup();
+    }
+
+    private static long warmupSec(RunSnapshot snap) {
+        return snap != null && snap.warmup() != null && snap.warmup().sec() > 0 ? snap.warmup().sec() : 0;
+    }
+
+    private ChartStyle effectiveStyle(ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir) {
+        ChartStyle s = chartStyle.get();
+        if (sortBy == null && sortDir == null) {
+            return s;
+        }
+        return new ChartStyle(s.theme(), s.width(), s.height(), s.legend(), s.stats(), s.maxLegend(), s.autoWidth(),
+                sortBy != null ? sortBy : s.sortBy(), sortDir != null ? sortDir : s.sortDir());
+    }
+
+    private List<ChartRenderer.Img> charts(Run run, RunSnapshot snap, ResultData data, Boolean abs,
+                                           ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir, Boolean skipWarmup) {
         Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
         Instant end = run.getFinishedAt() != null ? run.getFinishedAt() : Instant.now();
         ChartRenderer.TimeBase tb = absolute(abs) && start != null ? new ChartRenderer.TimeBase(start.toEpochMilli(), end.toEpochMilli()) : null;
-        return ChartRenderer.withTime(tb, () -> ChartRenderer.with(chartStyle.get(), () -> buildCharts(run, snap, data)));
+        ChartStyle style = effectiveStyle(sortBy, sortDir);
+        boolean skip = skipWarmup(skipWarmup);
+        return ChartRenderer.withTime(tb, () -> ChartRenderer.with(style, () -> buildCharts(run, snap, data, skip)));
     }
 
-    private List<ChartRenderer.Img> buildCharts(Run run, RunSnapshot snap, ResultData data) {
+    private List<ChartRenderer.Img> buildCharts(Run run, RunSnapshot snap, ResultData data, boolean skipWarmup) {
         List<ChartRenderer.Img> charts = new java.util.ArrayList<>();
         try {
-            // графики по времени от начала теста
-            charts.addAll(ChartRenderer.timeCharts(seriesService.series(run, snap)));
+            // графики по времени от начала теста (или от конца прогрева)
+            charts.addAll(ChartRenderer.timeCharts(seriesService.series(run, snap), skipWarmup));
             // при многоступенчатом тесте (поиск максимума) добавляем графики по ступеням нагрузки (%) —
             // или используем их как запасные, если временных рядов нет
             if (charts.isEmpty() || data.isStepTest()) {
                 charts.addAll(ChartRenderer.charts(data));
             }
-            charts.addAll(customCharts.charts(run));
+            charts.addAll(customCharts.charts(run, warmupSec(snap), skipWarmup));
         } catch (RuntimeException | LinkageError e) {
             // графики - украшение: без них отчёт всё равно полезен (например, нет AWT на сервере)
         }
@@ -74,10 +95,18 @@ public class ReportService {
     }
 
     public byte[] renderDocx(long runId) {
-        return renderDocx(runId, null);
+        return renderDocx(runId, null, null, null, null);
     }
 
     public byte[] renderDocx(long runId, Boolean abs) {
+        return renderDocx(runId, abs, null, null, null);
+    }
+
+    public byte[] renderDocx(long runId, Boolean abs, ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir) {
+        return renderDocx(runId, abs, sortBy, sortDir, null);
+    }
+
+    public byte[] renderDocx(long runId, Boolean abs, ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir, Boolean skipWarmup) {
         Run run = runService.get(runId);
         RunSnapshot snap = runService.snapshot(run);
         ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
@@ -155,7 +184,7 @@ public class ReportService {
                 }
                 d.table(List.of("Операция", "План, оп/с", "Факт, оп/с", "p50, мс", "p90, мс", "p95, мс", "p99, мс", "SLA", "Ошибки, %", "Dropped"), rows, bad);
             }
-            List<ChartRenderer.Img> charts = charts(run, snap, data, abs);
+            List<ChartRenderer.Img> charts = charts(run, snap, data, abs, sortBy, sortDir, skipWarmup);
             if (!charts.isEmpty()) {
                 d.h1("Графики");
                 for (ChartRenderer.Img c : charts) {
@@ -169,16 +198,32 @@ public class ReportService {
     }
 
     public String renderHtml(long runId) {
-        return renderHtml(runId, null);
+        return renderHtml(runId, null, null, null, null);
     }
 
     public String renderHtml(long runId, Boolean abs) {
+        return renderHtml(runId, abs, null, null, null);
+    }
+
+    public String renderHtml(long runId, Boolean abs, ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir) {
+        return renderHtml(runId, abs, sortBy, sortDir, null);
+    }
+
+    public String renderHtml(long runId, Boolean abs, ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir, Boolean skipWarmup) {
         Run run = runService.get(runId);
         RunSnapshot snap = runService.snapshot(run);
         ResultData data = results.load(runId).orElseGet(() -> results.compute(runId));
-        List<ChartRenderer.Img> charts = charts(run, snap, data, abs);
+        ChartStyle style = effectiveStyle(sortBy, sortDir);
+        boolean skip = skipWarmup(skipWarmup);
+        long wSec = warmupSec(snap);
+        List<ChartRenderer.Img> charts = charts(run, snap, data, abs, sortBy, sortDir, skipWarmup);
         Context ctx = new Context(new Locale("ru"));
         ctx.setVariable("timeAbs", absolute(abs));
+        ctx.setVariable("skipWarmup", skip);
+        ctx.setVariable("hasWarmup", wSec > 0);
+        ctx.setVariable("warmupMinLabel", wSec > 0 ? String.format(Locale.ROOT, "%.1f мин", wSec / 60.0) : "");
+        ctx.setVariable("sortBy", style.sortBy().name());
+        ctx.setVariable("sortDir", style.sortDir().name());
         ctx.setVariable("title", title(run));
         ctx.setVariable("run", run);
         ctx.setVariable("snap", snap);
@@ -191,11 +236,19 @@ public class ReportService {
     }
 
     public byte[] renderPdf(long runId) {
-        return renderPdf(runId, null);
+        return renderPdf(runId, null, null, null, null);
     }
 
     public byte[] renderPdf(long runId, Boolean abs) {
-        String html = renderHtml(runId, abs);
+        return renderPdf(runId, abs, null, null, null);
+    }
+
+    public byte[] renderPdf(long runId, Boolean abs, ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir) {
+        return renderPdf(runId, abs, sortBy, sortDir, null);
+    }
+
+    public byte[] renderPdf(long runId, Boolean abs, ChartStyle.SortBy sortBy, ChartStyle.SortDir sortDir, Boolean skipWarmup) {
+        String html = renderHtml(runId, abs, sortBy, sortDir, skipWarmup);
         var jsoup = Jsoup.parse(html);
         org.w3c.dom.Document doc = new W3CDom().fromJsoup(jsoup);
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {

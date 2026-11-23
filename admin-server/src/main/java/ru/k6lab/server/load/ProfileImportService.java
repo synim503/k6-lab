@@ -24,7 +24,7 @@ public class ProfileImportService {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    public record Imported(String script, String name, boolean updated) {
+    public record Imported(long scriptId, String script, long profileId, String name, boolean updated) {
     }
 
     private final LoadService load;
@@ -73,7 +73,7 @@ public class ProfileImportService {
         List<Imported> out = new ArrayList<>();
         for (Ready r : ready) {
             var saved = profiles.save(r.script().getId(), r.name(), r.data(), user);
-            out.add(new Imported(r.script().getName(), r.name(), saved.updated()));
+            out.add(new Imported(r.script().getId(), r.script().getName(), saved.id(), r.name(), saved.updated()));
         }
         return out;
     }

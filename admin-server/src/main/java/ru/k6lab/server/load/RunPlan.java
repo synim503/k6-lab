@@ -22,6 +22,9 @@ public record RunPlan(Script script, ScriptVersion version, List<LoadOperation> 
     }
 
     public int totalSec() {
-        return steps == null ? 0 : steps.stream().mapToInt(StepPlan::totalSec).sum();
+        int bySteps = steps == null ? 0 : steps.stream().mapToInt(StepPlan::totalSec).sum();
+        int byConfig = config == null ? 0
+                : (int) Math.min(Integer.MAX_VALUE, ru.k6lab.core.k6config.ConfigDuration.of(config).totalSec());
+        return Math.max(bySteps, byConfig);
     }
 }

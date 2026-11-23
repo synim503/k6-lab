@@ -120,14 +120,18 @@
         var el = document.querySelector('#gens-box .gens-updated');
         if (el) { el.textContent = 'обновлено ' + new Date().toTimeString().substring(0, 8); }
     }
-    var statusEs = new EventSource(root.dataset.statusStream);
-    var pending = null;
-    statusEs.addEventListener('status', function () {
-        // события идут часто: обновляем блок не чаще раза в секунду
-        if (pending) { return; }
-        pending = setTimeout(function () { pending = null; refreshStatus(); }, 1000);
-    });
-    setInterval(refreshStatus, 5000);
+    var statusEs = null;
+    var statusTimer = null;
+    if (root.dataset.final !== 'true') {
+        statusEs = new EventSource(root.dataset.statusStream);
+        var pending = null;
+        statusEs.addEventListener('status', function () {
+            // события идут часто: обновляем блок не чаще раза в секунду
+            if (pending) { return; }
+            pending = setTimeout(function () { pending = null; refreshStatus(); }, 1000);
+        });
+        statusTimer = setInterval(refreshStatus, 5000);
+    }
     // блок генераторов свёрнут по умолчанию; раскрытое состояние запоминаем: статус перерисовывается каждые несколько секунд
     function gensOpen() { try { return sessionStorage.getItem('run-gens-open') === '1'; } catch (e) { return false; } }
     function applyGens() { var d = document.getElementById('gens-box'); if (d) { d.open = gensOpen(); } }
@@ -137,6 +141,10 @@
     document.body.addEventListener('htmx:afterSwap', function () { applyGens(); stampUpdated(); });
     document.body.addEventListener('htmx:afterSettle', applyGens);
     applyGens();
-    stampUpdated();
-    window.addEventListener('beforeunload', function () { logEs.close(); statusEs.close(); });
+    if (root.dataset.final !== 'true') { stampUpdated(); }
+    window.addEventListener('beforeunload', function () {
+        logEs.close();
+        if (statusEs) { statusEs.close(); }
+        if (statusTimer) { clearInterval(statusTimer); }
+    });
 })();
