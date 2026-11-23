@@ -55,11 +55,16 @@ if [ "$JAR_ONLY" -eq 0 ]; then
   fi
 fi
 
-# Если скрипт запущен внутри уже склонированного репозитория и --work-dir не задан — используем его,
-# иначе клонируем в ./k6-lab-src (или --work-dir).
+# Если скрипт запущен внутри уже склонированного репозитория (из корня или из scripts/) и --work-dir не задан — используем корень репозитория,
+# иначе клонируем в $OUT_DIR/k6-lab-src.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -z "$WORK_DIR" ]; then
   if [ -f "./pom.xml" ] && [ -f "./scripts/build-portable.sh" ]; then
     WORK_DIR="$(pwd)"
+  elif [ -f "$SCRIPT_DIR/../pom.xml" ] && [ -f "$SCRIPT_DIR/build-portable.sh" ]; then
+    WORK_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+    # если ранее из scripts/ случайно создали scripts/k6-lab-src — убираем дубликат
+    rm -rf "$SCRIPT_DIR/k6-lab-src" 2>/dev/null || true
   else
     WORK_DIR="$OUT_DIR/k6-lab-src"
   fi
@@ -68,9 +73,9 @@ fi
 echo "== [1/3] Получение исходников ($REPO_URL, ветка $BRANCH)"
 if [ -d "$WORK_DIR/.git" ]; then
   cd "$WORK_DIR"
-  git fetch origin "$BRANCH"
+  git fetch origin "$BRANCH" || true
   git checkout "$BRANCH"
-  git pull --ff-only origin "$BRANCH"
+  git pull --ff-only origin "$BRANCH" || true
 else
   GIT_LFS_SKIP_SMUDGE=1 git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$WORK_DIR"
   cd "$WORK_DIR"
@@ -87,8 +92,13 @@ if [ "$JAR_ONLY" -eq 1 ]; then
     if [ -f "$VM_REPO" ] && [ "$(wc -c < "$VM_REPO")" -gt 1000000 ] && [ -f "$VM_ZIP" ]; then
       echo "   Использую офлайн Maven из vendor/maven"
       if [ ! -f .tools/apache-maven-3.9.11/bin/mvn ]; then mkdir -p .tools && (cd .tools && jar xf "../$VM_ZIP"); fi
-      if [ ! -f .m2-vendor/.ready ]; then rm -rf .m2-vendor && mkdir -p .m2-vendor && tar -xzf "$VM_REPO" -C .m2-vendor && touch .m2-vendor/.ready; fi
-      MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.repo.local=$PWD/.m2-vendor -DskipTests -Dapp.build=$APP_BUILD"
+      if [ ! -f .m2-vendor/.ready ]; then
+        rm -rf .m2-vendor && mkdir -p .m2-vendor && tar -xzf "$VM_REPO" -C .m2-vendor && touch .m2-vendor/.ready
+      fi
+      find .m2-vendor -name "_remote.repositories" -delete 2>/dev/null || true
+      printf '<settings/>\n' > .m2-vendor/empty-settings.xml
+      HOST_PWD="$(pwd -W 2>/dev/null || pwd)"
+      MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -llr -s $HOST_PWD/.m2-vendor/empty-settings.xml -Dmaven.repo.local=$HOST_PWD/.m2-vendor -DskipTests -Dapp.build=$APP_BUILD"
     fi
   fi
   chmod +x mvnw 2>/dev/null || true

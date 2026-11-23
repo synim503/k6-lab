@@ -102,8 +102,18 @@ VM_ZIP="vendor/maven/apache-maven-3.9.11-bin.zip"; VM_REPO="vendor/maven/m2-repo
 if [ "$ONLINE" -eq 0 ] && [ -f "$VM_REPO" ] && [ "$(wc -c < "$VM_REPO")" -gt 1000000 ] && [ -f "$VM_ZIP" ]; then
   echo "== Maven из vendor/maven (без интернета)"
   if [ ! -f .tools/apache-maven-3.9.11/bin/mvn ]; then mkdir -p .tools && (cd .tools && jar xf "../$VM_ZIP"); fi
-  if [ ! -f .m2-vendor/.ready ]; then rm -rf .m2-vendor; mkdir -p .m2-vendor && tar -xzf "$VM_REPO" -C .m2-vendor && touch .m2-vendor/.ready; fi
-  MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.repo.local=$PWD/.m2-vendor"
+  if [ ! -f .m2-vendor/.ready ]; then
+    rm -rf .m2-vendor
+    mkdir -p .m2-vendor && tar -xzf "$VM_REPO" -C .m2-vendor
+    find .m2-vendor -name "_remote.repositories" -delete 2>/dev/null || true
+    printf '<settings/>\n' > .m2-vendor/empty-settings.xml
+    touch .m2-vendor/.ready
+  else
+    find .m2-vendor -name "_remote.repositories" -delete 2>/dev/null || true
+    [ -f .m2-vendor/empty-settings.xml ] || printf '<settings/>\n' > .m2-vendor/empty-settings.xml
+  fi
+  HOST_PWD="$(pwd -W 2>/dev/null || pwd)"
+  MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -llr -s $HOST_PWD/.m2-vendor/empty-settings.xml -Dmaven.repo.local=$HOST_PWD/.m2-vendor"
 fi
 
 rm -rf portable
