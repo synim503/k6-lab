@@ -63,13 +63,169 @@
     }
 
     if (searchEl) { searchEl.addEventListener('input', applyFilter); }
+    function setActiveFilter(mode) {
+        activeFilter = mode;
+        filterBtns.forEach(function (b) { b.classList.toggle('active', b.dataset.schFilter === mode); });
+        applyFilter();
+        syncBulkBar();
+    }
     filterBtns.forEach(function (btn) {
         btn.addEventListener('click', function () {
-            activeFilter = btn.dataset.schFilter;
-            filterBtns.forEach(function (b) { b.classList.toggle('active', b === btn); });
-            applyFilter();
+            setActiveFilter(btn.dataset.schFilter);
         });
     });
+    document.querySelectorAll('[data-kpi-filter]').forEach(function (el) {
+        el.addEventListener('click', function (ev) {
+            if (ev.target.closest('a')) { return; }
+            ev.stopPropagation();
+            var target = el.dataset.kpiFilter;
+            setActiveFilter(activeFilter === target ? 'all' : target);
+            var card = document.getElementById('sch-table-card');
+            if (card) { card.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
+        });
+    });
+
+    // ==================== Bulk Selection & Drag-and-Drop Queue Reorder ====================
+    var selectAllCb = document.getElementById('sch-select-all');
+    var bulkBar = document.getElementById('sch-bulk-bar');
+    var bulkCountEl = document.getElementById('sch-bulk-count');
+    var bulkClearBtn = document.getElementById('sch-bulk-clear');
+    var tableCard = document.getElementById('sch-table-card');
+    var csrfMeta = document.querySelector('meta[name="_csrf"]');
+    var csrfToken = csrfMeta ? csrfMeta.content : '';
+
+    function visibleRowCheckboxes() {
+        if (!tbody) { return []; }
+        var out = [];
+        tbody.querySelectorAll('tr.sch-row').forEach(function (tr) {
+            if (tr.style.display !== 'none') {
+                var cb = tr.querySelector('.sch-row-check');
+                if (cb) { out.push(cb); }
+            }
+        });
+        return out;
+    }
+
+    function allCheckedIds() {
+        if (!tbody) { return []; }
+        var ids = [];
+        tbody.querySelectorAll('.sch-row-check:checked').forEach(function (cb) {
+            ids.push(cb.value);
+        });
+        return ids;
+    }
+
+    function syncBulkBar() {
+        if (!tbody) { return; }
+        var checked = allCheckedIds();
+        if (bulkBar && bulkCountEl) {
+            bulkBar.classList.toggle('d-none', checked.length === 0);
+            bulkCountEl.textContent = String(checked.length);
+        }
+        document.querySelectorAll('.sch-bulk-form').forEach(function (form) {
+            form.querySelectorAll('input[name="ids"]').forEach(function (n) { n.remove(); });
+            checked.forEach(function (id) {
+                var inp = document.createElement('input');
+                inp.type = 'hidden';
+                inp.name = 'ids';
+                inp.value = id;
+                form.appendChild(inp);
+            });
+        });
+        if (selectAllCb) {
+            var vis = visibleRowCheckboxes();
+            if (vis.length === 0) {
+                selectAllCb.checked = false;
+                selectAllCb.indeterminate = false;
+                selectAllCb.disabled = true;
+            } else {
+                var allOn = vis.every(function (c) { return c.checked; });
+                var someOn = vis.some(function (c) { return c.checked; });
+                selectAllCb.checked = allOn;
+                selectAllCb.indeterminate = !allOn && someOn;
+                selectAllCb.disabled = false;
+            }
+        }
+    }
+
+    if (selectAllCb) {
+        selectAllCb.addEventListener('change', function () {
+            visibleRowCheckboxes().forEach(function (cb) { cb.checked = selectAllCb.checked; });
+            syncBulkBar();
+        });
+    }
+    if (tbody) {
+        tbody.addEventListener('change', function (ev) {
+            if (ev.target.classList.contains('sch-row-check')) {
+                syncBulkBar();
+            }
+        });
+    }
+    if (bulkClearBtn && tbody) {
+        bulkClearBtn.addEventListener('click', function () {
+            tbody.querySelectorAll('.sch-row-check:checked').forEach(function (cb) { cb.checked = false; });
+            syncBulkBar();
+        });
+    }
+
+    // Drag & Drop перестановка ожидающих строк
+    var dragRow = null;
+    if (tbody && tableCard && tableCard.dataset.reorderUrl) {
+        tbody.addEventListener('dragstart', function (ev) {
+            var tr = ev.target.closest('tr.sch-row[draggable="true"]');
+            if (!tr) { return; }
+            dragRow = tr;
+            tr.classList.add('opacity-50');
+            ev.dataTransfer.effectAllowed = 'move';
+            try { ev.dataTransfer.setData('text/plain', tr.dataset.scheduleId); } catch (e) {}
+        });
+        tbody.addEventListener('dragend', function () {
+            dragRow = null;
+            tbody.querySelectorAll('tr.sch-row').forEach(function (r) {
+                r.classList.remove('opacity-50', 'sch-drag-top', 'sch-drag-bottom');
+            });
+        });
+        tbody.addEventListener('dragover', function (ev) {
+            if (!dragRow) { return; }
+            var tr = ev.target.closest('tr.sch-row[draggable="true"]');
+            if (!tr || tr === dragRow) { return; }
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'move';
+            var rect = tr.getBoundingClientRect();
+            var topHalf = (ev.clientY - rect.top) < rect.height / 2;
+            tbody.querySelectorAll('tr.sch-row').forEach(function (r) {
+                if (r !== tr) { r.classList.remove('sch-drag-top', 'sch-drag-bottom'); }
+            });
+            tr.classList.toggle('sch-drag-top', topHalf);
+            tr.classList.toggle('sch-drag-bottom', !topHalf);
+        });
+        tbody.addEventListener('drop', function (ev) {
+            if (!dragRow) { return; }
+            var tr = ev.target.closest('tr.sch-row[draggable="true"]');
+            if (!tr || tr === dragRow) { return; }
+            ev.preventDefault();
+            var before = tr.classList.contains('sch-drag-top');
+            if (before) {
+                tbody.insertBefore(dragRow, tr);
+            } else {
+                tbody.insertBefore(dragRow, tr.nextSibling);
+            }
+            var orderedIds = [];
+            tbody.querySelectorAll('tr.sch-row[data-pending="true"]').forEach(function (r) {
+                orderedIds.push(Number(r.dataset.scheduleId));
+            });
+            var headers = {'Content-Type': 'application/json', 'Accept': 'application/json'};
+            if (csrfToken) { headers['X-CSRF-TOKEN'] = csrfToken; }
+            fetch(tableCard.dataset.reorderUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: headers,
+                body: JSON.stringify({ids: orderedIds})
+            }).then(function () {
+                location.reload();
+            });
+        });
+    }
 
     // ==================== Dropzones for Import Modals ====================
     function wireDropzone(dzId, fileId, lblId, modalId) {
@@ -167,6 +323,30 @@
         if (qSubmit) { qSubmit.disabled = errs.length > 0; }
     }
 
+    var pendingRepeatOverrides = null;
+
+    function applyRepeatOverrides() {
+        if (!pendingRepeatOverrides) { return; }
+        var ov = pendingRepeatOverrides;
+        pendingRepeatOverrides = null;
+        if (ov.pct && qOpsBox) {
+            Object.keys(ov.pct).forEach(function (op) {
+                var inp = qOpsBox.querySelector('input[name="pct_' + op + '"]');
+                if (inp) { inp.value = ov.pct[op]; }
+            });
+        }
+        var envScriptRadio = document.getElementById('qm-env-script');
+        var envCustomRadio = document.getElementById('qm-env-custom');
+        if (ov.envCustom && envCustomRadio && qEnv) {
+            envCustomRadio.checked = true;
+            qEnv.disabled = false;
+            qEnv.value = ov.envText || '';
+        } else if (envScriptRadio && qEnv) {
+            envScriptRadio.checked = true;
+            qEnv.disabled = true;
+        }
+    }
+
     function loadScriptMeta(scriptId, wantedProfileId, wantedCount) {
         if (!scriptId) { return; }
         qForm.action = qForm.dataset.actionTpl.replace('__ID__', String(scriptId));
@@ -192,6 +372,7 @@
                     if (valid) { qProfile.value = String(valid.id); }
                 }
                 applyQuickProfile();
+                applyRepeatOverrides();
             })
             .catch(function () {
                 if (qErr) { qErr.textContent = 'Не удалось загрузить параметры скрипта.'; qErr.classList.remove('d-none'); }
@@ -244,6 +425,24 @@
             var presetScript = trigger && trigger.dataset.repeatScript ? trigger.dataset.repeatScript : qScript.value;
             var presetProf = trigger && trigger.dataset.repeatProfile ? trigger.dataset.repeatProfile : null;
             var presetCnt = trigger && trigger.dataset.repeatCount ? trigger.dataset.repeatCount : null;
+            var presetGens = trigger && trigger.dataset.repeatGens ? trigger.dataset.repeatGens.split(',').filter(Boolean) : [];
+            var presetShift = trigger && trigger.dataset.repeatShift !== undefined ? trigger.dataset.repeatShift === 'true' : true;
+            var presetEnvCustom = trigger && trigger.dataset.repeatEnvCustom === 'true';
+            var presetEnvText = trigger && trigger.dataset.repeatEnv ? trigger.dataset.repeatEnv : '';
+            var presetPct = null;
+            if (trigger && trigger.dataset.repeatPct) {
+                try { presetPct = JSON.parse(trigger.dataset.repeatPct); } catch (e) { presetPct = null; }
+            }
+            pendingRepeatOverrides = {
+                envCustom: presetEnvCustom,
+                envText: presetEnvText,
+                pct: presetPct
+            };
+            var shiftEl = document.getElementById('qm-shift');
+            if (shiftEl) { shiftEl.checked = presetShift; }
+            qModalEl.querySelectorAll('input[name="generatorId"]').forEach(function (cb) {
+                cb.checked = presetGens.indexOf(String(cb.value)) >= 0;
+            });
             if (presetScript) { qScript.value = presetScript; }
             qAt.value = '';
             qIso.value = '';

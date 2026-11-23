@@ -46,19 +46,26 @@
         </form>
     </div>
 
-    <!-- Сводка KPI -->
+    <!-- Сводка KPI (клик по карточке фильтрует таблицу ниже) -->
     <div class="sch-kpi-grid">
-        <div class="sch-kpi">
-            <div class="k"><i class="bi bi-hourglass-split text-primary"></i>Ожидают старта</div>
-            <div class="v" th:text="${pendingCount}">0</div>
-            <div class="s" th:if="${nextRunAt != null}">ближайший <span class="fw-semibold" th:attr="data-countdown=${nextRunAt}">скоро</span></div>
+        <div class="sch-kpi sch-kpi-clickable" data-kpi-filter="pending" title="Нажмите, чтобы показать ожидающие в очереди тесты">
+            <div class="k"><i class="bi bi-hourglass-split text-primary"></i>Ожидают в очереди</div>
+            <div class="v">
+                <span th:text="${pendingCount}">0</span>
+                <span class="fs-6 fw-normal text-muted" th:if="${pendingCount > 0}" th:text="'(~' + ${totalQueueMin} + ' мин)'"></span>
+            </div>
+            <div class="s" th:if="${nextRunAt != null}">
+                ближайший <span class="fw-semibold" th:attr="data-countdown=${nextRunAt}">скоро</span>
+                <span th:if="${queueFinishAt != null}"> · финиш <time class="local-time" th:attr="datetime=${queueFinishAt}" th:text="${fmt.dt(queueFinishAt)}"></time></span>
+            </div>
             <div class="s" th:if="${nextRunAt == null}">очередь пуста</div>
         </div>
         <div class="sch-kpi">
             <div class="k"><i class="bi bi-play-circle text-success"></i>Идут сейчас</div>
             <div class="v" th:text="${activeRuns.size()}">0</div>
             <div class="s" th:if="${!activeRuns.isEmpty()}">
-                <a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id} + (${st.last} ? '' : ', ')"></a>
+                <a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}"
+                   th:text="'#' + ${r.id} + ' ' + ${r.scriptName} + (${st.last} ? '' : ', ')"></a>
             </div>
             <div class="s" th:if="${activeRuns.isEmpty()}">нет активных тестов</div>
         </div>
@@ -67,10 +74,10 @@
             <div class="v"><span th:text="${freeGenCount}">0</span> <span class="fs-6 fw-normal text-muted">свободно</span></div>
             <div class="s"><span th:text="${onlineGenCount}">0</span> из <span th:text="${generators.size()}">0</span> в сети</div>
         </div>
-        <div class="sch-kpi">
-            <div class="k"><i class="bi bi-clock-history text-primary"></i>Последние записи</div>
+        <div class="sch-kpi sch-kpi-clickable" data-kpi-filter="started" title="Нажмите, чтобы показать запущенные и завершённые записи">
+            <div class="k"><i class="bi bi-clock-history text-primary"></i>История расписания</div>
             <div class="v" th:text="${startedCount}">0</div>
-            <div class="s">запущено · <span th:classappend="${failedCount > 0} ? 'text-danger fw-semibold'" th:text="${failedCount} + ' с ошибкой'"></span></div>
+            <div class="s">запущено · <span class="sch-kpi-err-link" data-kpi-filter="other" th:classappend="${failedCount > 0} ? 'text-danger fw-semibold'" th:text="${failedCount} + ' с ошибкой'"></span></div>
         </div>
     </div>
 
@@ -113,22 +120,25 @@
         </div>
     </div>
 
-    <div class="card" th:unless="${items.isEmpty()}">
+    <div class="card" th:unless="${items.isEmpty()}" id="sch-table-card" th:attr="data-reorder-url=@{/schedule/reorder}">
         <div class="sch-list-toolbar">
             <div class="seg">
                 <button type="button" class="btn btn-sm active" data-sch-filter="all">Все <span class="badge text-bg-light ms-1" th:text="${items.size()}"></span></button>
                 <button type="button" class="btn btn-sm" data-sch-filter="pending">Ожидают <span class="badge text-bg-light ms-1" th:text="${pendingCount}"></span></button>
-                <button type="button" class="btn btn-sm" data-sch-filter="started">Запущены</button>
-                <button type="button" class="btn btn-sm" data-sch-filter="other">Ошибки / отмены</button>
+                <button type="button" class="btn btn-sm" data-sch-filter="started">Запущены <span class="badge text-bg-light ms-1" th:text="${startedCount}"></span></button>
+                <button type="button" class="btn btn-sm" data-sch-filter="other">Ошибки / отмены <span class="badge text-bg-light ms-1" th:text="${otherCount}"></span></button>
             </div>
             <div class="d-flex align-items-center gap-2 flex-wrap">
-                <input class="form-control form-control-sm" style="width:230px" type="search" id="sch-search" placeholder="Поиск по скрипту, профилю…">
-                <div class="dropdown" th:if="${pendingCount > 0}">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" title="Дополнительные действия">
+                <span class="small text-muted d-none d-lg-inline" th:if="${pendingCount > 1}">
+                    <i class="bi bi-grip-vertical"></i> Перетаскивайте ожидающие строки для смены порядка
+                </span>
+                <input class="form-control form-control-sm" style="width:230px" type="search" id="sch-search" placeholder="Поиск по скрипту, профилю, серверу…">
+                <div class="dropdown">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" title="Массовые операции с расписанием">
                         <i class="bi bi-three-dots"></i>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end">
-                        <li>
+                        <li th:if="${pendingCount > 0}">
                             <form class="m-0" th:action="@{/schedule/cancel-all-pending}" method="post"
                                   onsubmit="return confirm('Отменить ВСЕ ожидающие запуски в расписании?')">
                                 <button type="submit" class="dropdown-item small text-danger">
@@ -136,32 +146,93 @@
                                 </button>
                             </form>
                         </li>
+                        <li th:if="${historyCount > 0}">
+                            <form class="m-0" th:action="@{/schedule/clear-history}" method="post"
+                                  onsubmit="return confirm('Очистить историю завершённых, отменённых и упавших записей расписания? Ожидающие в очереди тесты останутся.')">
+                                <button type="submit" class="dropdown-item small">
+                                    <i class="bi bi-trash3 me-2"></i>Очистить историю (<span th:text="${historyCount}"></span>)
+                                </button>
+                            </form>
+                        </li>
                     </ul>
                 </div>
             </div>
         </div>
+
+        <!-- Панель массовых действий с отмеченными галочками прогонами -->
+        <div class="sch-bulk-bar d-none" id="sch-bulk-bar">
+            <span class="small fw-semibold"><i class="bi bi-check2-square me-1 text-primary"></i>Выбрано: <span id="sch-bulk-count">0</span></span>
+            <div class="d-flex flex-wrap align-items-center gap-1 ms-auto">
+                <form th:action="@{/schedule/bulk-requeue(position='front')}" method="post" class="m-0 sch-bulk-form">
+                    <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Поставить все выбранные прогоны в начало очереди (сразу после текущего запуска)">
+                        <i class="bi bi-chevron-bar-up me-1"></i>Выбранные в начало (после текущего)
+                    </button>
+                </form>
+                <form th:action="@{/schedule/bulk-requeue(position='back')}" method="post" class="m-0 sch-bulk-form">
+                    <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Поставить все выбранные прогоны в конец очереди">
+                        <i class="bi bi-chevron-bar-down me-1"></i>Выбранные в конец очереди
+                    </button>
+                </form>
+                <form th:action="@{/schedule/bulk-cancel}" method="post" class="m-0 sch-bulk-form"
+                      onsubmit="return confirm('Отменить выбранные ожидающие записи расписания?')">
+                    <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить выбранные ожидающие записи">
+                        <i class="bi bi-x-lg me-1"></i>Отменить ожидающие
+                    </button>
+                </form>
+                <button type="button" class="btn btn-sm btn-link text-muted py-0 px-2" id="sch-bulk-clear">Снять выбор</button>
+            </div>
+        </div>
+
         <div class="table-responsive">
             <table class="table table-sm table-hover align-middle mb-0">
                 <thead>
                 <tr>
-                    <th>Когда</th>
+                    <th style="width:58px">
+                        <div class="d-flex align-items-center gap-1">
+                            <input type="checkbox" class="form-check-input m-0" id="sch-select-all" title="Выбрать все видимые строки">
+                            <span>№</span>
+                        </div>
+                    </th>
+                    <th>Когда и длительность</th>
                     <th>Скрипт и профиль</th>
                     <th>Генераторы</th>
                     <th>Интенсивность</th>
                     <th>Переменные</th>
                     <th>Статус</th>
-                    <th class="text-end">Действия</th>
+                    <th class="text-end">Очередь и действия</th>
                 </tr>
                 </thead>
                 <tbody id="sch-tbody">
-                <tr class="sch-row" th:each="s : ${items}" th:attr="data-status=${s.status.name()}">
+                <tr class="sch-row" th:each="s : ${items}"
+                    th:with="qPos=${queueOrderById.get(s.id)},durMin=${durationMinById.get(s.id)},genSum=${genSummaryById.get(s.id)},envTxt=${envTextById.get(s.id)},pctJson=${pctJsonById.get(s.id)}"
+                    th:attr="data-status=${s.status.name()},data-schedule-id=${s.id},data-pending=${s.pending},draggable=${s.pending and pendingCount > 1}">
                     <td class="text-nowrap">
-                        <time class="local-time fw-semibold" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time>
+                        <div class="d-flex align-items-center gap-1">
+                            <span class="sch-drag-handle text-muted" th:if="${s.pending and pendingCount > 1}" title="Перетащите строку, чтобы поменять место в очереди">
+                                <i class="bi bi-grip-vertical"></i>
+                            </span>
+                            <input type="checkbox" class="form-check-input m-0 sch-row-check" th:value="${s.id}" aria-label="Выбрать запись">
+                            <span class="badge text-bg-primary rounded-pill ms-1" th:if="${qPos != null}" th:text="'#' + ${qPos}" title="Позиция в очереди ожидающих тестов"></span>
+                            <span class="small text-muted ms-1" th:if="${qPos == null}" th:text="'#' + ${s.id}"></span>
+                        </div>
+                    </td>
+                    <td class="text-nowrap">
+                        <div>
+                            <time class="local-time fw-semibold" th:attr="datetime=${s.runAt}" th:text="${fmt.dt(s.runAt)}"></time>
+                            <span class="badge text-bg-light border ms-1" th:if="${durMin != null}" th:text="'~' + ${durMin} + ' мин'" title="Плановая длительность нагрузки"></span>
+                        </div>
                         <div class="mt-1 d-flex flex-wrap gap-1 align-items-center">
                             <span class="sch-countdown" th:if="${s.pending}" th:attr="data-countdown=${s.runAt}">скоро</span>
-                            <span class="small text-muted" th:if="${s.shiftForward and s.pending}" title="Время может сместиться раньше, если генераторы освободятся">
-                                <i class="bi bi-skip-forward"></i> сдвиг
-                            </span>
+                            <form th:if="${s.pending}" th:action="@{/schedule/{id}/shift(id=${s.id})}" method="post" class="d-inline m-0">
+                                <input type="hidden" name="shift" th:value="${!s.shiftForward}">
+                                <button type="submit" class="btn btn-sm py-0 px-1 border-0"
+                                        th:classappend="${s.shiftForward} ? 'text-primary fw-semibold' : 'text-muted opacity-75'"
+                                        style="font-size:.74rem"
+                                        th:title="${s.shiftForward} ? 'Автосдвиг включён: если генераторы освободятся раньше, тест сдвинется вперёд (нажмите, чтобы закрепить время)' : 'Время закреплено (нажмите, чтобы разрешить автосдвиг вперёд при освобождении генераторов)'">
+                                    <i class="bi" th:classappend="${s.shiftForward} ? 'bi-skip-forward-fill' : 'bi-pin-angle'"></i>
+                                    <span th:text="${s.shiftForward} ? 'автосдвиг' : 'закреплён'"></span>
+                                </button>
+                            </form>
                         </div>
                     </td>
                     <td>
@@ -170,9 +241,11 @@
                             <span class="badge text-bg-light border"><i class="bi bi-collection me-1 text-primary"></i><span th:text="${s.profileName}"></span></span>
                         </div>
                     </td>
-                    <td class="small text-nowrap" th:text="${s.generatorIds.isEmpty()} ? (${s.generatorCount} + ' (свободные)') : (${s.generatorIds.size()} + ' выбранных')"></td>
                     <td class="small">
-                        <span class="text-muted" th:if="${s.intensity.isEmpty()}">100% (как в профиле)</span>
+                        <span class="d-inline-block text-truncate" style="max-width:210px" th:text="${genSum}" th:title="${genSum}"></span>
+                    </td>
+                    <td class="small">
+                        <span class="text-muted" th:if="${s.intensity.isEmpty()}">100% (по профилю)</span>
                         <span th:each="e : ${s.intensity}" class="me-2 d-inline-block">
                             <code th:text="${e.key}"></code> <b th:text="${#numbers.formatDecimal(e.value, 1, 'DEFAULT', 1, 'DEFAULT')} + '%'"></b>
                         </span>
@@ -180,7 +253,8 @@
                     <td class="small">
                         <span class="text-muted" th:if="${s.env == null}">как в скрипте</span>
                         <span class="text-muted" th:if="${s.env != null and s.env.isEmpty()}">без переменных</span>
-                        <span th:if="${s.env != null and !s.env.isEmpty()}" th:each="e : ${s.env}" class="me-1"><code th:text="${e.key}"></code></span>
+                        <span th:if="${s.env != null and !s.env.isEmpty()}" th:each="e : ${s.env}" class="me-1"
+                              th:title="${e.key} + '=' + ${e.value}"><code th:text="${e.key}"></code></span>
                     </td>
                     <td>
                         <span class="badge text-bg-primary" th:if="${s.status.name() == 'PENDING'}">ожидает</span>
@@ -193,20 +267,45 @@
                     </td>
                     <td class="text-end text-nowrap">
                         <div class="d-inline-flex align-items-center gap-1">
-                            <!-- Если запись уже ожидает в очереди (PENDING): быстрые кнопки перемещения в начало / в конец очереди -->
+                            <!-- Управление позицией ожидающего теста в очереди + запуск прямо сейчас -->
                             <th:block th:if="${s.pending}">
-                                <form th:action="@{/schedule/{id}/move(id=${s.id},position='front')}" method="post" class="d-inline m-0">
-                                    <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2"
-                                            title="Переместить в начало очереди (сразу после текущего выполняющегося запуска)">
-                                        <i class="bi bi-chevron-bar-up"></i>
+                                <form th:action="@{/schedule/{id}/start-now(id=${s.id})}" method="post" class="d-inline m-0"
+                                      onsubmit="return confirm('Запустить этот тест прямо сейчас (если генераторы свободны)? Остальные записи очереди сдвинутся следом.')">
+                                    <button type="submit" class="btn btn-sm btn-outline-success py-0 px-2"
+                                            title="Запустить прямо сейчас вне очереди (если генераторы свободны)">
+                                        <i class="bi bi-play-fill"></i>
                                     </button>
                                 </form>
-                                <form th:action="@{/schedule/{id}/move(id=${s.id},position='back')}" method="post" class="d-inline m-0">
-                                    <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                                            title="Переместить в конец очереди">
-                                        <i class="bi bi-chevron-bar-down"></i>
-                                    </button>
-                                </form>
+                                <div class="btn-group btn-group-sm" th:if="${pendingCount > 1}" role="group" aria-label="Позиция в очереди">
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='front')}" method="post" class="d-inline m-0">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                                th:disabled="${qPos == 1}"
+                                                title="В самое начало очереди (сразу после текущего запуска)">
+                                            <i class="bi bi-chevron-bar-up"></i>
+                                        </button>
+                                    </form>
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='up')}" method="post" class="d-inline m-0">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                                th:disabled="${qPos == 1}"
+                                                title="На 1 позицию выше в очереди">
+                                            <i class="bi bi-chevron-up"></i>
+                                        </button>
+                                    </form>
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='down')}" method="post" class="d-inline m-0">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                                th:disabled="${qPos == pendingCount}"
+                                                title="На 1 позицию ниже в очереди">
+                                            <i class="bi bi-chevron-down"></i>
+                                        </button>
+                                    </form>
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='back')}" method="post" class="d-inline m-0">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
+                                                th:disabled="${qPos == pendingCount}"
+                                                title="В самый конец очереди">
+                                            <i class="bi bi-chevron-bar-down"></i>
+                                        </button>
+                                    </form>
+                                </div>
                             </th:block>
 
                             <!-- Повторное добавление прогона в очередь (в начало после текущего или в конец) -->
@@ -240,8 +339,15 @@
                                     <li>
                                         <button type="button" class="dropdown-item small"
                                                 data-bs-toggle="modal" data-bs-target="#sch-quick-modal"
-                                                th:attr="data-repeat-script=${s.scriptId},data-repeat-profile=${s.profileId},data-repeat-count=${s.generatorCount}">
-                                            <i class="bi bi-sliders me-2"></i>Настроить и запланировать…
+                                                th:attr="data-repeat-script=${s.scriptId},
+                                                         data-repeat-profile=${s.profileId},
+                                                         data-repeat-count=${s.generatorIds.isEmpty() ? s.generatorCount : s.generatorIds.size()},
+                                                         data-repeat-gens=${#strings.listJoin(s.generatorIds, ',')},
+                                                         data-repeat-env=${envTxt},
+                                                         data-repeat-env-custom=${s.env != null},
+                                                         data-repeat-pct=${pctJson},
+                                                         data-repeat-shift=${s.shiftForward}">
+                                            <i class="bi bi-sliders me-2"></i>Изменить параметры и запланировать…
                                         </button>
                                     </li>
                                 </ul>
@@ -249,12 +355,12 @@
 
                             <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
                                   onsubmit="return confirm('Отменить запланированный запуск?')">
-                                <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить">Отменить</button>
+                                <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить"><i class="bi bi-x-lg"></i></button>
                             </form>
                         </div>
                     </td>
                 </tr>
-                <tr class="d-none" id="sch-filter-empty"><td colspan="7" class="text-center text-muted py-4 small">Нет записей по выбранному фильтру.</td></tr>
+                <tr class="d-none" id="sch-filter-empty"><td colspan="8" class="text-center text-muted py-4 small">Нет записей по выбранному фильтру.</td></tr>
                 </tbody>
             </table>
         </div>

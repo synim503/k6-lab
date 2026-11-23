@@ -122,6 +122,16 @@ public class ScheduledRunStore {
         return jdbc.update("update scheduled_run set status = 'CANCELLED', finished_at = now() where id = ? and status = 'PENDING'", id) == 1;
     }
 
+    /** Удаляет завершённые/отменённые/упавшие записи истории расписания (PENDING и STARTING не трогает). */
+    public int clearHistory() {
+        return jdbc.update("delete from scheduled_run where status in ('STARTED', 'FAILED', 'CANCELLED')");
+    }
+
+    /** Переключает флаг автоматического сдвига вперёд у ожидающей записи. */
+    public boolean setShiftForward(long id, boolean shiftForward) {
+        return jdbc.update("update scheduled_run set shift_forward = ? where id = ? and status = 'PENDING'", shiftForward, id) == 1;
+    }
+
     public void started(long id, long runId) {
         jdbc.update("update scheduled_run set status = 'STARTED', run_id = ?, finished_at = now() where id = ?", runId, id);
     }

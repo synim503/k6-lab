@@ -105,13 +105,38 @@
             row('Переменные', b.env ? esc(b.env) : '');
             row('Назначил', b.by ? esc(b.by) : '');
             if (b.kind === 'run' && b.scheduled) { row('Источник', 'запуск по расписанию'); }
-            row('Ссылка', b.runId ? '<a href="' + runUrl + b.runId + '">запуск #' + b.runId + '</a>' : b.scheduleId ? '<a href="' + schUrl + '">запись расписания #' + b.scheduleId + '</a>' : '');
+            row('Ссылка', b.runId ? '<a href="' + runUrl + b.runId + '">запуск #' + b.runId + '</a>' : b.scheduleId ? '<a href="#sch-row-' + b.scheduleId + '" data-tl-jump="' + b.scheduleId + '">запись расписания #' + b.scheduleId + ' (показать в таблице)</a>' : '');
             return '<div class="card card-body py-2 mt-2"><div class="mb-1">' + head + '</div><dl>' + rows.join('') + '</dl></div>';
         }
         function showDetail(b) {
             if (!detail) { return; }
             shown = b ? (b.runId ? 'r' + b.runId : 's' + b.scheduleId) : null;
             detail.innerHTML = b ? barDetail(b) : '';
+            if (b && b.scheduleId && !interactive) {
+                var tr = document.querySelector('tr.sch-row[data-schedule-id="' + b.scheduleId + '"]');
+                if (tr) {
+                    document.querySelectorAll('tr.sch-row.sch-row-highlight').forEach(function (r) { r.classList.remove('sch-row-highlight'); });
+                    tr.classList.add('sch-row-highlight');
+                }
+            }
+        }
+        if (detail) {
+            detail.addEventListener('click', function (ev) {
+                var jump = ev.target.closest('[data-tl-jump]');
+                if (!jump) { return; }
+                ev.preventDefault();
+                var sid = jump.dataset.tlJump;
+                var tr = document.querySelector('tr.sch-row[data-schedule-id="' + sid + '"]');
+                if (tr) {
+                    if (tr.style.display === 'none') {
+                        var allBtn = document.querySelector('[data-sch-filter="all"]');
+                        if (allBtn) { allBtn.click(); }
+                    }
+                    tr.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    document.querySelectorAll('tr.sch-row.sch-row-highlight').forEach(function (r) { r.classList.remove('sch-row-highlight'); });
+                    tr.classList.add('sch-row-highlight');
+                }
+            });
         }
 
         function render() {

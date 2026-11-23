@@ -498,6 +498,174 @@ public class ScheduledRunService {
         }
     }
 
+    /**
+     * Перемещает уже ожидающую запись расписания (PENDING) на один шаг вверх ({@code delta = -1}) или вниз ({@code delta = +1})
+     * в очереди ожидающих тестов, пересчитывая время старта всей очереди.
+     */
+    public EnqueueResult stepPending(long scheduleId, int delta, String user) {
+        synchronized (schedulerLock) {
+            ScheduledRunStore.Item target = store.find(scheduleId)
+                    .orElseThrow(() -> new IllegalArgumentException("Запись расписания #" + scheduleId + " не найдена"));
+            if (!target.pending()) {
+                throw new IllegalArgumentException("Запись #" + scheduleId + " уже не ожидает в очереди");
+            }
+            List<ScheduledRunStore.Item> pending = new ArrayList<>(store.active().stream()
+                    .filter(ScheduledRunStore.Item::pending)
+                    .toList());
+            int idx = -1;
+            for (int i = 0; i < pending.size(); i++) {
+                if (pending.get(i).id() == scheduleId) {
+                    idx = i;
+                    break;
+                }
+            }
+            String title = target.profileName() == null || target.profileName().isBlank()
+                    ? target.scriptName() : target.scriptName() + " · " + target.profileName();
+            if (idx < 0) {
+                return new EnqueueResult(scheduleId, target.runAt(), title, 0);
+            }
+            int nextIdx = Math.max(0, Math.min(pending.size() - 1, idx + delta));
+            if (nextIdx == idx) {
+                return new EnqueueResult(scheduleId, target.runAt(), title, 0);
+            }
+            ScheduledRunStore.Item removed = pending.remove(idx);
+            pending.add(nextIdx, removed);
+            int shifted = reflowPendingOrder(pending);
+            ScheduledRunStore.Item updated = store.find(scheduleId).orElse(target);
+            audit.record("run.schedule_step", "scheduled_run", scheduleId,
+                    Map.of("delta", delta, "newIndex", nextIdx + 1, "runAt", updated.runAt().toString(), "by", String.valueOf(user)));
+            return new EnqueueResult(scheduleId, updated.runAt(), title, shifted);
+        }
+    }
+
+    /**
+     * Устанавливает произвольный порядок ожидающих записей расписания (например, после Drag & Drop в таблице очереди)
+     * и пересчитывает времена их старта без наложений с паузой 5 минут.
+     */
+    public int reorderPending(List<Long> orderedIds, String user) {
+        synchronized (schedulerLock) {
+            List<ScheduledRunStore.Item> current = store.active().stream()
+                    .filter(ScheduledRunStore.Item::pending)
+                    .toList();
+            if (current.size() <= 1 || orderedIds == null || orderedIds.isEmpty()) {
+                return 0;
+            }
+            Map<Long, ScheduledRunStore.Item> byId = new LinkedHashMap<>();
+            current.forEach(i -> byId.put(i.id(), i));
+            List<ScheduledRunStore.Item> ordered = new ArrayList<>(current.size());
+            Set<Long> seen = new HashSet<>();
+            for (Long id : orderedIds) {
+                if (id != null && byId.containsKey(id) && seen.add(id)) {
+                    ordered.add(byId.get(id));
+                }
+            }
+            for (ScheduledRunStore.Item item : current) {
+                if (seen.add(item.id())) {
+                    ordered.add(item);
+                }
+            }
+            int shifted = reflowPendingOrder(ordered);
+            audit.record("run.schedule_reorder", "schedule", 0L,
+                    Map.of("count", ordered.size(), "shifted", shifted, "by", String.valueOf(user)));
+            return shifted;
+        }
+    }
+
+    /**
+     * Немедленно запускает выбранную ожидающую запись расписания (если её генераторы свободны прямо сейчас)
+     * и сдвигает остальные ожидающие записи следом.
+     */
+    public ResumeResult startNow(long scheduleId, String user) {
+        synchronized (schedulerLock) {
+            ScheduledRunStore.Item target = store.find(scheduleId)
+                    .orElseThrow(() -> new IllegalArgumentException("Запись расписания #" + scheduleId + " не найдена"));
+            if (!target.pending()) {
+                throw new IllegalArgumentException("Запись #" + scheduleId + " уже не ожидает в очереди");
+            }
+            if (!canStartNow(target)) {
+                throw new IllegalStateException("Нужные генераторы сейчас заняты активным запуском или недоступны — дождитесь окончания текущего теста или поставьте запись в начало очереди");
+            }
+            Instant now = Instant.now();
+            store.reschedule(target.id(), now);
+            if (!store.claim(target.id())) {
+                throw new IllegalStateException("Запись #" + scheduleId + " уже захвачена другим потоком");
+            }
+            ScheduledRunStore.Item fresh = store.find(target.id()).orElse(target);
+            startOne(fresh);
+            ScheduledRunStore.Item after = store.find(target.id()).orElse(fresh);
+            if (after.status() != ScheduledRunStore.Status.STARTED || after.runId() == null) {
+                throw new IllegalStateException(after.error() != null ? after.error() : "Не удалось запустить тест");
+            }
+            List<ScheduledRunStore.Item> remaining = store.active().stream()
+                    .filter(ScheduledRunStore.Item::pending)
+                    .toList();
+            int moved = reflowPendingOrder(remaining);
+            String title = target.profileName() == null || target.profileName().isBlank()
+                    ? target.scriptName() : target.scriptName() + " · " + target.profileName();
+            audit.record("run.schedule_start_now", "scheduled_run", scheduleId,
+                    Map.of("runId", after.runId(), "moved", moved, "by", String.valueOf(user)));
+            return new ResumeResult(scheduleId, after.runId(), title, moved);
+        }
+    }
+
+    /** Массовая отмена выбранных ожидающих записей расписания. */
+    public int cancelMany(List<Long> ids, String user) {
+        if (ids == null || ids.isEmpty()) {
+            return 0;
+        }
+        int n = 0;
+        for (Long id : ids) {
+            if (id != null && cancel(id, user)) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** Массовая повторная постановка списка записей расписания в начало (после текущего) или в конец очереди с сохранением их взаимного порядка. */
+    public int requeueMany(List<Long> ids, QueuePosition position, String user) {
+        if (ids == null || ids.isEmpty()) {
+            return 0;
+        }
+        List<Long> ordered = new ArrayList<>(ids);
+        if (position == QueuePosition.FRONT) {
+            // чтобы при поочерёдной вставке в начало взаимный порядок выбранных записей сохранился, идём с конца списка
+            java.util.Collections.reverse(ordered);
+        }
+        int count = 0;
+        for (Long id : ordered) {
+            if (id != null && store.find(id).isPresent()) {
+                requeueScheduleItem(id, position, user);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Очищает историю завершённых, отменённых и упавших записей расписания (ожидающие записи не затрагиваются). */
+    public int clearHistory(String user) {
+        int n = store.clearHistory();
+        if (n > 0) {
+            audit.record("schedule.clear_history", "schedule", 0L, Map.of("deleted", n, "by", String.valueOf(user)));
+        }
+        return n;
+    }
+
+    /** Переключает флаг автосдвига (shift_forward) у ожидающей записи. */
+    public boolean setShiftForward(long scheduleId, boolean shiftForward, String user) {
+        boolean ok = store.setShiftForward(scheduleId, shiftForward);
+        if (ok) {
+            audit.record("run.schedule_shift_flag", "scheduled_run", scheduleId,
+                    Map.of("shiftForward", shiftForward, "by", String.valueOf(user)));
+        }
+        return ok;
+    }
+
+    /** Плановая длительность записи расписания в секундах (для отображения в таблице очереди). */
+    public int durationSecOf(ScheduledRunStore.Item item) {
+        return timeline.durationSecFor(item);
+    }
+
     /** Перекладывает список ожидающих записей строго в переданном порядке после текущего выполняющегося теста. */
     private int reflowPendingOrder(List<ScheduledRunStore.Item> orderedPending) {
         ScheduleTimelineService.Snapshot snap = timeline.snapshotRunningWithCooldown();

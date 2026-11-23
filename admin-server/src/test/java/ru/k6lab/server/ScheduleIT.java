@@ -640,6 +640,60 @@ class ScheduleIT extends AbstractIT {
             List<ScheduledRunStore.Item> pendingAfterMove = store.active();
             assertThat(pendingAfterMove).extracting(ScheduledRunStore.Item::id)
                     .containsExactly(backItem.id(), frontItem.id(), q1, q2);
+
+            // 4. Пошаговое перемещение на 1 позицию вниз (up/down) и Drag & Drop перестановка (/schedule/reorder)
+            mvc.perform(post("/schedule/" + backItem.id() + "/move").with(csrf()).param("position", "down"))
+                    .andExpect(status().is3xxRedirection());
+            assertThat(store.active()).extracting(ScheduledRunStore.Item::id)
+                    .containsExactly(frontItem.id(), backItem.id(), q1, q2);
+
+            mvc.perform(post("/schedule/reorder").with(csrf())
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content("{\"ids\":[" + q2 + "," + q1 + "," + frontItem.id() + "," + backItem.id() + "]}"))
+                    .andExpect(status().isOk());
+            assertThat(store.active()).extracting(ScheduledRunStore.Item::id)
+                    .containsExactly(q2, q1, frontItem.id(), backItem.id());
+
+            // 5. Переключение автосдвига (shift_forward) у записи прямо из таблицы
+            mvc.perform(post("/schedule/" + q2 + "/shift").with(csrf()).param("shift", "true"))
+                    .andExpect(status().is3xxRedirection());
+            assertThat(store.find(q2).orElseThrow().shiftForward()).isTrue();
+
+            // 6. Массовая отмена выбранных записей (/schedule/bulk-cancel) и массовое возвращение в начало очереди (/schedule/bulk-requeue)
+            mvc.perform(post("/schedule/bulk-cancel").with(csrf())
+                            .param("ids", String.valueOf(q2), String.valueOf(q1)))
+                    .andExpect(status().is3xxRedirection());
+            assertThat(store.active()).extracting(ScheduledRunStore.Item::id)
+                    .containsExactly(frontItem.id(), backItem.id());
+
+            mvc.perform(post("/schedule/bulk-requeue").with(csrf())
+                            .param("position", "front")
+                            .param("ids", String.valueOf(q2), String.valueOf(q1)))
+                    .andExpect(status().is3xxRedirection());
+            List<ScheduledRunStore.Item> afterBulkFront = store.active();
+            assertThat(afterBulkFront).hasSize(4);
+            // Порядок пары (q2 -> Профиль-Б, затем q1 -> Профиль-А) сохранился в начале очереди
+            assertThat(afterBulkFront.get(0).profileId()).isEqualTo(profB);
+            assertThat(afterBulkFront.get(1).profileId()).isEqualTo(profA);
+            assertThat(afterBulkFront.get(2).id()).isEqualTo(frontItem.id());
+            assertThat(afterBulkFront.get(3).id()).isEqualTo(backItem.id());
+
+            // 7. Очистка истории завершённых/отменённых записей (/schedule/clear-history) не затрагивает ожидающие
+            mvc.perform(post("/schedule/clear-history").with(csrf()))
+                    .andExpect(status().is3xxRedirection());
+            assertThat(store.active()).hasSize(4);
+            assertThat(store.find(cancelledId)).isEmpty();
+
+            // 8. Немедленный запуск выбранного теста вне очереди (/schedule/{id}/start-now), когда генератор освободился
+            jdbc.update("update generator set active_runs = 0 where id = ?", g.getId());
+            runService.update(activeRun.getId(), r -> r.setStatus(ru.k6lab.core.runstate.RunStatus.FINISHED));
+
+            mvc.perform(post("/schedule/" + backItem.id() + "/start-now").with(csrf()))
+                    .andExpect(status().is3xxRedirection());
+            ScheduledRunStore.Item startedNow = store.find(backItem.id()).orElseThrow();
+            assertThat(startedNow.status()).isEqualTo(ScheduledRunStore.Status.STARTED);
+            assertThat(startedNow.runId()).isNotNull();
+            assertThat(store.active()).hasSize(3);
         } finally {
             mvc.perform(post("/schedule/cancel-all-pending").with(csrf()));
             jdbc.update("update generator set active_runs = 0 where id = ?", g.getId());
