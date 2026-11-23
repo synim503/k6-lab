@@ -71,9 +71,17 @@ public class ProfileImportService {
             }
         }
         List<Imported> out = new ArrayList<>();
+        Set<Long> affectedScripts = new HashSet<>();
         for (Ready r : ready) {
             var saved = profiles.save(r.script().getId(), r.name(), r.data(), user);
             out.add(new Imported(r.script().getId(), r.script().getName(), saved.id(), r.name(), saved.updated()));
+            affectedScripts.add(r.script().getId());
+        }
+        for (Long sid : affectedScripts) {
+            Script s = scripts.get(sid);
+            if (s.getSuccessCriteria() != null && Boolean.TRUE.equals(s.getSuccessCriteria().get("baseProfileActive"))) {
+                load.syncBaseToAllProfiles(sid, user);
+            }
         }
         return out;
     }

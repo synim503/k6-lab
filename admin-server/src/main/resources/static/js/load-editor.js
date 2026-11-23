@@ -812,10 +812,16 @@
     }
 
     // ==================== Global Warmup ====================
+    var baseWarmupInput = document.getElementById('ld-base-warmup-dur');
+    function syncBaseWarmupHidden() {
+        if (!baseWarmupInput || !gwOnEl) { return; }
+        baseWarmupInput.value = gwOnEl.checked ? gwDur() : '';
+    }
     function gwRefresh() {
         if (!gwOnEl) { return; }
         gwDEl.disabled = !gwOnEl.checked;
         if (gwBox) { gwBox.classList.toggle('is-off', !gwOnEl.checked); }
+        syncBaseWarmupHidden();
     }
     function gwValid() {
         var sec = durSec(gwDur());
@@ -842,6 +848,9 @@
             if (w.stages && o.stages && o.stages.length) { found.push(String(o.stages[0].duration || '')); }
             else if (w.duration) { found.push(String(w.duration)); }
         });
+        if (found.length === 0 && baseWarmupInput && baseWarmupInput.value.trim()) {
+            found.push(baseWarmupInput.value.trim());
+        }
         gwAdopt(found);
     }
     function gwFromRows() {
@@ -1911,6 +1920,7 @@
                 return;
             }
             if (envTablePane && !envTablePane.classList.contains('d-none')) { syncEnvToTextarea(); }
+            syncBaseWarmupHidden();
             submitting = true;
             body.querySelectorAll('.op-row').forEach(sync);
         });
@@ -1938,13 +1948,14 @@
     var pick = document.getElementById('profile-pick');
     if (pick) {
         var openProfile = function () {
-            if (!pick.value) { return; }
-            if (dirty && !confirm('Несохранённые изменения формы будут заменены профилем. Продолжить?')) {
+            if (dirty && !confirm('Несохранённые изменения формы будут заменены. Продолжить?')) {
                 pick.value = pick.dataset.current || '';
                 return;
             }
             dirty = false;
-            location.href = pick.dataset.openUrl + '?profile=' + encodeURIComponent(pick.value);
+            location.href = pick.value
+                ? pick.dataset.openUrl + '?profile=' + encodeURIComponent(pick.value)
+                : pick.dataset.openUrl;
         };
         pick.dataset.current = pick.value;
         pick.addEventListener('change', openProfile);

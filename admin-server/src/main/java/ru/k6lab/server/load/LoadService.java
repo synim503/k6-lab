@@ -102,6 +102,7 @@ public class LoadService {
         f.setGeneratorCount(script.getGeneratorCount());
         f.setEnvText(LoadForm.formatKv(script.getEnv()));
         f.setStop(LoadForm.StopForm.of(script.getStopCriteria()));
+        readBaseConfigIntoForm(script, f);
         List<LoadOperation> saved = activeOperations(scriptId);
         for (LoadOperation o : saved) {
             LoadForm.OpForm of = new LoadForm.OpForm();
@@ -119,8 +120,61 @@ public class LoadService {
             f.getOps().add(of);
         }
         completeWithScriptFunctions(scriptId, f);
+        applyBaseSlaToFormOps(script, f);
         f.setDataFiles(dataRows(scriptId, dataFiles(scriptId)));
         return f;
+    }
+
+    /** Заполняет в форме настройки базового профиля скрипта (приоритет разделов и общий прогрев из script.successCriteria). */
+    public void readBaseConfigIntoForm(Script script, LoadForm f) {
+        Map<String, Object> sc = script.getSuccessCriteria();
+        if (sc == null) {
+            return;
+        }
+        f.setBaseProfileActive(Boolean.TRUE.equals(sc.get("baseProfileActive")));
+        f.setBaseOverrideEnv(!sc.containsKey("baseOverrideEnv") || Boolean.TRUE.equals(sc.get("baseOverrideEnv")));
+        f.setBaseOverrideStop(!sc.containsKey("baseOverrideStop") || Boolean.TRUE.equals(sc.get("baseOverrideStop")));
+        f.setBaseOverrideSla(!sc.containsKey("baseOverrideSla") || Boolean.TRUE.equals(sc.get("baseOverrideSla")));
+        f.setBaseOverrideWarmup(!sc.containsKey("baseOverrideWarmup") || Boolean.TRUE.equals(sc.get("baseOverrideWarmup")));
+        f.setBaseOverrideData(!sc.containsKey("baseOverrideData") || Boolean.TRUE.equals(sc.get("baseOverrideData")));
+        f.setBaseOverrideGenerators(!sc.containsKey("baseOverrideGenerators") || Boolean.TRUE.equals(sc.get("baseOverrideGenerators")));
+        Object wd = sc.get("baseWarmupDuration");
+        f.setBaseWarmupDuration(wd instanceof String s ? s.strip() : "");
+    }
+
+    /** Применяет сохранённые в базовом профиле SLA к операциям формы (в том числе выключенным в базе, но используемым в 40 профилях). */
+    @SuppressWarnings("unchecked")
+    private void applyBaseSlaToFormOps(Script script, LoadForm f) {
+        Map<String, Object> sc = script.getSuccessCriteria();
+        if (sc == null || !(sc.get("baseOpSla") instanceof Map<?, ?> rawMap)) {
+            return;
+        }
+        for (LoadForm.OpForm o : f.getOps()) {
+            if (o == null || o.blank()) {
+                continue;
+            }
+            Object entry = rawMap.get(o.getName() == null ? "" : o.getName().strip());
+            if (!(entry instanceof Map<?, ?>) && o.getExecFn() != null) {
+                entry = rawMap.get(o.getExecFn().strip());
+            }
+            if (entry instanceof Map<?, ?> m) {
+                if (m.get("slaPercentile") instanceof Number n) {
+                    o.setSlaPercentile(n.intValue());
+                }
+                if (m.get("slaThresholdMs") instanceof Number n) {
+                    o.setSlaThresholdMs(n.doubleValue());
+                }
+                if (m.get("maxErrorPct") instanceof Number n) {
+                    o.setMaxErrorPct(n.doubleValue());
+                }
+                if (m.get("failureSource") instanceof String fs && !fs.isBlank()) {
+                    try {
+                        o.setFailureSource(OperationSpec.FailureSource.valueOf(fs));
+                    } catch (IllegalArgumentException ignored) {
+                    }
+                }
+            }
+        }
     }
 
     /** Функции последней версии скрипта, которых в форме ещё нет, добавляются выключенными строками (их можно включить и описать). */
@@ -188,7 +242,8 @@ public class LoadService {
     @Transactional
     public void save(Long scriptId, LoadForm f) {
         Script script = scripts.get(scriptId);
-        BuiltLoad b = build(scriptId, f);
+        boolean allowEmptyOps = f.isBaseProfileActive() || !profiles.list(scriptId).isEmpty();
+        BuiltLoad b = build(scriptId, f, allowEmptyOps);
         operations.deleteByScriptId(scriptId);
         operations.flush();
         operations.saveAll(b.ops());
@@ -201,18 +256,239 @@ public class LoadService {
         }
         script.setEnv(b.env());
         script.setStopCriteria(b.stop() == null ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(b.stop()));
+        saveBaseConfigToScript(script, f);
         scriptRepo.save(script);
 
         // режимы тестовых данных: только файлы данных последней версии
         dataFiles.deleteByScriptId(scriptId);
         dataFiles.flush();
         b.dataFiles().forEach(dataFiles::save);
+
+        if (f.isBaseProfileActive()) {
+            syncBaseToAllProfiles(scriptId, "system");
+        }
         audit.record("script.load", "script", scriptId, Map.of("operations", b.ops().size()));
+    }
+
+    /** Сохраняет метаданные базового профиля (приоритеты разделов, общий прогрев и SLA всех операций) в script.successCriteria. */
+    private void saveBaseConfigToScript(Script script, LoadForm f) {
+        Map<String, Object> sc = script.getSuccessCriteria() == null
+                ? new java.util.LinkedHashMap<>()
+                : new java.util.LinkedHashMap<>(script.getSuccessCriteria());
+        sc.put("baseProfileActive", f.isBaseProfileActive());
+        sc.put("baseOverrideEnv", f.isBaseOverrideEnv());
+        sc.put("baseOverrideStop", f.isBaseOverrideStop());
+        sc.put("baseOverrideSla", f.isBaseOverrideSla());
+        sc.put("baseOverrideWarmup", f.isBaseOverrideWarmup());
+        sc.put("baseOverrideData", f.isBaseOverrideData());
+        sc.put("baseOverrideGenerators", f.isBaseOverrideGenerators());
+        String warmDur = f.getBaseWarmupDuration() == null ? "" : f.getBaseWarmupDuration().strip();
+        if (warmDur.isEmpty()) {
+            warmDur = extractWarmupDurationFromOps(f.getOps());
+        }
+        if (!warmDur.isEmpty()) {
+            double sec = ru.k6lab.core.k6config.ConfigDuration.parse(warmDur, -1);
+            if (sec < 5 || sec > 3600) {
+                throw new IllegalArgumentException("Общий прогрев: укажите длительность от 5 секунд до 1 часа (например, 2m или 30s)");
+            }
+            script.setWarmupSec((int) Math.round(sec));
+        } else {
+            script.setWarmupSec(0);
+        }
+        sc.put("baseWarmupDuration", warmDur);
+
+        Map<String, Object> baseOpSla = sc.get("baseOpSla") instanceof Map<?, ?> prev
+                ? new java.util.LinkedHashMap<>((Map<String, Object>) prev)
+                : new java.util.LinkedHashMap<>();
+        if (f.getOps() != null) {
+            for (LoadForm.OpForm o : f.getOps()) {
+                if (o == null || o.blank()) {
+                    continue;
+                }
+                validateSlaOnly(o);
+                Map<String, Object> slaEntry = new java.util.LinkedHashMap<>();
+                slaEntry.put("slaPercentile", o.getSlaPercentile());
+                slaEntry.put("slaThresholdMs", o.getSlaThresholdMs() == null ? 1000.0 : o.getSlaThresholdMs());
+                slaEntry.put("maxErrorPct", o.getMaxErrorPct() == null ? 1.0 : o.getMaxErrorPct());
+                slaEntry.put("failureSource", (o.getFailureSource() == null ? OperationSpec.FailureSource.HTTP : o.getFailureSource()).name());
+                if (o.getName() != null && !o.getName().isBlank()) {
+                    baseOpSla.put(o.getName().strip(), slaEntry);
+                }
+                if (o.getExecFn() != null && !o.getExecFn().isBlank()) {
+                    baseOpSla.put(o.getExecFn().strip(), slaEntry);
+                }
+            }
+        }
+        sc.put("baseOpSla", baseOpSla);
+        script.setSuccessCriteria(sc);
+    }
+
+    private static String extractWarmupDurationFromOps(List<LoadForm.OpForm> ops) {
+        if (ops == null) {
+            return "";
+        }
+        for (LoadForm.OpForm o : ops) {
+            if (o == null || !o.isEnabled()) {
+                continue;
+            }
+            Map<String, Object> sc = o.getScenario();
+            if (sc.get("warmup") instanceof Map<?, ?> wm) {
+                if (wm.get("duration") instanceof String d && !d.isBlank()) {
+                    return d.strip();
+                }
+                if (wm.get("stages") instanceof Number n && n.intValue() > 0 && sc.get("stages") instanceof List<?> st && !st.isEmpty()) {
+                    if (st.get(0) instanceof Map<?, ?> first && first.get("duration") instanceof String d && !d.isBlank()) {
+                        return d.strip();
+                    }
+                }
+            }
+        }
+        return "";
+    }
+
+    /** Применяет базовые параметры скрипта к форме профиля (согласно включённым флагам baseOverride*). */
+    @Transactional(readOnly = true)
+    public void applyBaseOverridesToProfileForm(Long scriptId, LoadForm profileForm) {
+        applyBaseOverridesToProfileForm(scripts.get(scriptId), profileForm, false);
+    }
+
+    /**
+     * Применяет базовые параметры скрипта к форме профиля.
+     * @param force если true — применяет выбранные галочками разделы даже если baseProfileActive ещё не был сохранён.
+     */
+    @Transactional(readOnly = true)
+    public void applyBaseOverridesToProfileForm(Script script, LoadForm profileForm, boolean force) {
+        Map<String, Object> sc = script.getSuccessCriteria();
+        boolean active = force || (sc != null && Boolean.TRUE.equals(sc.get("baseProfileActive")));
+        readBaseConfigIntoForm(script, profileForm);
+        if (!active) {
+            return;
+        }
+        if (profileForm.isBaseOverrideGenerators()) {
+            profileForm.setGeneratorCount(script.getGeneratorCount());
+        }
+        if (profileForm.isBaseOverrideEnv()) {
+            profileForm.setEnvText(LoadForm.formatKv(script.getEnv()));
+        }
+        if (profileForm.isBaseOverrideStop()) {
+            profileForm.setStop(LoadForm.StopForm.of(script.getStopCriteria()));
+        }
+        if (profileForm.isBaseOverrideData()) {
+            profileForm.setDataFiles(dataRows(script.getId(), dataFiles(script.getId())));
+        }
+        if (profileForm.isBaseOverrideSla()) {
+            applyBaseSlaToProfileOps(script, profileForm);
+        }
+        if (profileForm.isBaseOverrideWarmup()) {
+            applyBaseWarmupToProfileOps(profileForm.getBaseWarmupDuration(), profileForm.getOps());
+        }
+    }
+
+    private void applyBaseSlaToProfileOps(Script script, LoadForm profileForm) {
+        applyBaseSlaToFormOps(script, profileForm);
+        List<LoadOperation> savedOps = activeOperations(script.getId());
+        if (savedOps.isEmpty()) {
+            return;
+        }
+        for (LoadForm.OpForm po : profileForm.getOps()) {
+            if (po == null || po.blank()) {
+                continue;
+            }
+            LoadOperation match = savedOps.stream()
+                    .filter(bo -> bo.getName().equals(po.getName()) || bo.getExecFn().equals(po.getExecFn()))
+                    .findFirst().orElse(null);
+            if (match != null) {
+                po.setSlaPercentile(match.getSlaPercentile());
+                po.setSlaThresholdMs(match.getSlaThresholdMs());
+                po.setMaxErrorPct(match.getMaxErrorPct());
+                po.setFailureSource(match.getFailureSource());
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void applyBaseWarmupToProfileOps(String warmDur, List<LoadForm.OpForm> ops) {
+        if (ops == null) {
+            return;
+        }
+        String dur = warmDur == null ? "" : warmDur.strip();
+        for (LoadForm.OpForm o : ops) {
+            if (o == null || o.blank()) {
+                continue;
+            }
+            Map<String, Object> sc = new java.util.LinkedHashMap<>(o.parseScenario());
+            String ex = o.getExecutor() == null ? "" : o.getExecutor().strip();
+            boolean isRamp = ex.startsWith("ramping-");
+            if (dur.isEmpty()) {
+                // прогрев отключён в базе — убираем прогрев из сценария профиля
+                if (isRamp && sc.get("warmup") instanceof Map<?, ?> wm && wm.get("stages") instanceof Number n && n.intValue() > 0) {
+                    int wn = n.intValue();
+                    if (sc.get("stages") instanceof List<?> rawStages && rawStages.size() > wn) {
+                        sc.put("stages", new ArrayList<>(rawStages.subList(wn, rawStages.size())));
+                    }
+                }
+                sc.remove("warmup");
+            } else if (isRamp) {
+                List<Map<String, Object>> stages = new ArrayList<>();
+                if (sc.get("stages") instanceof List<?> rawList) {
+                    for (Object item : rawList) {
+                        if (item instanceof Map<?, ?> m) {
+                            Map<String, Object> copy = new java.util.LinkedHashMap<>();
+                            m.forEach((k, v) -> copy.put(String.valueOf(k), v));
+                            stages.add(copy);
+                        }
+                    }
+                }
+                int existingWarm = (sc.get("warmup") instanceof Map<?, ?> wm && wm.get("stages") instanceof Number n) ? n.intValue() : 0;
+                if (existingWarm > 0 && !stages.isEmpty()) {
+                    stages.get(0).put("duration", dur);
+                } else {
+                    double firstTarget = 50;
+                    for (Map<String, Object> st : stages) {
+                        if (st.get("target") instanceof Number tn && tn.doubleValue() > 0) {
+                            firstTarget = tn.doubleValue();
+                            break;
+                        }
+                    }
+                    Map<String, Object> warmStage = new java.util.LinkedHashMap<>();
+                    warmStage.put("duration", dur);
+                    warmStage.put("target", Math.max(1L, Math.round(firstTarget * 0.3)));
+                    stages.add(0, warmStage);
+                }
+                sc.put("stages", stages);
+                sc.put("warmup", Map.of("stages", 1));
+            } else if ("constant-arrival-rate".equals(ex) || "constant-vus".equals(ex)) {
+                sc.put("warmup", Map.of("duration", dur));
+            }
+            o.setScenario(sc);
+        }
+    }
+
+    /** Прописывает базовые параметры скрипта напрямую во все сохранённые профили скрипта (чтобы и в БД, и при JSON-экспорте 40 профилей были актуальные данные). */
+    @Transactional
+    public int syncBaseToAllProfiles(Long scriptId, String user) {
+        Script script = scripts.get(scriptId);
+        int updated = 0;
+        for (var p : profiles.list(scriptId)) {
+            try {
+                LoadForm pf = LoadJson.fromJson(p.data());
+                applyBaseOverridesToProfileForm(script, pf, true);
+                profiles.save(scriptId, p.name(), LoadJson.toJson(pf), user == null ? "system" : user);
+                updated++;
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return updated;
     }
 
     /** Проверяет форму нагрузки и собирает из неё операции, переменные и режимы файлов данных, ничего не сохраняя (общая часть сохранения и запуска по профилю). */
     @Transactional(readOnly = true)
     public BuiltLoad build(Long scriptId, LoadForm f) {
+        return build(scriptId, f, false);
+    }
+
+    @Transactional(readOnly = true)
+    public BuiltLoad build(Long scriptId, LoadForm f, boolean allowEmptyOps) {
         if (f.getLevelPct() <= 0) {
             throw new IllegalArgumentException("Уровень нагрузки должен быть больше 0");
         }
@@ -267,7 +543,7 @@ public class LoadService {
         for (LoadOperation b : built) {
             ru.k6lab.core.k6config.K6ConfigGenerator.validateExecutor(b.toSpec()); // поля сценария - сразу при сохранении
         }
-        if (built.isEmpty()) {
+        if (built.isEmpty() && !allowEmptyOps) {
             throw new IllegalArgumentException("Включите хотя бы одну операцию");
         }
         // режимы тестовых данных: только файлы данных последней версии
@@ -296,7 +572,9 @@ public class LoadService {
     public BuiltLoad fromProfile(Long scriptId, Long profileId) {
         var p = profiles.find(scriptId, profileId).orElseThrow(() -> new IllegalArgumentException("Профиль нагрузки не найден (возможно, удалён)"));
         try {
-            BuiltLoad b = build(scriptId, LoadJson.fromJson(p.data()));
+            LoadForm pf = LoadJson.fromJson(p.data());
+            applyBaseOverridesToProfileForm(scriptId, pf);
+            BuiltLoad b = build(scriptId, pf);
             return new BuiltLoad(b.ops(), b.env(), b.dataFiles(), p.name(), b.stop());
         } catch (IllegalArgumentException | IllegalStateException e) {
             throw new IllegalArgumentException("Профиль «" + p.name() + "»: " + e.getMessage());
@@ -322,9 +600,12 @@ public class LoadService {
     @Transactional(readOnly = true)
     public Map<Long, String> profileEnvText(Long scriptId) {
         Map<Long, String> out = new java.util.LinkedHashMap<>();
+        Script script = scripts.get(scriptId);
         for (var p : profiles.list(scriptId)) {
             try {
-                String t = LoadJson.fromJson(p.data()).getEnvText();
+                LoadForm pf = LoadJson.fromJson(p.data());
+                applyBaseOverridesToProfileForm(script, pf, false);
+                String t = pf.getEnvText();
                 out.put(p.id(), t == null ? "" : t);
             } catch (IllegalArgumentException e) {
                 out.put(p.id(), "");
@@ -340,6 +621,19 @@ public class LoadService {
         }
         double unit = ru.k6lab.core.k6config.ConfigDuration.parse(String.valueOf(scenario.getOrDefault("timeUnit", "1s")), 1);
         return unit > 0 ? n.doubleValue() / unit : 0;
+    }
+
+    private static void validateSlaOnly(LoadForm.OpForm o) {
+        String label = o.getName() == null ? (o.getExecFn() == null ? "?" : o.getExecFn()) : o.getName();
+        if (o.getSlaPercentile() != 90 && o.getSlaPercentile() != 95 && o.getSlaPercentile() != 99) {
+            throw new IllegalArgumentException("Операция «" + label + "»: перцентиль SLA - 90, 95 или 99");
+        }
+        if (o.getSlaThresholdMs() != null && o.getSlaThresholdMs() <= 0) {
+            throw new IllegalArgumentException("Операция «" + label + "»: порог времени ответа должен быть больше 0");
+        }
+        if (o.getMaxErrorPct() != null && (o.getMaxErrorPct() < 0 || o.getMaxErrorPct() > 100)) {
+            throw new IllegalArgumentException("Операция «" + label + "»: допустимый % ошибок - от 0 до 100");
+        }
     }
 
     private static void validateOp(LoadForm.OpForm o, Set<String> names) {

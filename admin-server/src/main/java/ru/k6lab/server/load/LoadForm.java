@@ -30,6 +30,32 @@ public class LoadForm {
     /** Автостоп: сервер останавливает тест, когда он «пошёл по одному месту» (интенсивность ниже цели, dropped, ошибки, время ответа). */
     private StopForm stop = new StopForm();
 
+    /**
+     * Общий прогрев из базового профиля скрипта (например, "2m", "30s" или пусто — без прогрева);
+     * хранится в script.successCriteria и применяется ко всем профилям, если включён приоритет базы.
+     */
+    @JsonIgnore
+    private String baseWarmupDuration = "";
+
+    /**
+     * Настройки базового профиля: когда baseProfileActive = true, выбранные разделы всегда берутся из базовой нагрузки скрипта
+     * и применяются ко всем профилям (40 профилей наследуют общие параметры из одного места).
+     */
+    @JsonIgnore
+    private boolean baseProfileActive;
+    @JsonIgnore
+    private boolean baseOverrideEnv = true;
+    @JsonIgnore
+    private boolean baseOverrideStop = true;
+    @JsonIgnore
+    private boolean baseOverrideSla = true;
+    @JsonIgnore
+    private boolean baseOverrideWarmup = true;
+    @JsonIgnore
+    private boolean baseOverrideData = true;
+    @JsonIgnore
+    private boolean baseOverrideGenerators = true;
+
     @Getter
     @Setter
     public static class StopForm {

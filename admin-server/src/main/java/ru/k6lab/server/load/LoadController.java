@@ -77,11 +77,14 @@ public class LoadController {
                 try {
                     f = LoadJson.fromJson(p.get().data());
                     load.completeWithScriptFunctions(id, f);
+                    load.applyBaseOverridesToProfileForm(id, f);
                     loadedProfileId = p.get().id();
                     model.addAttribute("loadedProfile", p.get().name());
                     model.addAttribute("loadedProfileId", loadedProfileId);
                     model.addAttribute("formDirty", true);
-                    model.addAttribute("info", "Открыт профиль «" + p.get().name() + "». В нагрузку скрипта он попадёт после «Сохранить нагрузку».");
+                    model.addAttribute("info", "Открыт профиль «" + p.get().name() + "»"
+                            + (f.isBaseProfileActive() ? " (общие параметры применены из базового профиля скрипта)" : "")
+                            + ". В нагрузку скрипта он попадёт после «Сохранить нагрузку».");
                 } catch (IllegalArgumentException e) {
                     model.addAttribute("error", "Профиль «" + p.get().name() + "» не открывается: " + e.getMessage());
                 }
@@ -233,8 +236,28 @@ public class LoadController {
     public String save(@PathVariable Long id, @ModelAttribute("form") LoadForm f, Model model, RedirectAttributes ra) {
         try {
             load.save(id, f);
-            ra.addFlashAttribute("info", "Нагрузка сохранена");
+            int pCnt = profiles.list(id).size();
+            ra.addFlashAttribute("info", f.isBaseProfileActive() && pCnt > 0
+                    ? "Базовая нагрузка сохранена и применена ко всем профилям (" + pCnt + ")"
+                    : "Нагрузка сохранена");
             return "redirect:/scripts/" + id;
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            model.addAttribute("error", e.getMessage());
+            fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()));
+            return "scripts/load";
+        }
+    }
+
+    /** Сохраняет текущую форму как базовые параметры скрипта и сразу применяет выбранные общие разделы ко всем профилям, оставаясь на странице нагрузки. */
+    @PostMapping("/load/apply-base")
+    public String saveAndApplyBase(@PathVariable Long id, @ModelAttribute("form") LoadForm f,
+                                   java.security.Principal user, Model model, RedirectAttributes ra) {
+        try {
+            f.setBaseProfileActive(true);
+            load.save(id, f);
+            int pCnt = profiles.list(id).size();
+            ra.addFlashAttribute("info", "Базовый профиль сохранён и применён ко всем профилям (" + pCnt + ")");
+            return "redirect:/scripts/" + id + "/load";
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
             fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()));

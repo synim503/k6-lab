@@ -65,6 +65,8 @@ class ChartBuilderIT extends AbstractIT {
     @Autowired
     ru.k6lab.server.result.ReportService reports;
     @Autowired
+    ru.k6lab.server.load.LoadProfileStore profiles;
+    @Autowired
     MockMvc mvc;
 
     @BeforeAll
@@ -532,5 +534,117 @@ class ChartBuilderIT extends AbstractIT {
                 .contains("87.5");
         byte[] docx = reports.renderDocx(run.getId());
         assertThat(docx).isNotEmpty();
+    }
+
+    @Test
+    void baseLoadProfileAppliesSharedEnvAutostopPrometheusChecksSlaAndWarmupAcrossAllProfiles() throws Exception {
+        String code = "import http from 'k6/http'; export function work() { http.get('http://localhost'); } export default function() {}";
+        ScriptVersion v = scripts.createFromUpload("base40-" + UUID.randomUUID().toString().substring(0, 8), "", "s.js",
+                new ByteArrayInputStream(code.getBytes(StandardCharsets.UTF_8)), "", null);
+        Script s = scripts.get(v.getScriptId());
+
+        // Импортируем 2 профиля (аналог 40 профилей) со старыми/разными env, SLA, автостопом и без прогрева
+        String importJson = """
+                {
+                  "profiles": [
+                    {
+                      "name": "Профиль 1 (постоянный)",
+                      "operations": [
+                        {
+                          "name": "work",
+                          "execFn": "work",
+                          "enabled": true,
+                          "executor": "constant-arrival-rate",
+                          "scenario": {"rate": 25, "timeUnit": "1s", "duration": "5m", "preAllocatedVUs": 10, "maxVUs": 50},
+                          "slaPercentile": 95,
+                          "slaThresholdMs": 1000,
+                          "maxErrorPct": 5.0
+                        }
+                      ],
+                      "env": {"STAND": "old-1"},
+                      "stop": {"errorsEnabled": false, "consecutive": 4, "windowSec": 60}
+                    },
+                    {
+                      "name": "Профиль 2 (ступеньки)",
+                      "operations": [
+                        {
+                          "name": "work",
+                          "execFn": "work",
+                          "enabled": true,
+                          "executor": "ramping-arrival-rate",
+                          "scenario": {
+                            "startRate": 0, "timeUnit": "1s", "preAllocatedVUs": 10, "maxVUs": 50,
+                            "stages": [{"duration": "0s", "target": 40}, {"duration": "5m", "target": 40}]
+                          },
+                          "slaPercentile": 90,
+                          "slaThresholdMs": 1500,
+                          "maxErrorPct": 2.0
+                        }
+                      ],
+                      "env": {"STAND": "old-2"},
+                      "stop": {"errorsEnabled": false, "consecutive": 4, "windowSec": 60}
+                    }
+                  ]
+                }
+                """;
+        mvc.perform(post("/scripts/" + s.getId() + "/load/profiles/import").with(csrf()).param("json", importJson))
+                .andExpect(status().is3xxRedirection());
+        var profList = profiles.list(s.getId());
+        assertThat(profList).hasSize(2);
+
+        // В базовом профиле скрипта (даже без включённых базовых сценариев!) задаём общие параметры для всех профилей:
+        // env, автостоп + кастомную метрику Prometheus (CPU <= 80%), SLA операции work (p99 <= 250 мс, ошибки <= 0.5%), общий прогрев 2m и 3 генератора
+        mvc.perform(post("/scripts/" + s.getId() + "/load/apply-base").with(csrf())
+                        .param("baseProfileActive", "true")
+                        .param("baseOverrideEnv", "true")
+                        .param("baseOverrideStop", "true")
+                        .param("baseOverrideSla", "true")
+                        .param("baseOverrideWarmup", "true")
+                        .param("baseOverrideData", "true")
+                        .param("baseOverrideGenerators", "true")
+                        .param("baseWarmupDuration", "2m")
+                        .param("generatorCount", "3")
+                        .param("envText", "STAND=unified-prod\nTOKEN=sec123")
+                        .param("ops[0].name", "work")
+                        .param("ops[0].execFn", "work")
+                        .param("ops[0].enabled", "false")
+                        .param("ops[0].executor", "constant-arrival-rate")
+                        .param("ops[0].slaPercentile", "99")
+                        .param("ops[0].slaThresholdMs", "250")
+                        .param("ops[0].maxErrorPct", "0.5")
+                        .param("stop.errorsEnabled", "true")
+                        .param("stop.consecutive", "3")
+                        .param("stop.windowSec", "45")
+                        .param("stop.customChecks[0].name", "CPU серверов")
+                        .param("stop.customChecks[0].promql", "100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[{range}])) * 100")
+                        .param("stop.customChecks[0].cmp", "LTE")
+                        .param("stop.customChecks[0].threshold", "80")
+                        .param("stop.customChecks[0].unit", "%")
+                        .param("stop.customChecks[0].stepSla", "true")
+                        .param("stop.customChecks[0].autoStop", "true"))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(scripts.get(s.getId()).getGeneratorCount()).isEqualTo(3);
+
+        // Проверяем, что при сборке нагрузки любого из профилей (fromProfile) применяются все базовые параметры, а кривая нагрузки остаётся своей
+        for (var p : profiles.list(s.getId())) {
+            var built = load.fromProfile(s.getId(), p.id());
+            assertThat(built.env()).containsEntry("STAND", "unified-prod").containsEntry("TOKEN", "sec123");
+            assertThat(built.stop()).containsEntry("errorsEnabled", true).containsEntry("consecutive", 3).containsEntry("windowSec", 45);
+            assertThat(ru.k6lab.server.load.LoadCriteria.customChecks(built.stop()))
+                    .singleElement()
+                    .satisfies(cc -> {
+                        assertThat(cc.name()).isEqualTo("CPU серверов");
+                        assertThat(cc.threshold()).isEqualTo(80.0);
+                        assertThat(cc.autoStop()).isTrue();
+                    });
+            assertThat(built.ops()).hasSize(1);
+            var op = built.ops().get(0);
+            assertThat(op.getSlaPercentile()).isEqualTo(99);
+            assertThat(op.getSlaThresholdMs()).isEqualTo(250.0);
+            assertThat(op.getMaxErrorPct()).isEqualTo(0.5);
+            // Прогрев 2m применился и к constant-arrival-rate, и к ramping-arrival-rate
+            assertThat(op.getScenario().get("warmup")).isNotNull();
+        }
     }
 }
