@@ -95,10 +95,15 @@ if [ "$JAR_ONLY" -eq 1 ]; then
       if [ ! -f .m2-vendor/.ready ]; then
         rm -rf .m2-vendor && mkdir -p .m2-vendor && tar -xzf "$VM_REPO" -C .m2-vendor && touch .m2-vendor/.ready
       fi
-      find .m2-vendor -name "_remote.repositories" -delete 2>/dev/null || true
+      find .m2-vendor \( -name "_remote.repositories" -o -name "resolver-status.properties" \) -delete 2>/dev/null || true
+      for f in $(find .m2-vendor -name "maven-metadata-central-https.xml" 2>/dev/null); do
+        dir="${f%/*}"
+        [ -f "$dir/maven-metadata-central.xml" ] || cp "$f" "$dir/maven-metadata-central.xml"
+        [ -f "$dir/maven-metadata-local.xml" ] || cp "$f" "$dir/maven-metadata-local.xml"
+      done
       printf '<settings/>\n' > .m2-vendor/empty-settings.xml
       HOST_PWD="$(pwd -W 2>/dev/null || pwd)"
-      MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -llr -s $HOST_PWD/.m2-vendor/empty-settings.xml -Dmaven.repo.local=$HOST_PWD/.m2-vendor -DskipTests -Dapp.build=$APP_BUILD"
+      MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.legacyLocalRepo=true -s $HOST_PWD/.m2-vendor/empty-settings.xml -Dmaven.repo.local=$HOST_PWD/.m2-vendor -DskipTests -Dapp.build=$APP_BUILD"
     fi
   fi
   chmod +x mvnw 2>/dev/null || true
