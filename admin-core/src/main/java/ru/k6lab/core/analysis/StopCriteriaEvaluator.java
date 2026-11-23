@@ -33,6 +33,10 @@ public class StopCriteriaEvaluator {
                          double maxErrorPct, Double actualRate, double targetRate, Double dropped) {
     }
 
+    /** Живая выборка по кастомной метрике Prometheus с включённым автостопом (null value - данных пока нет). */
+    public record CustomSample(String key, boolean violated, String violationMessage) {
+    }
+
     private final Config config;
     private final Map<String, Integer> streaks = new HashMap<>();
 
@@ -46,6 +50,11 @@ public class StopCriteriaEvaluator {
 
     /** Возвращает причину остановки, если какой-то критерий нарушен N раз подряд. */
     public Optional<String> evaluate(List<Sample> samples) {
+        return evaluate(samples, List.of());
+    }
+
+    /** Возвращает причину остановки с учётом как операций k6, так и кастомных правил Prometheus с флагом autoStop. */
+    public Optional<String> evaluate(List<Sample> samples, List<CustomSample> customSamples) {
         Optional<String> stop = Optional.empty();
         for (Sample s : samples) {
             if (config.percentileEnabled() && s.percentileMs() != null) {
@@ -79,6 +88,14 @@ public class StopCriteriaEvaluator {
                 Optional<String> r = track(s.operation() + "/d", pct > config.maxDroppedPct(),
                         String.format(java.util.Locale.ROOT, "%s: dropped_iterations %.1f%% от плана (> %.1f%%, %d шт)", s.operation(),
                                 pct, config.maxDroppedPct(), s.dropped().longValue()));
+                if (r.isPresent() && stop.isEmpty()) {
+                    stop = r;
+                }
+            }
+        }
+        if (customSamples != null) {
+            for (CustomSample cs : customSamples) {
+                Optional<String> r = track("custom/" + cs.key(), cs.violated(), cs.violationMessage());
                 if (r.isPresent() && stop.isEmpty()) {
                     stop = r;
                 }

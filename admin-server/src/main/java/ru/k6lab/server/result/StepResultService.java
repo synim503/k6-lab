@@ -57,6 +57,7 @@ public class StepResultService {
     private final PrometheusClient prom;
     private final SettingsService settings;
     private final MetricNamesService names;
+    private final ChartVariableStore chartVariables;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final ExecutorService worker = Executors.newFixedThreadPool(2, r -> {
@@ -66,11 +67,12 @@ public class StepResultService {
     });
 
     public StepResultService(RunService runService, PrometheusClient prom, SettingsService settings, MetricNamesService names,
-                             JdbcTemplate jdbc, ObjectMapper mapper) {
+                             ChartVariableStore chartVariables, JdbcTemplate jdbc, ObjectMapper mapper) {
         this.runService = runService;
         this.prom = prom;
         this.settings = settings;
         this.names = names;
+        this.chartVariables = chartVariables;
         this.jdbc = jdbc;
         this.mapper = mapper;
     }
@@ -174,6 +176,14 @@ public class StepResultService {
             return new ResultData(List.of(), false, "Prometheus недоступен: " + e.getMessage(), now, genRows);
         }
         StepAnalysis.SuccessCriteria criteria = LoadCriteria.success(snap.successCriteria());
+        List<StepAnalysis.CustomCheck> customRules = LoadCriteria.customChecks(snap.stopCriteria());
+        Map<String, String> vars = new java.util.LinkedHashMap<>();
+        if (run.getScriptId() != null) {
+            vars.putAll(chartVariables.map(run.getScriptId()));
+        }
+        if (snap.env() != null) {
+            snap.env().forEach(vars::putIfAbsent);
+        }
         Map<String, StepAnalysis.OpSla> sla = new HashMap<>();
         for (RunSnapshot.OpInfo o : snap.operations()) {
             if (o.enabled()) {
@@ -203,7 +213,7 @@ public class StepResultService {
             if (winSec < MIN_WINDOW_SEC) {
                 rows.add(new ResultData.StepRow(step.getStepNo(), label, step.getLevelPct(), "NOT_RUN", step.getHoldStartAt(),
                         step.getHoldEndAt(), winStart, winEnd, true, null, false,
-                        List.of("ступень не была выполнена (тест завершён раньше)"), List.of()));
+                        List.of("ступень не была выполнена (тест завершён раньше)"), List.of(), List.of()));
                 continue;
             }
             try {
@@ -211,7 +221,8 @@ public class StepResultService {
                 Double cpuMax = cpuMax(gens, winStart, winEnd);
                 boolean overloaded = cpuMax != null && cpuMax > criteria.maxCpuPct();
                 List<StepAnalysis.OpMetrics> metrics = opMetrics(snap, n, run, step.getLevelPct(), winSec, winEnd, p);
-                StepAnalysis.StepVerdict v = StepAnalysis.analyze(step.getStepNo(), reliable, overloaded, metrics, sla, criteria);
+                List<StepAnalysis.CustomCheckResult> evaluatedCustom = evaluateCustomChecks(customRules, run.getId(), winStart, winEnd, winSec, vars, p);
+                StepAnalysis.StepVerdict v = StepAnalysis.analyze(step.getStepNo(), reliable, overloaded, metrics, sla, criteria, evaluatedCustom);
                 verdicts.add(v);
                 List<ResultData.OpRow> ops = new ArrayList<>();
                 for (StepAnalysis.OpMetrics m : metrics) {
@@ -221,8 +232,14 @@ public class StepResultService {
                             m.actualRatePerSec(), m.p50(), m.p90(), m.p95(), m.p99(), m.errorPct(), m.dropped(), m.deviationPct(),
                             ov.ok(), ov.dataMissing()));
                 }
+                List<ResultData.CustomMetricRow> customRows = evaluatedCustom.stream()
+                        .map(cr -> new ResultData.CustomMetricRow(
+                                cr.check().name(), cr.check().promql(), cr.check().normalizedCmp(),
+                                cr.check().threshold(), cr.check().unit(), cr.check().stepSla(), cr.check().autoStop(),
+                                cr.value(), cr.worstSeries(), cr.ok(), cr.dataMissing()))
+                        .toList();
                 rows.add(new ResultData.StepRow(step.getStepNo(), label, step.getLevelPct(), v.status().name(), step.getHoldStartAt(),
-                        step.getHoldEndAt(), winStart, winEnd, reliable, cpuMax, overloaded, v.reasons(), ops));
+                        step.getHoldEndAt(), winStart, winEnd, reliable, cpuMax, overloaded, v.reasons(), ops, customRows));
             } catch (IOException e) {
                 error = "Ошибка запроса к Prometheus: " + e.getMessage();
                 log.warn("Run {}: ступень {}: {}", run.getId(), step.getStepNo(), error);
@@ -363,5 +380,62 @@ public class StepResultService {
             }
         }
         return m;
+    }
+
+    /**
+     * Вычисляет кастомные правила Prometheus на окне ступени [winStart..winEnd].
+     * Для верхних порогов (LTE / LT) берётся максимальное (наихудшее) значение за окно ступени;
+     * для нижних порогов (GTE / GT) — минимальное значение за окно ступени.
+     */
+    public List<StepAnalysis.CustomCheckResult> evaluateCustomChecks(List<StepAnalysis.CustomCheck> rules, long runId,
+                                                                     Instant winStart, Instant winEnd, long winSec,
+                                                                     Map<String, String> vars, SettingsService.Prometheus p) {
+        if (rules == null || rules.isEmpty()) {
+            return List.of();
+        }
+        List<StepAnalysis.CustomCheckResult> out = new ArrayList<>(rules.size());
+        for (StepAnalysis.CustomCheck rule : rules) {
+            String q = CustomChartService.expand(rule.promql(), runId, Math.max(15, winSec), vars);
+            String renderedName = CustomChartService.title(rule.name(), vars);
+            StepAnalysis.CustomCheck effectiveRule = new StepAnalysis.CustomCheck(
+                    renderedName, rule.promql(), rule.normalizedCmp(), rule.threshold(), rule.unit(), rule.stepSla(), rule.autoStop());
+            boolean upperBound = "LTE".equals(effectiveRule.normalizedCmp()) || "LT".equals(effectiveRule.normalizedCmp());
+            Double worstVal = null;
+            String worstLabel = "";
+            try {
+                List<PrometheusClient.Sample> samples = prom.query(p, q, winEnd);
+                for (PrometheusClient.Sample s : samples) {
+                    if (!Double.isFinite(s.value())) {
+                        continue;
+                    }
+                    if (worstVal == null || (upperBound ? s.value() > worstVal : s.value() < worstVal)) {
+                        worstVal = s.value();
+                        worstLabel = formatSampleLabels(s.labels());
+                    }
+                }
+            } catch (IOException | RuntimeException e) {
+                log.debug("Run {}: ошибка запроса кастомной метрики «{}»: {}", runId, rule.name(), e.toString());
+            }
+            if (worstVal == null) {
+                out.add(new StepAnalysis.CustomCheckResult(effectiveRule, null, "", true, true));
+            } else {
+                out.add(new StepAnalysis.CustomCheckResult(effectiveRule, worstVal, worstLabel, effectiveRule.passes(worstVal), false));
+            }
+        }
+        return out;
+    }
+
+    private static String formatSampleLabels(Map<String, String> labels) {
+        if (labels == null || labels.isEmpty()) {
+            return "";
+        }
+        for (String preferred : List.of("instance", "host", "node", "pod", "service", "job", "db")) {
+            String v = labels.get(preferred);
+            if (v != null && !v.isBlank()) {
+                return v;
+            }
+        }
+        var first = labels.entrySet().iterator().next();
+        return first.getKey() + "=" + first.getValue();
     }
 }

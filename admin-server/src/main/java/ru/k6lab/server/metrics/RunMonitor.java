@@ -69,10 +69,14 @@ public class RunMonitor {
     private final MetricNamesService names;
     private final RunEventBroadcaster broadcaster;
     private final RunLogService logs;
+    private final ru.k6lab.server.result.StepResultService stepResults;
+    private final ru.k6lab.server.result.ChartVariableStore chartVariables;
     private final Map<Long, State> states = new ConcurrentHashMap<>();
 
     public RunMonitor(RunService runService, RunOrchestrator orchestrator, PrometheusClient prom, SettingsService settings,
-                      MetricNamesService names, RunEventBroadcaster broadcaster, RunLogService logs) {
+                      MetricNamesService names, RunEventBroadcaster broadcaster, RunLogService logs,
+                      ru.k6lab.server.result.StepResultService stepResults,
+                      ru.k6lab.server.result.ChartVariableStore chartVariables) {
         this.runService = runService;
         this.orchestrator = orchestrator;
         this.prom = prom;
@@ -80,6 +84,8 @@ public class RunMonitor {
         this.names = names;
         this.broadcaster = broadcaster;
         this.logs = logs;
+        this.stepResults = stepResults;
+        this.chartVariables = chartVariables;
     }
 
     @Scheduled(fixedDelay = 5000, initialDelay = 20_000)
@@ -190,8 +196,37 @@ public class RunMonitor {
             json.put("wholeSec", st.wholeSec);
             putRows(json.putArray("rowsAll"), st.wholeRows);
         }
+        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheck> customRules = LoadCriteria.customChecks(snap.stopCriteria());
+        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval = List.of();
+        if (!customRules.isEmpty()) {
+            Map<String, String> vars = new java.util.LinkedHashMap<>();
+            if (run.getScriptId() != null) {
+                vars.putAll(chartVariables.map(run.getScriptId()));
+            }
+            if (snap.env() != null) {
+                snap.env().forEach(vars::putIfAbsent);
+            }
+            boolean warm = inWarmup(snap, current, now);
+            customEval = stepResults.evaluateCustomChecks(customRules, run.getId(), now.minusSeconds(window), now, window, vars, p);
+            ArrayNode ca = json.putArray("customChecks");
+            for (var cr : customEval) {
+                ObjectNode co = ca.addObject();
+                co.put("name", cr.check().name());
+                co.put("cmp", cr.check().cmpSymbol());
+                co.put("threshold", cr.check().threshold());
+                co.put("thresholdText", cr.check().formatThreshold());
+                co.put("unit", cr.check().unit() == null ? "" : cr.check().unit());
+                co.put("stepSla", cr.check().stepSla());
+                co.put("autoStop", cr.check().autoStop());
+                putD(co, "value", cr.value());
+                co.put("worstSeries", cr.worstSeries() == null ? "" : cr.worstSeries());
+                boolean violation = !warm && !cr.ok() && cr.value() != null;
+                co.put("violation", violation);
+                co.put("reason", violation ? cr.check().formatViolation(cr.value(), cr.worstSeries()) : "");
+            }
+        }
         broadcaster.publishMetrics(run.getId(), json.toString());
-        evaluateStop(run, snap, st, current, hold, intoHold, minWindow, window, rows, now, p, stepNo);
+        evaluateStop(run, snap, st, current, hold, intoHold, minWindow, window, rows, customEval, now, p, stepNo);
     }
 
     static void putRows(ArrayNode ra, List<LiveRow> rows) {
@@ -215,10 +250,12 @@ public class RunMonitor {
 
     /** Серверные критерии остановки: раз в 15 с, только на удержании после settle. */
     private void evaluateStop(Run run, RunSnapshot snap, State st, RunStep current, boolean hold, long intoHold, long minWindow, long window,
-                              List<LiveRow> rows, Instant now, SettingsService.Prometheus p, int stepNo) throws IOException {
+                              List<LiveRow> rows, List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval,
+                              Instant now, SettingsService.Prometheus p, int stepNo) throws IOException {
         st.tick++;
         StopCriteriaEvaluator.Config cfg = st.evaluator.config();
-        if (cfg.anyEnabled() && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && run.getStatus() == RunStatus.RUNNING) {
+        boolean hasCustomAutoStop = customEval != null && customEval.stream().anyMatch(cr -> cr.check().autoStop());
+        if ((cfg.anyEnabled() || hasCustomAutoStop) && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && run.getStatus() == RunStatus.RUNNING) {
             long w = Math.max(minWindow, Math.min(cfg.windowSec(), intoHold - SETTLE_SEC));
             List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p, run.getK6Config(), run.getPlannedStartAt(), false);
             List<StopCriteriaEvaluator.Sample> samples = new ArrayList<>();
@@ -226,7 +263,19 @@ public class RunMonitor {
                 samples.add(new StopCriteriaEvaluator.Sample(r.operation(), r.percentileMs(), r.slaThresholdMs(), r.errorPct(),
                         r.maxErrorPct(), r.actualRatePerSec(), r.targetRatePerSec(), r.dropped()));
             }
-            Optional<String> reason = st.evaluator.evaluate(samples);
+            List<StopCriteriaEvaluator.CustomSample> customSamples = new ArrayList<>();
+            if (customEval != null) {
+                int idx = 0;
+                for (var cr : customEval) {
+                    idx++;
+                    if (cr.check().autoStop() && cr.value() != null) {
+                        boolean violated = !cr.ok();
+                        String msg = violated ? cr.check().formatViolation(cr.value(), cr.worstSeries()) : "";
+                        customSamples.add(new StopCriteriaEvaluator.CustomSample(idx + ":" + cr.check().name(), violated, msg));
+                    }
+                }
+            }
+            Optional<String> reason = st.evaluator.evaluate(samples, customSamples);
             if (reason.isPresent()) {
                 String text = "критерий остановки: " + reason.get() + " (ступень " + stepNo + ")";
                 log.warn("Run {}: {}", run.getId(), text);

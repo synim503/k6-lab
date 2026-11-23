@@ -288,6 +288,29 @@
             });
             tb.innerHTML = html || '<tr><td colspan="6" class="text-muted">Нет данных</td></tr>';
         }
+        var ccCard = document.getElementById('custom-checks-card');
+        var ccTb = document.getElementById('custom-checks-table');
+        if (ccCard && ccTb) {
+            var checks = Array.isArray(m.customChecks) ? m.customChecks : [];
+            ccCard.classList.toggle('d-none', checks.length === 0);
+            if (checks.length > 0) {
+                ccTb.innerHTML = checks.map(function (c) {
+                    var u = c.unit ? ' ' + esc(c.unit) : '';
+                    var valTxt = (c.value === undefined || c.value === null || !isFinite(c.value)) ? 'нет данных' : (fmt(c.value, 1) + u);
+                    var role = (c.stepSla && c.autoStop) ? 'SLA + Автостоп' : (c.stepSla ? 'SLA ступени' : 'Автостоп');
+                    var statusHtml = c.violation
+                        ? '<span class="badge text-bg-danger">' + esc(c.reason || 'нарушение') + '</span>'
+                        : ((c.value === undefined || c.value === null) ? '<span class="badge text-bg-secondary">нет данных</span>' : '<span class="badge text-bg-success">в норме</span>');
+                    return '<tr class="' + (c.violation ? 'table-danger' : '') + '">' +
+                        '<td class="fw-semibold">' + esc(c.name) + '</td>' +
+                        '<td>' + valTxt + '</td>' +
+                        '<td>' + esc(c.thresholdText || (c.cmp + ' ' + c.threshold + u)) + '</td>' +
+                        '<td class="small text-muted">' + esc(c.worstSeries || '—') + '</td>' +
+                        '<td class="small">' + role + '</td>' +
+                        '<td>' + statusHtml + '</td></tr>';
+                }).join('');
+            }
+        }
         var ph = document.getElementById('metric-phase');
         var isFinal = root.dataset.final === 'true';
         if (ph && !isFinal && m.phase === 'init') {

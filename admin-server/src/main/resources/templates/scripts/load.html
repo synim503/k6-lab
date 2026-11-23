@@ -370,6 +370,80 @@
                     </label>
                     <span class="text-muted ms-auto small"><i class="bi bi-clock-history me-1"></i>Сработает через <b id="ld-stop-eta">≈ 1 мин</b></span>
                 </div>
+
+                <!-- Кастомные метрики Prometheus (SLA ступени и Автостоп наравне с метриками k6) -->
+                <div class="mt-3 pt-3 border-top" id="sec-custom-checks">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                        <div>
+                            <span class="fw-semibold small"><i class="bi bi-activity me-1 text-primary"></i>Кастомные метрики Prometheus (SLA серверов и Автостоп)</span>
+                            <span class="small text-muted ms-1">проверяются наравне с временем ответа и ошибками (например, CPU сервера ≤ 80%, RAM ≤ 85%)</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="dropdown">
+                                <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                                    <i class="bi bi-magic me-1"></i>Шаблон метрики
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end" id="ld-cc-presets">
+                                    <li><button type="button" class="dropdown-item small" data-cc-preset="cpu">Утилизация CPU сервера ≤ 80%</button></li>
+                                    <li><button type="button" class="dropdown-item small" data-cc-preset="ram">Использование RAM сервера ≤ 85%</button></li>
+                                    <li><button type="button" class="dropdown-item small" data-cc-preset="disk">Утилизация диска (I/O) ≤ 85%</button></li>
+                                    <li><button type="button" class="dropdown-item small" data-cc-preset="jvm">JVM Heap Used ≤ 85%</button></li>
+                                    <li><button type="button" class="dropdown-item small" data-cc-preset="db">Активные соединения БД (HikariCP) ≤ 90%</button></li>
+                                </ul>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="ld-cc-add">
+                                <i class="bi bi-plus-lg me-1"></i>Добавить метрику
+                            </button>
+                        </div>
+                    </div>
+                    <div class="small text-muted mb-2">
+                        В PromQL доступны подстановки <code>{range}</code> (окно ступени/автостопа, например <code>60s</code>), <code>{run_id}</code> и переменные скрипта (<code>$instance</code>).
+                        Если запрос возвращает несколько серий (несколько серверов), проверяется наихудшая серия и её имя выводится в отчёте.
+                    </div>
+                    <div id="ld-cc-rows" class="d-flex flex-column gap-2">
+                        <div class="ld-cc-row p-2 rounded border bg-light-subtle" th:each="cc, st : *{stop.customChecks}">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-md-3">
+                                    <input class="form-control form-control-sm ld-cc-name" th:name="|stop.customChecks[${st.index}].name|"
+                                           th:value="${cc.name}" maxlength="120" placeholder="Название (например CPU серверов)">
+                                </div>
+                                <div class="col-md-4">
+                                    <input class="form-control form-control-sm font-monospace ld-cc-promql" th:name="|stop.customChecks[${st.index}].promql|"
+                                           th:value="${cc.promql}" placeholder="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=&quot;idle&quot;}[{range}])) * 100)">
+                                </div>
+                                <div class="col-md-2">
+                                    <div class="input-group input-group-sm">
+                                        <select class="form-select ld-cc-cmp" style="max-width:64px" th:name="|stop.customChecks[${st.index}].cmp|">
+                                            <option value="LTE" th:selected="${cc.cmp == 'LTE' or cc.cmp == null}">≤</option>
+                                            <option value="LT" th:selected="${cc.cmp == 'LT'}">&lt;</option>
+                                            <option value="GTE" th:selected="${cc.cmp == 'GTE'}">≥</option>
+                                            <option value="GT" th:selected="${cc.cmp == 'GT'}">&gt;</option>
+                                        </select>
+                                        <input class="form-control ld-cc-thr" type="number" step="any" th:name="|stop.customChecks[${st.index}].threshold|"
+                                               th:value="${cc.threshold}" placeholder="80">
+                                        <input class="form-control ld-cc-unit" style="max-width:52px" th:name="|stop.customChecks[${st.index}].unit|"
+                                               th:value="${cc.unit}" maxlength="16" placeholder="%">
+                                    </div>
+                                </div>
+                                <div class="col-md-3 d-flex align-items-center justify-content-end gap-2">
+                                    <div class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">
+                                        <input class="form-check-input ld-cc-sla" type="checkbox" value="true"
+                                               th:name="|stop.customChecks[${st.index}].stepSla|" th:checked="${cc.stepSla}">
+                                        <label class="form-check-label small">SLA отчёта</label>
+                                    </div>
+                                    <div class="form-check form-check-inline m-0" title="Останавливать тест при нарушении N проверок подряд">
+                                        <input class="form-check-input ld-cc-stop" type="checkbox" value="true"
+                                               th:name="|stop.customChecks[${st.index}].autoStop|" th:checked="${cc.autoStop}">
+                                        <label class="form-check-label small">Автостоп</label>
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2 ld-cc-del" title="Удалить правило">
+                                        <i class="bi bi-x-lg"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 

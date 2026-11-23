@@ -1677,11 +1677,124 @@
         });
     }
 
-    // ==================== Autostop Cards ====================
+    // ==================== Autostop Cards & Custom Prometheus Checks ====================
     var stopCards = document.querySelectorAll('.ld-stop-card');
     var stopNavCnt = document.getElementById('ld-nav-stop-cnt');
     var stopConsecEl = document.querySelector('input[name="stop.consecutive"]');
     var stopEtaEl = document.getElementById('ld-stop-eta');
+    var ccRowsBox = document.getElementById('ld-cc-rows');
+    var ccAddBtn = document.getElementById('ld-cc-add');
+    var ccPresetsMenu = document.getElementById('ld-cc-presets');
+
+    var CC_PRESETS = {
+        cpu: {
+            name: 'Утилизация CPU серверов',
+            promql: '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[{range}])) * 100)',
+            cmp: 'LTE', threshold: 80, unit: '%', stepSla: true, autoStop: false
+        },
+        ram: {
+            name: 'Использование RAM серверов',
+            promql: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100',
+            cmp: 'LTE', threshold: 85, unit: '%', stepSla: true, autoStop: false
+        },
+        disk: {
+            name: 'Утилизация диска (I/O)',
+            promql: 'max by (instance) (rate(node_disk_io_time_seconds_total[{range}])) * 100',
+            cmp: 'LTE', threshold: 85, unit: '%', stepSla: true, autoStop: false
+        },
+        jvm: {
+            name: 'JVM Heap Used',
+            promql: 'sum by (instance) (jvm_memory_used_bytes{area="heap"}) / sum by (instance) (jvm_memory_max_bytes{area="heap"}) * 100',
+            cmp: 'LTE', threshold: 85, unit: '%', stepSla: true, autoStop: false
+        },
+        db: {
+            name: 'Активные соединения БД (HikariCP)',
+            promql: 'hikaricp_connections_active / hikaricp_connections_max * 100',
+            cmp: 'LTE', threshold: 90, unit: '%', stepSla: true, autoStop: false
+        }
+    };
+
+    function reindexCustomChecks() {
+        if (!ccRowsBox) { return; }
+        ccRowsBox.querySelectorAll('.ld-cc-row').forEach(function (row, idx) {
+            var p = 'stop.customChecks[' + idx + ']';
+            var n = row.querySelector('.ld-cc-name'); if (n) { n.name = p + '.name'; }
+            var q = row.querySelector('.ld-cc-promql'); if (q) { q.name = p + '.promql'; }
+            var c = row.querySelector('.ld-cc-cmp'); if (c) { c.name = p + '.cmp'; }
+            var t = row.querySelector('.ld-cc-thr'); if (t) { t.name = p + '.threshold'; }
+            var u = row.querySelector('.ld-cc-unit'); if (u) { u.name = p + '.unit'; }
+            var s = row.querySelector('.ld-cc-sla'); if (s) { s.name = p + '.stepSla'; }
+            var a = row.querySelector('.ld-cc-stop'); if (a) { a.name = p + '.autoStop'; }
+        });
+    }
+
+    function addCustomCheckRow(preset) {
+        if (!ccRowsBox) { return; }
+        var p = preset || { name: '', promql: '', cmp: 'LTE', threshold: 80, unit: '%', stepSla: true, autoStop: false };
+        var idx = ccRowsBox.querySelectorAll('.ld-cc-row').length;
+        var html = '<div class="ld-cc-row p-2 rounded border bg-light-subtle">' +
+            '<div class="row g-2 align-items-center">' +
+                '<div class="col-md-3">' +
+                    '<input class="form-control form-control-sm ld-cc-name" name="stop.customChecks[' + idx + '].name" value="' + esc(p.name) + '" maxlength="120" placeholder="Название (например CPU серверов)">' +
+                '</div>' +
+                '<div class="col-md-4">' +
+                    '<input class="form-control form-control-sm font-monospace ld-cc-promql" name="stop.customChecks[' + idx + '].promql" value="' + esc(p.promql) + '" placeholder="PromQL (доступны {range}, {run_id}, $var)">' +
+                '</div>' +
+                '<div class="col-md-2">' +
+                    '<div class="input-group input-group-sm">' +
+                        '<select class="form-select ld-cc-cmp" style="max-width:64px" name="stop.customChecks[' + idx + '].cmp">' +
+                            '<option value="LTE"' + (p.cmp === 'LTE' ? ' selected' : '') + '>≤</option>' +
+                            '<option value="LT"' + (p.cmp === 'LT' ? ' selected' : '') + '>&lt;</option>' +
+                            '<option value="GTE"' + (p.cmp === 'GTE' ? ' selected' : '') + '>≥</option>' +
+                            '<option value="GT"' + (p.cmp === 'GT' ? ' selected' : '') + '>&gt;</option>' +
+                        '</select>' +
+                        '<input class="form-control ld-cc-thr" type="number" step="any" name="stop.customChecks[' + idx + '].threshold" value="' + esc(p.threshold) + '" placeholder="80">' +
+                        '<input class="form-control ld-cc-unit" style="max-width:52px" name="stop.customChecks[' + idx + '].unit" value="' + esc(p.unit) + '" maxlength="16" placeholder="%">' +
+                    '</div>' +
+                '</div>' +
+                '<div class="col-md-3 d-flex align-items-center justify-content-end gap-2">' +
+                    '<div class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">' +
+                        '<input class="form-check-input ld-cc-sla" type="checkbox" value="true" name="stop.customChecks[' + idx + '].stepSla"' + (p.stepSla !== false ? ' checked' : '') + '>' +
+                        '<label class="form-check-label small">SLA отчёта</label>' +
+                    '</div>' +
+                    '<div class="form-check form-check-inline m-0" title="Останавливать тест при нарушении N проверок подряд">' +
+                        '<input class="form-check-input ld-cc-stop" type="checkbox" value="true" name="stop.customChecks[' + idx + '].autoStop"' + (p.autoStop ? ' checked' : '') + '>' +
+                        '<label class="form-check-label small">Автостоп</label>' +
+                    '</div>' +
+                    '<button type="button" class="btn btn-sm btn-outline-danger py-0 px-2 ld-cc-del" title="Удалить правило"><i class="bi bi-x-lg"></i></button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+        ccRowsBox.insertAdjacentHTML('beforeend', html);
+        refreshAutostop();
+        markDirty();
+        var lastInp = ccRowsBox.querySelector('.ld-cc-row:last-child .ld-cc-name');
+        if (lastInp) { lastInp.focus(); }
+    }
+
+    if (ccAddBtn) {
+        ccAddBtn.addEventListener('click', function () { addCustomCheckRow(null); });
+    }
+    if (ccPresetsMenu) {
+        ccPresetsMenu.addEventListener('click', function (e) {
+            var btn = e.target.closest('[data-cc-preset]');
+            if (!btn) { return; }
+            var p = CC_PRESETS[btn.dataset.ccPreset];
+            if (p) { addCustomCheckRow(p); }
+        });
+    }
+    if (ccRowsBox) {
+        ccRowsBox.addEventListener('click', function (e) {
+            var del = e.target.closest('.ld-cc-del');
+            if (del) {
+                del.closest('.ld-cc-row').remove();
+                reindexCustomChecks();
+                refreshAutostop();
+                markDirty();
+            }
+        });
+        ccRowsBox.addEventListener('change', refreshAutostop);
+    }
 
     function refreshAutostop() {
         var onCount = 0;
@@ -1691,6 +1804,9 @@
             card.classList.toggle('is-on', on);
             if (on) { onCount++; }
         });
+        if (ccRowsBox) {
+            onCount += ccRowsBox.querySelectorAll('.ld-cc-row').length;
+        }
         if (stopNavCnt) { stopNavCnt.textContent = String(onCount); }
         if (stopEtaEl && stopConsecEl) {
             var n = Math.max(1, parseInt(stopConsecEl.value, 10) || 4);

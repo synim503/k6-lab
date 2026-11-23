@@ -183,6 +183,22 @@ public class ReportService {
                             f.n(o.errorPct(), 2) + " / " + String.format(Locale.ROOT, "%.2f", o.maxErrorPct()), f.n(o.dropped(), 0)));
                 }
                 d.table(List.of("Операция", "План, оп/с", "Факт, оп/с", "p50, мс", "p90, мс", "p95, мс", "p99, мс", "SLA", "Ошибки, %", "Dropped"), rows, bad);
+                if (!s.customChecks().isEmpty()) {
+                    List<List<String>> customRows = new java.util.ArrayList<>();
+                    java.util.Set<Integer> badCustom = new java.util.HashSet<>();
+                    for (ResultData.CustomMetricRow cm : s.customChecks()) {
+                        if (!cm.ok()) {
+                            badCustom.add(customRows.size());
+                        }
+                        String u = cm.unit() == null || cm.unit().isBlank() ? "" : " " + cm.unit();
+                        String fact = cm.value() == null ? "нет данных"
+                                : f.n(cm.value(), 1) + u + (cm.worstSeries() == null || cm.worstSeries().isBlank() ? "" : " (" + cm.worstSeries() + ")");
+                        String role = (cm.stepSla() ? "SLA ступени" : "") + (cm.stepSla() && cm.autoStop() ? " + " : "") + (cm.autoStop() ? "Автостоп" : "");
+                        customRows.add(List.of(cm.name(), fact, cm.thresholdText(), role.isEmpty() ? "—" : role,
+                                cm.dataMissing() ? "нет данных" : (cm.ok() ? "в норме" : "нарушение")));
+                    }
+                    d.table(List.of("Кастомная метрика Prometheus", "Факт (худшее за ступень)", "Порог", "Контроль", "Статус"), customRows, badCustom);
+                }
             }
             List<ChartRenderer.Img> charts = charts(run, snap, data, abs, sortBy, sortDir, skipWarmup);
             if (!charts.isEmpty()) {

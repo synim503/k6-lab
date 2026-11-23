@@ -34,7 +34,18 @@ public record ResultData(List<StepRow> steps, boolean prometheusOk, String error
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record StepRow(int stepNo, String label, double levelPct, String status, Instant holdStart, Instant holdEnd,
                           Instant windowStart, Instant windowEnd, boolean reliable, Double genCpuMax, boolean genOverloaded,
-                          List<String> reasons, List<OpRow> ops) {
+                          List<String> reasons, List<OpRow> ops, List<CustomMetricRow> customChecks) {
+
+        public StepRow(int stepNo, String label, double levelPct, String status, Instant holdStart, Instant holdEnd,
+                       Instant windowStart, Instant windowEnd, boolean reliable, Double genCpuMax, boolean genOverloaded,
+                       List<String> reasons, List<OpRow> ops) {
+            this(stepNo, label, levelPct, status, holdStart, holdEnd, windowStart, windowEnd, reliable, genCpuMax, genOverloaded,
+                    reasons, ops, List.of());
+        }
+
+        public List<CustomMetricRow> customChecks() {
+            return customChecks == null ? List.of() : customChecks;
+        }
 
         public double totalTargetRate() {
             return ops == null ? 0 : ops.stream().mapToDouble(OpRow::targetRate).sum();
@@ -89,6 +100,18 @@ public record ResultData(List<StepRow> steps, boolean prometheusOk, String error
             }
             return String.format(java.util.Locale.ROOT, "%s: p%d %.0f / %.0f мс",
                     worst.operation(), worst.slaPercentile(), worst.slaValue(), worst.slaMs());
+        }
+    }
+
+    /** Строка результата кастомной проверки Prometheus на ступени (например, CPU сервера <= 80%). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record CustomMetricRow(String name, String promql, String cmp, double threshold, String unit,
+                                  boolean stepSla, boolean autoStop, Double value, String worstSeries,
+                                  boolean ok, boolean dataMissing) {
+
+        public String thresholdText() {
+            return new ru.k6lab.core.analysis.StepAnalysis.CustomCheck(name, promql, cmp, threshold, unit, stepSla, autoStop)
+                    .formatThreshold();
         }
     }
 

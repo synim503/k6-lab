@@ -77,6 +77,37 @@
             </tr>
             </tbody>
         </table>
+
+        <!-- Кастомные метрики Prometheus на ступени (наравне с SLA и ошибками) -->
+        <table class="tbl mt-2" th:if="${!s.customChecks().isEmpty()}">
+            <thead>
+            <tr>
+                <th>Кастомная метрика Prometheus</th>
+                <th>Факт (худшее за ступень)</th>
+                <th>Порог SLA</th>
+                <th>Серия / хост</th>
+                <th>Контроль</th>
+                <th>Статус</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="cm : ${s.customChecks()}" th:classappend="${cm.ok} ? '' : 'row-bad'">
+                <td th:text="${cm.name}"></td>
+                <td class="num" th:text="${cm.value == null} ? 'нет данных' : (${fmt.n(cm.value, 1)} + (${cm.unit != null and !cm.unit.isBlank()} ? ' ' + ${cm.unit} : ''))"></td>
+                <td class="num" th:text="${cm.thresholdText()}"></td>
+                <td class="num" th:text="${cm.worstSeries != null and !cm.worstSeries.isBlank()} ? ${cm.worstSeries} : '—'"></td>
+                <td class="num">
+                    <span th:if="${cm.stepSla and cm.autoStop}">SLA + Автостоп</span>
+                    <span th:if="${cm.stepSla and !cm.autoStop}">SLA ступени</span>
+                    <span th:if="${!cm.stepSla and cm.autoStop}">Автостоп</span>
+                </td>
+                <td class="num">
+                    <span class="pill" th:classappend="${cm.dataMissing} ? 'warn' : (${cm.ok} ? 'ok' : 'bad')"
+                          th:text="${cm.dataMissing} ? 'нет данных' : (${cm.ok} ? 'в норме' : 'нарушение')"></span>
+                </td>
+            </tr>
+            </tbody>
+        </table>
     </div>
 </div>
 </body>

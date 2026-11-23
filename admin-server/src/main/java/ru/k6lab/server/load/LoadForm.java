@@ -45,10 +45,20 @@ public class LoadForm {
         private int consecutive = 4;
         /** Окно, по которому считаются показатели, секунд. */
         private int windowSec = 60;
+        /** Кастомные проверки метрик из Prometheus наравне с SLA и ошибками (например, утилизация CPU сервера <= 80%). */
+        private List<CustomCheckForm> customChecks = new ArrayList<>();
 
         public Map<String, Object> toMap() {
+            List<ru.k6lab.core.analysis.StepAnalysis.CustomCheck> checks = new ArrayList<>();
+            if (customChecks != null) {
+                for (CustomCheckForm cf : customChecks) {
+                    if (cf != null && !cf.blank()) {
+                        checks.add(cf.toSpec());
+                    }
+                }
+            }
             return LoadCriteria.stopToMap(new ru.k6lab.core.analysis.StopCriteriaEvaluator.Config(percentileEnabled, slaMultiplier, errorsEnabled,
-                    rateEnabled, minRatePct, droppedEnabled, maxDroppedPct, consecutive, windowSec));
+                    rateEnabled, minRatePct, droppedEnabled, maxDroppedPct, consecutive, windowSec), checks);
         }
 
         public static StopForm of(Map<String, Object> m) {
@@ -63,6 +73,11 @@ public class LoadForm {
             s.slaMultiplier = c.slaMultiplier();
             s.consecutive = m == null || !m.containsKey("consecutive") ? 4 : c.consecutive();
             s.windowSec = c.windowSec();
+            List<CustomCheckForm> checks = new ArrayList<>();
+            for (var cc : LoadCriteria.customChecks(m)) {
+                checks.add(CustomCheckForm.of(cc));
+            }
+            s.customChecks = checks;
             return s;
         }
 
@@ -82,6 +97,76 @@ public class LoadForm {
             if (windowSec < 15 || windowSec > 3600) {
                 throw new IllegalArgumentException("Автостоп: окно от 15 до 3600 секунд");
             }
+            if (customChecks != null) {
+                int idx = 0;
+                for (CustomCheckForm cf : customChecks) {
+                    if (cf == null || cf.blank()) {
+                        continue;
+                    }
+                    idx++;
+                    cf.validate(idx);
+                }
+            }
+        }
+    }
+
+    @Getter
+    @Setter
+    public static class CustomCheckForm {
+        private String name;
+        private String promql;
+        /** LTE (<=), LT (<), GTE (>=), GT (>). */
+        private String cmp = "LTE";
+        private Double threshold = 80.0;
+        private String unit = "%";
+        /** Влияет на успешность ступени (SLA в отчёте и поиск максимума). */
+        private boolean stepSla = true;
+        /** Останавливает тест при нарушении N проверок подряд. */
+        private boolean autoStop = false;
+
+        public boolean blank() {
+            return (name == null || name.isBlank()) && (promql == null || promql.isBlank());
+        }
+
+        public void validate(int idx) {
+            String n = name == null ? "" : name.strip();
+            String q = promql == null ? "" : promql.strip();
+            if (n.isEmpty() || n.length() > 120) {
+                throw new IllegalArgumentException("Кастомная метрика Prometheus №" + idx + ": укажите название (до 120 символов)");
+            }
+            if (q.isEmpty()) {
+                throw new IllegalArgumentException("Кастомная метрика «" + n + "»: укажите PromQL-запрос");
+            }
+            if (threshold == null || !Double.isFinite(threshold)) {
+                throw new IllegalArgumentException("Кастомная метрика «" + n + "»: укажите числовой порог");
+            }
+            if (unit != null && unit.strip().length() > 32) {
+                throw new IllegalArgumentException("Кастомная метрика «" + n + "»: единицы измерения не более 32 символов");
+            }
+        }
+
+        public ru.k6lab.core.analysis.StepAnalysis.CustomCheck toSpec() {
+            return new ru.k6lab.core.analysis.StepAnalysis.CustomCheck(
+                    name == null ? "" : name.strip(),
+                    promql == null ? "" : promql.strip(),
+                    cmp == null || cmp.isBlank() ? "LTE" : cmp.strip(),
+                    threshold == null ? 0.0 : threshold,
+                    unit == null ? "" : unit.strip(),
+                    stepSla,
+                    autoStop
+            );
+        }
+
+        public static CustomCheckForm of(ru.k6lab.core.analysis.StepAnalysis.CustomCheck cc) {
+            CustomCheckForm f = new CustomCheckForm();
+            f.name = cc.name();
+            f.promql = cc.promql();
+            f.cmp = cc.normalizedCmp();
+            f.threshold = cc.threshold();
+            f.unit = cc.unit();
+            f.stepSla = cc.stepSla();
+            f.autoStop = cc.autoStop();
+            return f;
         }
     }
 

@@ -61,6 +61,10 @@ class ChartBuilderIT extends AbstractIT {
     @Autowired
     CustomChartService customCharts;
     @Autowired
+    ru.k6lab.server.result.StepResultService stepResults;
+    @Autowired
+    ru.k6lab.server.result.ReportService reports;
+    @Autowired
     MockMvc mvc;
 
     @BeforeAll
@@ -437,5 +441,96 @@ class ChartBuilderIT extends AbstractIT {
         assertThat(dstList3).hasSize(3);
         assertThat(dstList3.get(0).variables()).containsExactlyEntriesOf(Map.of("instance", "app-99"));
         assertThat(dstList3.get(0).promql()).isEqualTo("up");
+    }
+
+    @Test
+    void customPrometheusChecksEvaluateInStepResultsAndRenderInReportsAlongsideSla() throws Exception {
+        settings.savePrometheus(prom.rwUrl(), prom.baseUrl(), SettingsService.AuthType.NONE, null, null, "");
+        // Метрики операций k6 отличные (интенсивность в норме, ошибок 0%, время ответа ниже SLA),
+        // но кастомная метрика CPU сервера возвращает 87.5% (выше порога <= 80%), а RAM возвращает 62.0% (в норме <= 85%)
+        prom.respond((q, t) -> {
+            if (q.contains("node_cpu_seconds_total")) {
+                return Map.of("app-server-01", 87.5);
+            }
+            if (q.contains("node_memory_MemAvailable_bytes")) {
+                return Map.of("app-server-01", 62.0);
+            }
+            if (q.contains("error") || q.contains("failed")) {
+                return Map.of("work", 0.0);
+            }
+            if (q.contains("histogram_quantile")) {
+                return Map.of("work", 120.0);
+            }
+            return Map.of("work", 5.0);
+        });
+
+        Script s = newScript();
+        LoadForm f = load.toForm(s.getId());
+        LoadForm.CustomCheckForm cpuCheck = new LoadForm.CustomCheckForm();
+        cpuCheck.setName("Утилизация CPU сервера");
+        cpuCheck.setPromql("100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[{range}])) * 100)");
+        cpuCheck.setCmp("LTE");
+        cpuCheck.setThreshold(80.0);
+        cpuCheck.setUnit("%");
+        cpuCheck.setStepSla(true);
+        cpuCheck.setAutoStop(true);
+
+        LoadForm.CustomCheckForm ramCheck = new LoadForm.CustomCheckForm();
+        ramCheck.setName("Использование RAM сервера");
+        ramCheck.setPromql("(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100");
+        ramCheck.setCmp("LTE");
+        ramCheck.setThreshold(85.0);
+        ramCheck.setUnit("%");
+        ramCheck.setStepSla(true);
+        ramCheck.setAutoStop(false);
+
+        f.getStop().getCustomChecks().add(cpuCheck);
+        f.getStop().getCustomChecks().add(ramCheck);
+        load.save(s.getId(), f);
+
+        // Проверяем, что правила сохранились в скрипт и видны на странице /scripts/{id}/load
+        LoadForm savedForm = load.toForm(s.getId());
+        assertThat(savedForm.getStop().getCustomChecks()).hasSize(2);
+        assertThat(savedForm.getStop().getCustomChecks().get(0).getName()).isEqualTo("Утилизация CPU сервера");
+        assertThat(savedForm.getStop().getCustomChecks().get(0).getThreshold()).isEqualTo(80.0);
+
+        mvc.perform(get("/scripts/" + s.getId() + "/load"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Кастомные метрики Prometheus")))
+                .andExpect(content().string(containsString("Утилизация CPU сервера")));
+
+        // Создаём завершённый запуск с одной ступенью удержания и считаем итоги по ступеням
+        Run run = finishedRun(s);
+        Instant t0 = run.getStartedAt();
+        ru.k6lab.server.run.RunStep step = new ru.k6lab.server.run.RunStep();
+        step.setRunId(run.getId());
+        step.setStepNo(1);
+        step.setLabel("Ступень 1");
+        step.setLevelPct(100.0);
+        step.setRampStartAt(t0);
+        step.setHoldStartAt(t0);
+        step.setHoldEndAt(t0.plusSeconds(240));
+        runService.saveSteps(run.getId(), List.of(step));
+
+        var res = stepResults.compute(run.getId());
+        assertThat(res.steps()).hasSize(1);
+        var stepRow = res.steps().get(0);
+        // Из-за превышения кастомной метрики CPU (87.5% > 80%) ступень получает статус FAILED и причину в списке reasons
+        assertThat(stepRow.status()).isEqualTo("FAILED");
+        assertThat(stepRow.reasons()).anyMatch(r -> r.contains("Утилизация CPU сервера") && r.contains("87.5") && r.contains("80"));
+        assertThat(stepRow.customChecks()).hasSize(2);
+        assertThat(stepRow.customChecks().get(0).ok()).isFalse();
+        assertThat(stepRow.customChecks().get(0).value()).isEqualTo(87.5);
+        assertThat(stepRow.customChecks().get(1).ok()).isTrue();
+        assertThat(stepRow.customChecks().get(1).value()).isEqualTo(62.0);
+
+        // В HTML-отчёте и Word-отчёте кастомные метрики Prometheus рендерятся рядом с таблицей SLA
+        String html = reports.renderHtml(run.getId());
+        assertThat(html).contains("Кастомная метрика Prometheus")
+                .contains("Утилизация CPU сервера")
+                .contains("Использование RAM сервера")
+                .contains("87.5");
+        byte[] docx = reports.renderDocx(run.getId());
+        assertThat(docx).isNotEmpty();
     }
 }
