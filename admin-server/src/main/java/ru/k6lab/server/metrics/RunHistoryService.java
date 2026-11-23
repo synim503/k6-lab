@@ -87,7 +87,7 @@ public class RunHistoryService {
      */
     public List<String> complete(Run run, List<String> memory) {
         if (memory.isEmpty()) {
-            return rebuild(run);
+            return withLatestCustomChecks(run, rebuild(run));
         }
         if (run.getPlannedStartAt() == null || !settings.prometheus().configured()) {
             return memory;
@@ -95,7 +95,7 @@ public class RunHistoryService {
         long first = tsOf(memory.get(0));
         long gapMs = first - run.getPlannedStartAt().toEpochMilli();
         if (first <= 0 || gapMs <= Math.max(60, 4L * settings.pushIntervalSec()) * 1000) {
-            return memory;
+            return withLatestCustomChecks(run, memory);
         }
         List<String> restored = rebuild(run);
         List<String> out = new ArrayList<>();
@@ -105,10 +105,37 @@ public class RunHistoryService {
             }
         }
         if (out.isEmpty()) {
-            return memory;
+            return withLatestCustomChecks(run, memory);
         }
         out.addAll(memory);
-        return out;
+        return withLatestCustomChecks(run, out);
+    }
+
+    /** Дополняет последнюю точку истории актуальными кастомными метриками Prometheus (в том числе добавленными в скрипт после завершения прогона). */
+    private List<String> withLatestCustomChecks(Run run, List<String> points) {
+        if (points == null || points.isEmpty()) {
+            return List.of();
+        }
+        SettingsService.Prometheus p = settings.prometheus();
+        if (!p.configured()) {
+            return points;
+        }
+        try {
+            ObjectNode last = (ObjectNode) MAPPER.readTree(points.get(points.size() - 1));
+            RunSnapshot snap = runService.snapshot(run);
+            Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
+            Instant end = run.getFinishedAt() != null ? run.getFinishedAt() : Instant.now();
+            if (start != null && end != null && end.isAfter(start)) {
+                long winSec = Math.max(15, end.getEpochSecond() - start.getEpochSecond());
+                monitor.evaluateAndPutCustomChecks(last, run, snap, start, end, winSec, false, p);
+                List<String> copy = new ArrayList<>(points);
+                copy.set(copy.size() - 1, last.toString());
+                return copy;
+            }
+        } catch (IOException | RuntimeException e) {
+            log.debug("Кастомные метрики в истории run {}: {}", run.getId(), e.toString());
+        }
+        return points;
     }
 
     private static long tsOf(String json) {

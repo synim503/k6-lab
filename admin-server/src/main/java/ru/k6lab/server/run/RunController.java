@@ -32,11 +32,14 @@ public class RunController {
     private final RunLogService logs;
     private final ru.k6lab.server.settings.SettingsService settings;
     private final ru.k6lab.server.metrics.RunHistoryService history;
+    private final ru.k6lab.server.result.StepResultService stepResults;
 
     public RunController(RunService runService, RunViewService views, RunOrchestrator orchestrator, RunEventBroadcaster broadcaster,
                          RunLogService logs, ru.k6lab.server.settings.SettingsService settings,
-                         ru.k6lab.server.metrics.RunHistoryService history) {
+                         ru.k6lab.server.metrics.RunHistoryService history,
+                         ru.k6lab.server.result.StepResultService stepResults) {
         this.history = history;
+        this.stepResults = stepResults;
         this.settings = settings;
         this.runService = runService;
         this.views = views;
@@ -55,6 +58,7 @@ public class RunController {
         model.addAttribute("snap", v.snapshot());
         model.addAttribute("blockedControl", v.canControl());
         model.addAttribute("envRows", ru.k6lab.server.result.ReportFormat.envRows(v.snapshot().env(), v.run().getK6Config()));
+        model.addAttribute("customChecksConfig", stepResults.getEffectiveCustomChecks(v.run(), v.snapshot()));
         model.addAttribute("grafanaUrl", grafanaUrl(v));
         return "runs/view";
     }

@@ -534,6 +534,26 @@ class ChartBuilderIT extends AbstractIT {
                 .contains("87.5");
         byte[] docx = reports.renderDocx(run.getId());
         assertThat(docx).isNotEmpty();
+
+        // Если после завершения и расчёта прогона пользователь добавляет в скрипт новую кастомную метрику («CPU unix»),
+        // то при открытии отчёта или вкладки «Результаты» этого прогона она автоматически пересчитывается и появляется в отчёте!
+        LoadForm updatedForm = load.toForm(s.getId());
+        LoadForm.CustomCheckForm cpuUnix = new LoadForm.CustomCheckForm();
+        cpuUnix.setName("CPU unix");
+        cpuUnix.setPromql("100 * (1 - avg(irate(node_cpu_seconds_total{mode=\"idle\"}[{range}])))");
+        cpuUnix.setCmp("LTE");
+        cpuUnix.setThreshold(80.0);
+        cpuUnix.setUnit("%");
+        cpuUnix.setStepSla(true);
+        cpuUnix.setAutoStop(false);
+        updatedForm.getStop().getCustomChecks().add(cpuUnix);
+        load.save(s.getId(), updatedForm);
+
+        String updatedHtml = reports.renderHtml(run.getId());
+        assertThat(updatedHtml).contains("CPU unix");
+        mvc.perform(get("/runs/" + run.getId() + "/results"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("CPU unix")));
     }
 
     @Test

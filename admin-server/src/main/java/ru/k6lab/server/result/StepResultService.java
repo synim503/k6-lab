@@ -58,6 +58,8 @@ public class StepResultService {
     private final SettingsService settings;
     private final MetricNamesService names;
     private final ChartVariableStore chartVariables;
+    private final ChartTemplateStore chartTemplates;
+    private final ru.k6lab.server.script.ScriptService scripts;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final ExecutorService worker = Executors.newFixedThreadPool(2, r -> {
@@ -67,12 +69,16 @@ public class StepResultService {
     });
 
     public StepResultService(RunService runService, PrometheusClient prom, SettingsService settings, MetricNamesService names,
-                             ChartVariableStore chartVariables, JdbcTemplate jdbc, ObjectMapper mapper) {
+                             ChartVariableStore chartVariables, ChartTemplateStore chartTemplates,
+                             ru.k6lab.server.script.ScriptService scripts,
+                             JdbcTemplate jdbc, ObjectMapper mapper) {
         this.runService = runService;
         this.prom = prom;
         this.settings = settings;
         this.names = names;
         this.chartVariables = chartVariables;
+        this.chartTemplates = chartTemplates;
+        this.scripts = scripts;
         this.jdbc = jdbc;
         this.mapper = mapper;
     }
@@ -148,6 +154,96 @@ public class StepResultService {
         }
     }
 
+    /**
+     * Возвращает сохранённые итоги либо пересчитывает их.
+     * Если в скрипте/снимке добавлены или изменены кастомные метрики Prometheus, автоматически пересчитывает итоги.
+     */
+    public ResultData getOrCompute(long runId) {
+        Run run = runService.get(runId);
+        RunSnapshot snap = runService.snapshot(run);
+        List<StepAnalysis.CustomCheck> expected = getEffectiveCustomChecks(run, snap);
+        Optional<ResultData> opt = load(runId);
+        if (opt.isPresent()) {
+            ResultData d = opt.get();
+            if (!needsCustomChecksRecompute(d, expected)) {
+                return d;
+            }
+        }
+        return compute(runId);
+    }
+
+    private static boolean needsCustomChecksRecompute(ResultData d, List<StepAnalysis.CustomCheck> expected) {
+        if (expected.isEmpty()) {
+            return false;
+        }
+        if (d.steps() == null || d.steps().isEmpty()) {
+            return true;
+        }
+        List<String> expSig = expected.stream()
+                .map(c -> c.name() + "|" + c.promql() + "|" + c.normalizedCmp() + "|" + c.threshold())
+                .toList();
+        for (ResultData.StepRow s : d.steps()) {
+            List<ResultData.CustomMetricRow> actual = s.customChecks();
+            if (actual.size() != expSig.size()) {
+                return true;
+            }
+            for (int i = 0; i < actual.size(); i++) {
+                ResultData.CustomMetricRow a = actual.get(i);
+                String actSig = a.name() + "|" + a.promql() + "|" + a.cmp() + "|" + a.threshold();
+                if (!expSig.get(i).equals(actSig)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Извлекает кастомные правила проверки метрик: объединяет правила из снимка запуска (snap.stopCriteria)
+     * и текущей конфигурации скрипта (новые или обновлённые по имени правила из скрипта сразу подхватываются в отчёте).
+     */
+    public List<StepAnalysis.CustomCheck> getEffectiveCustomChecks(Run run, RunSnapshot snap) {
+        Map<String, StepAnalysis.CustomCheck> merged = new java.util.LinkedHashMap<>();
+        if (snap != null && snap.stopCriteria() != null) {
+            for (StepAnalysis.CustomCheck cc : LoadCriteria.customChecks(snap.stopCriteria())) {
+                merged.put(cc.name(), cc);
+            }
+        }
+        if (run != null && run.getScriptId() != null && scripts != null) {
+            try {
+                ru.k6lab.server.script.Script s = scripts.get(run.getScriptId());
+                if (s != null && s.getStopCriteria() != null) {
+                    for (StepAnalysis.CustomCheck cc : LoadCriteria.customChecks(s.getStopCriteria())) {
+                        merged.put(cc.name(), cc);
+                    }
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+        return List.copyOf(merged.values());
+    }
+
+    /** Переменные для подстановки в PromQL кастомных метрик: переменные графиков скрипта, локальные переменные шаблонов графиков и env запуска. */
+    public Map<String, String> varsForRun(Run run, RunSnapshot snap) {
+        Map<String, String> vars = new java.util.LinkedHashMap<>();
+        if (run != null && run.getScriptId() != null) {
+            if (chartTemplates != null) {
+                for (ChartTemplateStore.Template t : chartTemplates.list(run.getScriptId())) {
+                    if (t.variables() != null) {
+                        t.variables().forEach(vars::putIfAbsent);
+                    }
+                }
+            }
+            if (chartVariables != null) {
+                vars.putAll(chartVariables.map(run.getScriptId()));
+            }
+        }
+        if (snap != null && snap.env() != null) {
+            snap.env().forEach(vars::putIfAbsent);
+        }
+        return vars;
+    }
+
     /** Пересчёт итогов (кнопка «Пересчитать» и автоматически после завершения). */
     public ResultData compute(long runId) {
         Run run = runService.get(runId);
@@ -176,14 +272,8 @@ public class StepResultService {
             return new ResultData(List.of(), false, "Prometheus недоступен: " + e.getMessage(), now, genRows);
         }
         StepAnalysis.SuccessCriteria criteria = LoadCriteria.success(snap.successCriteria());
-        List<StepAnalysis.CustomCheck> customRules = LoadCriteria.customChecks(snap.stopCriteria());
-        Map<String, String> vars = new java.util.LinkedHashMap<>();
-        if (run.getScriptId() != null) {
-            vars.putAll(chartVariables.map(run.getScriptId()));
-        }
-        if (snap.env() != null) {
-            snap.env().forEach(vars::putIfAbsent);
-        }
+        List<StepAnalysis.CustomCheck> customRules = getEffectiveCustomChecks(run, snap);
+        Map<String, String> vars = varsForRun(run, snap);
         Map<String, StepAnalysis.OpSla> sla = new HashMap<>();
         for (RunSnapshot.OpInfo o : snap.operations()) {
             if (o.enabled()) {
@@ -211,9 +301,15 @@ public class StepResultService {
             long winSec = Duration.between(winStart, winEnd).getSeconds();
             String label = step.getLabel();
             if (winSec < MIN_WINDOW_SEC) {
+                List<ResultData.CustomMetricRow> notRunCustom = customRules.stream()
+                        .map(cr -> new ResultData.CustomMetricRow(
+                                CustomChartService.title(cr.name(), vars), cr.promql(), cr.normalizedCmp(),
+                                cr.threshold(), cr.unit(), cr.stepSla(), cr.autoStop(),
+                                null, "", true, true))
+                        .toList();
                 rows.add(new ResultData.StepRow(step.getStepNo(), label, step.getLevelPct(), "NOT_RUN", step.getHoldStartAt(),
                         step.getHoldEndAt(), winStart, winEnd, true, null, false,
-                        List.of("ступень не была выполнена (тест завершён раньше)"), List.of(), List.of()));
+                        List.of("ступень не была выполнена (тест завершён раньше)"), List.of(), notRunCustom));
                 continue;
             }
             try {
@@ -402,6 +498,7 @@ public class StepResultService {
             boolean upperBound = "LTE".equals(effectiveRule.normalizedCmp()) || "LT".equals(effectiveRule.normalizedCmp());
             Double worstVal = null;
             String worstLabel = "";
+            String queryError = null;
             try {
                 List<PrometheusClient.Sample> samples = prom.query(p, q, winEnd);
                 for (PrometheusClient.Sample s : samples) {
@@ -413,11 +510,30 @@ public class StepResultService {
                         worstLabel = formatSampleLabels(s.labels());
                     }
                 }
+                if (worstVal == null && winStart != null && winEnd != null && winEnd.isAfter(winStart)) {
+                    int push = Math.max(5, settings.pushIntervalSec());
+                    long rangeWin = Math.max(30, 3L * push);
+                    int step = (int) Math.max(push, Math.max(1, winSec / 60));
+                    String qRange = CustomChartService.expand(rule.promql(), runId, rangeWin, vars);
+                    for (PrometheusClient.Series sr : prom.rangeSeries(p, qRange, winStart, winEnd, step)) {
+                        for (PrometheusClient.Point pt : sr.points()) {
+                            if (!Double.isFinite(pt.value())) {
+                                continue;
+                            }
+                            if (worstVal == null || (upperBound ? pt.value() > worstVal : pt.value() < worstVal)) {
+                                worstVal = pt.value();
+                                worstLabel = formatSampleLabels(sr.labels());
+                            }
+                        }
+                    }
+                }
             } catch (IOException | RuntimeException e) {
-                log.debug("Run {}: ошибка запроса кастомной метрики «{}»: {}", runId, rule.name(), e.toString());
+                queryError = e.getMessage() == null ? e.toString() : e.getMessage();
+                log.warn("Run {}: ошибка запроса кастомной метрики «{}» ({}): {}", runId, rule.name(), q, queryError);
             }
             if (worstVal == null) {
-                out.add(new StepAnalysis.CustomCheckResult(effectiveRule, null, "", true, true));
+                String errDesc = queryError != null ? "ошибка PromQL" : "";
+                out.add(new StepAnalysis.CustomCheckResult(effectiveRule, null, errDesc, true, true));
             } else {
                 out.add(new StepAnalysis.CustomCheckResult(effectiveRule, worstVal, worstLabel, effectiveRule.passes(worstVal), false));
             }

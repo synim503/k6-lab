@@ -88,6 +88,21 @@
         <td th:text="${#numbers.formatDecimal(o.maxErrorPct, 1, 2)} + '%'"></td></tr></tbody>
 </table>
 
+<h4 th:if="${customChecksConfig != null and !customChecksConfig.isEmpty()}">Кастомные метрики Prometheus (SLA серверов и Автостоп)</h4>
+<table class="tbl" th:if="${customChecksConfig != null and !customChecksConfig.isEmpty()}">
+    <thead><tr><th>Кастомная метрика Prometheus</th><th>PromQL-запрос</th><th>Порог SLA</th><th>Контроль</th></tr></thead>
+    <tbody><tr th:each="cc : ${customChecksConfig}">
+        <td th:text="${cc.name}"></td>
+        <td><code th:text="${cc.promql}"></code></td>
+        <td class="num" th:text="${cc.formatThreshold()}"></td>
+        <td class="num">
+            <span th:if="${cc.stepSla and cc.autoStop}">SLA + Автостоп</span>
+            <span th:if="${cc.stepSla and !cc.autoStop}">SLA отчёта</span>
+            <span th:if="${!cc.stepSla and cc.autoStop}">Автостоп</span>
+        </td>
+    </tr></tbody>
+</table>
+
 <h4>Переменные запуска</h4>
 <div class="muted" th:if="${envRows.isEmpty()}">Переменные не заданы.</div>
 <table class="tbl" th:if="${!envRows.isEmpty()}">

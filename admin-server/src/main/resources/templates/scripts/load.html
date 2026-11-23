@@ -473,7 +473,21 @@
                                     <i class="bi bi-magic me-1"></i>Шаблон метрики
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end" id="ld-cc-presets">
-                                    <li><button type="button" class="dropdown-item small" data-cc-preset="cpu">Утилизация CPU сервера ≤ 80%</button></li>
+                                    <th:block th:if="${scriptCharts != null and !scriptCharts.isEmpty()}">
+                                        <li><h6 class="dropdown-header">Из графиков отчёта этого скрипта</h6></li>
+                                        <li th:each="ct : ${scriptCharts}" th:if="${!ct.queries().isEmpty()}">
+                                            <button type="button" class="dropdown-item small"
+                                                    th:attr="data-cc-chart-name=${ct.name()},
+                                                             data-cc-chart-promql=${ct.queries().get(0).promql()},
+                                                             data-cc-chart-unit=${ct.unit()}">
+                                                <i class="bi bi-graph-up me-1 text-primary"></i><span th:text="${ct.name()}"></span>
+                                            </button>
+                                        </li>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li><h6 class="dropdown-header">Готовые шаблоны</h6></li>
+                                    </th:block>
+                                    <li><button type="button" class="dropdown-item small" data-cc-preset="cpu">Утилизация CPU сервера (rate) ≤ 80%</button></li>
+                                    <li><button type="button" class="dropdown-item small" data-cc-preset="cpuIrate">Утилизация CPU сервера (irate) ≤ 80%</button></li>
                                     <li><button type="button" class="dropdown-item small" data-cc-preset="ram">Использование RAM сервера ≤ 85%</button></li>
                                     <li><button type="button" class="dropdown-item small" data-cc-preset="disk">Утилизация диска (I/O) ≤ 85%</button></li>
                                     <li><button type="button" class="dropdown-item small" data-cc-preset="jvm">JVM Heap Used ≤ 85%</button></li>

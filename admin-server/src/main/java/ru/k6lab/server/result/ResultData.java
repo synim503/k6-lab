@@ -96,10 +96,26 @@ public record ResultData(List<StepRow> steps, boolean prometheusOk, String error
                 }
             }
             if (worst == null) {
+                return customChecksSummaryText();
+            }
+            String opText = String.format(java.util.Locale.ROOT, "%s: p%d %.0f / %.0f мс",
+                    worst.operation(), worst.slaPercentile(), worst.slaValue(), worst.slaMs());
+            String ccText = customChecksSummaryText();
+            return "—".equals(ccText) ? opText : opText + " · " + ccText;
+        }
+
+        public String customChecksSummaryText() {
+            List<CustomMetricRow> list = customChecks();
+            if (list.isEmpty()) {
                 return "—";
             }
-            return String.format(java.util.Locale.ROOT, "%s: p%d %.0f / %.0f мс",
-                    worst.operation(), worst.slaPercentile(), worst.slaValue(), worst.slaMs());
+            List<String> parts = new java.util.ArrayList<>(list.size());
+            for (CustomMetricRow cm : list) {
+                String u = cm.unit() == null || cm.unit().isBlank() ? "" : " " + cm.unit();
+                String val = cm.value() == null ? "нет данных" : String.format(java.util.Locale.ROOT, "%.1f%s", cm.value(), u);
+                parts.add(cm.name() + ": " + val + " (" + cm.thresholdText() + ")");
+            }
+            return String.join("; ", parts);
         }
     }
 

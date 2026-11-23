@@ -155,6 +155,79 @@ public class CustomChartService {
         return out;
     }
 
+    /**
+     * Строит графики по кастомным метрикам Prometheus из блока SLA/Автостопа, если для них ещё не создан отдельный график отчёта с тем же именем.
+     */
+    public List<ChartRenderer.Img> customCheckCharts(Run run, List<ru.k6lab.core.analysis.StepAnalysis.CustomCheck> checks,
+                                                     Map<String, String> vars, long warmupSec, boolean skipWarmup) {
+        if (checks == null || checks.isEmpty()) {
+            return List.of();
+        }
+        Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
+        SettingsService.Prometheus p = settings.prometheus();
+        if (start == null || !p.configured()) {
+            return List.of();
+        }
+        java.util.Set<String> existingNames = new java.util.HashSet<>();
+        if (run.getScriptId() != null) {
+            for (ChartTemplateStore.Template t : store.enabled(run.getScriptId())) {
+                existingNames.add(t.name().strip().toLowerCase(java.util.Locale.ROOT));
+                existingNames.add(title(t.name(), mergeVars(vars, t.variables())).strip().toLowerCase(java.util.Locale.ROOT));
+            }
+        }
+        Instant end = run.getFinishedAt() != null ? run.getFinishedAt() : Instant.now();
+        boolean hasWarmup = warmupSec > 0 && start.plusSeconds(warmupSec).isBefore(end);
+        Instant queryStart = (skipWarmup && hasWarmup) ? start.plusSeconds(warmupSec) : start;
+        double warmupMarkerMin = (!skipWarmup && hasWarmup) ? warmupSec / 60.0 : 0;
+        long total = Math.max(1, end.getEpochSecond() - queryStart.getEpochSecond());
+        int push = settings.pushIntervalSec();
+        int step = (int) Math.max(push, (long) Math.ceil(total / (double) MAX_POINTS));
+        long window = Math.max(15, 3L * push);
+        long t0 = start.getEpochSecond();
+        long minTs = queryStart.getEpochSecond();
+        Map<String, String> effectiveVars = vars == null ? Map.of() : vars;
+        List<ChartRenderer.Img> out = new ArrayList<>();
+        for (ru.k6lab.core.analysis.StepAnalysis.CustomCheck cc : checks) {
+            if (cc.promql() == null || cc.promql().isBlank()) {
+                continue;
+            }
+            String renderedTitle = title(cc.name(), effectiveVars);
+            if (existingNames.contains(renderedTitle.strip().toLowerCase(java.util.Locale.ROOT))) {
+                continue;
+            }
+            Map<String, List<RunSeriesService.Pt>> series = new LinkedHashMap<>();
+            try {
+                List<PrometheusClient.Series> raw = prom.rangeSeries(p, expand(cc.promql(), run.getId(), window, effectiveVars), queryStart, end, step);
+                for (PrometheusClient.Series sr : raw) {
+                    String label = seriesName("", sr.labels(), sr.labelText(), raw.size());
+                    if (label == null || label.isBlank()) {
+                        label = renderedTitle;
+                    }
+                    List<RunSeriesService.Pt> mapped = sr.points().stream().filter(pt -> pt.ts() >= minTs)
+                            .map(pt -> new RunSeriesService.Pt((pt.ts() - t0) / 60.0, pt.value())).toList();
+                    if (mapped.isEmpty()) {
+                        continue;
+                    }
+                    String key = label;
+                    for (int i = 2; series.containsKey(key); i++) {
+                        key = label + " #" + i;
+                    }
+                    series.put(key, mapped);
+                }
+                if (!series.isEmpty()) {
+                    String chartTitle = renderedTitle + " (SLA " + cc.formatThreshold() + ")";
+                    ChartRenderer.Img img = ChartRenderer.custom(chartTitle, cc.unit() == null ? "" : cc.unit(), series, warmupMarkerMin);
+                    if (img != null) {
+                        out.add(img);
+                    }
+                }
+            } catch (IOException | RuntimeException | LinkageError e) {
+                log.debug("Run {}: график кастомной метрики «{}» не построен: {}", run.getId(), cc.name(), e.toString());
+            }
+        }
+        return out;
+    }
+
     /** Диагностика одного запроса при живом предпросмотре в конструкторе. */
     public record QueryDiag(int index, String rawPromql, String expandedPromql, String legend,
                             int seriesCount, List<String> labelKeys, String error) {

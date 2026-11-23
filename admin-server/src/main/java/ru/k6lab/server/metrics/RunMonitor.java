@@ -196,37 +196,40 @@ public class RunMonitor {
             json.put("wholeSec", st.wholeSec);
             putRows(json.putArray("rowsAll"), st.wholeRows);
         }
-        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheck> customRules = LoadCriteria.customChecks(snap.stopCriteria());
-        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval = List.of();
-        if (!customRules.isEmpty()) {
-            Map<String, String> vars = new java.util.LinkedHashMap<>();
-            if (run.getScriptId() != null) {
-                vars.putAll(chartVariables.map(run.getScriptId()));
-            }
-            if (snap.env() != null) {
-                snap.env().forEach(vars::putIfAbsent);
-            }
-            boolean warm = inWarmup(snap, current, now);
-            customEval = stepResults.evaluateCustomChecks(customRules, run.getId(), now.minusSeconds(window), now, window, vars, p);
-            ArrayNode ca = json.putArray("customChecks");
-            for (var cr : customEval) {
-                ObjectNode co = ca.addObject();
-                co.put("name", cr.check().name());
-                co.put("cmp", cr.check().cmpSymbol());
-                co.put("threshold", cr.check().threshold());
-                co.put("thresholdText", cr.check().formatThreshold());
-                co.put("unit", cr.check().unit() == null ? "" : cr.check().unit());
-                co.put("stepSla", cr.check().stepSla());
-                co.put("autoStop", cr.check().autoStop());
-                putD(co, "value", cr.value());
-                co.put("worstSeries", cr.worstSeries() == null ? "" : cr.worstSeries());
-                boolean violation = !warm && !cr.ok() && cr.value() != null;
-                co.put("violation", violation);
-                co.put("reason", violation ? cr.check().formatViolation(cr.value(), cr.worstSeries()) : "");
-            }
-        }
+        boolean warm = inWarmup(snap, current, now);
+        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval =
+                evaluateAndPutCustomChecks(json, run, snap, now.minusSeconds(window), now, window, warm, p);
         broadcaster.publishMetrics(run.getId(), json.toString());
         evaluateStop(run, snap, st, current, hold, intoHold, minWindow, window, rows, customEval, now, p, stepNo);
+    }
+
+    List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> evaluateAndPutCustomChecks(
+            ObjectNode json, Run run, RunSnapshot snap, Instant winStart, Instant winEnd, long windowSec,
+            boolean warm, SettingsService.Prometheus p) {
+        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheck> customRules = stepResults.getEffectiveCustomChecks(run, snap);
+        if (customRules.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> vars = stepResults.varsForRun(run, snap);
+        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval =
+                stepResults.evaluateCustomChecks(customRules, run.getId(), winStart, winEnd, windowSec, vars, p);
+        ArrayNode ca = json.putArray("customChecks");
+        for (var cr : customEval) {
+            ObjectNode co = ca.addObject();
+            co.put("name", cr.check().name());
+            co.put("cmp", cr.check().cmpSymbol());
+            co.put("threshold", cr.check().threshold());
+            co.put("thresholdText", cr.check().formatThreshold());
+            co.put("unit", cr.check().unit() == null ? "" : cr.check().unit());
+            co.put("stepSla", cr.check().stepSla());
+            co.put("autoStop", cr.check().autoStop());
+            putD(co, "value", cr.value());
+            co.put("worstSeries", cr.worstSeries() == null ? "" : cr.worstSeries());
+            boolean violation = !warm && !cr.ok() && cr.value() != null;
+            co.put("violation", violation);
+            co.put("reason", violation ? cr.check().formatViolation(cr.value(), cr.worstSeries()) : "");
+        }
+        return customEval;
     }
 
     static void putRows(ArrayNode ra, List<LiveRow> rows) {

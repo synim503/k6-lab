@@ -217,7 +217,18 @@ public class RunService {
                 .map(st -> new RunSnapshot.StepInfo(st.no(), st.label(), st.levelPct(), st.rampSec(), st.holdSec())).toList();
         List<RunSnapshot.DataFileInfo> data = (built != null ? built.dataFiles() : load.dataFiles(script.getId())).stream()
                 .map(d -> new RunSnapshot.DataFileInfo(d.getPath(), d.getMode().name(), d.isHasHeader(), d.isConsumed())).toList();
-        Map<String, Object> rawStop = built != null && built.stop() != null ? built.stop() : script.getStopCriteria();
+        Map<String, Object> rawStop = new LinkedHashMap<>();
+        if (script.getStopCriteria() != null) {
+            rawStop.putAll(script.getStopCriteria());
+        }
+        if (built != null && built.stop() != null) {
+            rawStop.putAll(built.stop());
+            // Если в профиле нет customChecks, но они настроены в базовом скрипте — всегда наследуем их!
+            if ((!built.stop().containsKey("customChecks") || ((List<?>) built.stop().get("customChecks")).isEmpty())
+                    && script.getStopCriteria() != null && script.getStopCriteria().containsKey("customChecks")) {
+                rawStop.put("customChecks", script.getStopCriteria().get("customChecks"));
+            }
+        }
         return new RunSnapshot(
                 new RunSnapshot.ScriptInfo(script.getId(), script.getName(), v.getId(), v.getNumber(), v.getSha256(), v.getEntrypoint(),
                         v.getSource().name(), v.getCommitHash(), v.getGitBranch()),

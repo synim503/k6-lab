@@ -49,13 +49,16 @@ public class LoadController {
     private final LoadProfileStore profiles;
     private final ProfileImportService profileImport;
     private final ru.k6lab.server.schedule.ScheduledRunService scheduledRuns;
+    private final ru.k6lab.server.result.ChartTemplateStore chartTemplates;
 
     public LoadController(ScriptService scripts, LoadService load, RunPlanner planner, SecretService secrets, K6Tool k6,
                           AdminHelper helper, LoadProfileStore profiles, ProfileImportService profileImport,
-                          ru.k6lab.server.schedule.ScheduledRunService scheduledRuns) {
+                          ru.k6lab.server.schedule.ScheduledRunService scheduledRuns,
+                          ru.k6lab.server.result.ChartTemplateStore chartTemplates) {
         this.profiles = profiles;
         this.profileImport = profileImport;
         this.scheduledRuns = scheduledRuns;
+        this.chartTemplates = chartTemplates;
         this.scripts = scripts;
         this.load = load;
         this.planner = planner;
@@ -405,6 +408,7 @@ public class LoadController {
         model.addAttribute("hasReadyProfile", hasReadyProfile);
         model.addAttribute("generators", plan.generatorCount());
         model.addAttribute("secretNames", secrets.list().stream().map(Secret::getName).toList());
+        model.addAttribute("scriptCharts", chartTemplates.list(id));
         model.addAttribute("modes", ScriptDataFile.Mode.values());
         model.addAttribute("executors", ru.k6lab.core.k6config.K6ConfigGenerator.executors());
         model.addAttribute("operationNames", scripts.latest(id).map(v -> v.operationNames()).orElse(List.of()));

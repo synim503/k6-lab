@@ -39,11 +39,13 @@ public class RunResultController {
     @GetMapping("/results")
     public String panel(@PathVariable Long id, Model model) {
         Run run = runService.get(id);
+        boolean terminal = run.getStatus().isTerminal();
         model.addAttribute("run", run);
         model.addAttribute("fmt", new ReportFormat());
         model.addAttribute("conclusions", CONCLUSIONS);
-        model.addAttribute("data", results.load(id).orElse(null));
-        model.addAttribute("terminal", run.getStatus().isTerminal());
+        model.addAttribute("data", terminal ? results.getOrCompute(id) : results.load(id).orElse(null));
+        model.addAttribute("customChecksConfig", results.getEffectiveCustomChecks(run, runService.snapshot(run)));
+        model.addAttribute("terminal", terminal);
         return "runs/_results :: results";
     }
 

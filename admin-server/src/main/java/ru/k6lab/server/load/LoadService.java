@@ -361,6 +361,22 @@ public class LoadService {
         Map<String, Object> sc = script.getSuccessCriteria();
         boolean active = force || (sc != null && Boolean.TRUE.equals(sc.get("baseProfileActive")));
         readBaseConfigIntoForm(script, profileForm);
+        // Кастомные метрики Prometheus из базового скрипта наследуются всеми профилями всегда (если в самом профиле список пуст или включён приоритет базы)
+        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheck> baseChecks = LoadCriteria.customChecks(script.getStopCriteria());
+        if (!baseChecks.isEmpty()) {
+            if (profileForm.getStop() == null) {
+                profileForm.setStop(new LoadForm.StopForm());
+            }
+            boolean profileHasChecks = profileForm.getStop().getCustomChecks() != null
+                    && profileForm.getStop().getCustomChecks().stream().anyMatch(c -> c != null && !c.blank());
+            if (!profileHasChecks || (active && profileForm.isBaseOverrideStop())) {
+                List<LoadForm.CustomCheckForm> inherited = new ArrayList<>(baseChecks.size());
+                for (var cc : baseChecks) {
+                    inherited.add(LoadForm.CustomCheckForm.of(cc));
+                }
+                profileForm.getStop().setCustomChecks(inherited);
+            }
+        }
         if (!active) {
             return;
         }

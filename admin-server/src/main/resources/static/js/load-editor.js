@@ -1701,6 +1701,11 @@
             promql: '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[{range}])) * 100)',
             cmp: 'LTE', threshold: 80, unit: '%', stepSla: true, autoStop: false
         },
+        cpuIrate: {
+            name: 'Утилизация CPU (irate)',
+            promql: '100 * (1 - avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[{range}])))',
+            cmp: 'LTE', threshold: 80, unit: '%', stepSla: true, autoStop: false
+        },
         ram: {
             name: 'Использование RAM серверов',
             promql: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100',
@@ -1786,6 +1791,19 @@
     }
     if (ccPresetsMenu) {
         ccPresetsMenu.addEventListener('click', function (e) {
+            var chartBtn = e.target.closest('[data-cc-chart-promql]');
+            if (chartBtn) {
+                addCustomCheckRow({
+                    name: chartBtn.dataset.ccChartName || '',
+                    promql: chartBtn.dataset.ccChartPromql || '',
+                    cmp: 'LTE',
+                    threshold: 80,
+                    unit: chartBtn.dataset.ccChartUnit || '%',
+                    stepSla: true,
+                    autoStop: false
+                });
+                return;
+            }
             var btn = e.target.closest('[data-cc-preset]');
             if (!btn) { return; }
             var p = CC_PRESETS[btn.dataset.ccPreset];
