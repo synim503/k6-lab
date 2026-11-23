@@ -103,9 +103,9 @@
                 <h5 class="mb-0"><i class="bi bi-clock-history text-primary me-2"></i>Последние запуски</h5>
             </div>
             <div class="card"><table class="table table-hover align-middle mb-0">
-                <thead><tr><th>#</th><th>Скрипт</th><th>Статус</th><th>Поставлен</th><th>Длительность</th></tr></thead>
+                <thead><tr><th>#</th><th>Скрипт</th><th>Статус</th><th>Поставлен</th><th>Длительность</th><th class="text-end">В очередь</th></tr></thead>
                 <tbody>
-                <tr th:if="${lastRuns.isEmpty()}"><td colspan="5"><div class="empty-state"><i class="bi bi-inbox"></i>Запусков ещё не было</div></td></tr>
+                <tr th:if="${lastRuns.isEmpty()}"><td colspan="6"><div class="empty-state"><i class="bi bi-inbox"></i>Запусков ещё не было</div></td></tr>
                 <tr th:each="r : ${lastRuns}">
                     <td><a th:href="@{/runs/{id}(id=${r.id})}" th:text="${r.id}"></a></td>
                     <td th:text="${r.scriptName}"></td>
@@ -113,6 +113,34 @@
                               th:classappend="${r.status.name() == 'FINISHED'} ? (${r.thresholdsFailed} ? 'text-bg-warning' : 'text-bg-success') : (${r.status.name() == 'FAILED'} ? 'text-bg-danger' : (${r.status.name() == 'ABORTED'} ? 'text-bg-secondary' : 'text-bg-primary'))"></span></td>
                     <td class="text-muted small text-nowrap" th:text="${#temporals.format(r.queuedAt, 'dd.MM.yyyy HH:mm')}"></td>
                     <td class="text-muted small" th:text="${r.startedAt != null and r.finishedAt != null} ? ${T(java.time.Duration).between(r.startedAt, r.finishedAt).toMinutes()} + ' мин' : '—'"></td>
+                    <td class="text-end text-nowrap">
+                        <div class="btn-group btn-group-sm" th:if="${r.scriptId != null}">
+                            <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="d-inline m-0">
+                                <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Снова добавить в конец очереди">
+                                    <i class="bi bi-arrow-repeat"></i>
+                                </button>
+                            </form>
+                            <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split py-0 px-1" data-bs-toggle="dropdown" aria-expanded="false">
+                                <span class="visually-hidden">Позиция</span>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='front')}" method="post" class="m-0">
+                                        <button type="submit" class="dropdown-item small">
+                                            <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
+                                        </button>
+                                    </form>
+                                </li>
+                                <li>
+                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="m-0">
+                                        <button type="submit" class="dropdown-item small">
+                                            <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
+                                        </button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </div>
+                    </td>
                 </tr></tbody></table></div>
         </div>
 

@@ -570,4 +570,80 @@ class ScheduleIT extends AbstractIT {
         }
         mvc.perform(post("/schedule/cancel-all-pending").with(csrf())).andExpect(status().is3xxRedirection());
     }
+
+    @Test
+    void requeueAndMoveSupportFrontAfterCurrentRunAndBackOfQueue() throws Exception {
+        Script s = scriptWithLoad();
+        long profA = saveProfile(s, "Профиль-А", 20, "ENV_A=1");
+        long profB = saveProfile(s, "Профиль-Б", 30, "ENV_B=2");
+        Generator g = generator();
+
+        // Имитируем текущий активный прогон на генераторе g (ещё идёт)
+        mvc.perform(post("/schedule/cancel-all-pending").with(csrf()));
+        Run activeRun = runService.create(new RunService.CreateRequest(
+                s.getId(), List.of(new RunService.GeneratorSel(g.getId(), 1)),
+                Run.FailurePolicy.CONTINUE, 120, List.of(),
+                new RunService.Overrides(Map.of("CUSTOM", "yes"), Map.of("work", 140.0), null, "tester", profA, "Профиль-А")));
+        Instant activeStart = Instant.now();
+        runService.update(activeRun.getId(), r -> {
+            r.setStatus(ru.k6lab.core.runstate.RunStatus.RUNNING);
+            r.setStartedAt(activeStart);
+            r.setPlannedStartAt(activeStart);
+        });
+        jdbc.update("update generator set active_runs = 1 where id = ?", g.getId());
+
+        try {
+            // Планируем два ожидающих теста в очереди после активного
+            long q1 = schedule.schedule(s.getId(), activeStart.plusSeconds(1200), List.of(g.getId()), null, null, Map.of(), profA, "tester");
+            long q2 = schedule.schedule(s.getId(), activeStart.plusSeconds(2400), List.of(g.getId()), null, null, Map.of(), profB, "tester");
+
+            // 1. Ставим завершившийся/отменённый тест из расписания в НАЧАЛО очереди (после текущего идущего запуска):
+            // создадим и отменим запись с кастомными переменными и интенсивностью, затем вернём её в начало очереди
+            long cancelledId = schedule.schedule(s.getId(), activeStart.plusSeconds(3600), List.of(g.getId()), null,
+                    Map.of("RETRY", "front"), Map.of("work", 160.0), profB, "tester");
+            schedule.cancel(cancelledId, "tester");
+
+            mvc.perform(post("/schedule/" + cancelledId + "/requeue").with(csrf()).param("position", "front"))
+                    .andExpect(status().is3xxRedirection())
+                    .andExpect(redirectedUrl("/schedule"));
+
+            List<ScheduledRunStore.Item> pendingAfterFront = store.active();
+            assertThat(pendingAfterFront).hasSize(3);
+            ScheduledRunStore.Item frontItem = pendingAfterFront.get(0);
+            assertThat(frontItem.id()).isNotEqualTo(q1).isNotEqualTo(q2);
+            assertThat(frontItem.profileId()).isEqualTo(profB);
+            assertThat(frontItem.env()).containsEntry("RETRY", "front");
+            assertThat(frontItem.intensity()).containsEntry("work", 160.0);
+            // Он стоит ПОСЛЕ текущего активного прогона (длительность 180с + пауза 300с = +480с от activeStart), но ПЕРЕД сдвинутыми q1 и q2
+            assertThat(frontItem.runAt()).isAfterOrEqualTo(activeStart.plusSeconds(475));
+            assertThat(pendingAfterFront.get(1).id()).isEqualTo(q1);
+            assertThat(pendingAfterFront.get(2).id()).isEqualTo(q2);
+            assertThat(pendingAfterFront.get(1).runAt()).isAfterOrEqualTo(frontItem.runAt().plusSeconds(480));
+            assertThat(pendingAfterFront.get(2).runAt()).isAfterOrEqualTo(pendingAfterFront.get(1).runAt().plusSeconds(480));
+
+            // 2. Ставим существующий Run в КОНЕЦ очереди через /runs/{runId}/requeue?position=back
+            mvc.perform(post("/runs/" + activeRun.getId() + "/requeue").with(csrf()).param("position", "back"))
+                    .andExpect(status().is3xxRedirection())
+                    .andExpect(redirectedUrl("/schedule"));
+
+            List<ScheduledRunStore.Item> pendingAfterBack = store.active();
+            assertThat(pendingAfterBack).hasSize(4);
+            ScheduledRunStore.Item backItem = pendingAfterBack.get(3);
+            assertThat(backItem.profileId()).isEqualTo(profA);
+            assertThat(backItem.runAt()).isAfterOrEqualTo(pendingAfterBack.get(2).runAt().plusSeconds(480));
+
+            // 3. Перемещаем последний элемент очереди (backItem) в самое НАЧАЛО очереди через /schedule/{id}/move?position=front
+            mvc.perform(post("/schedule/" + backItem.id() + "/move").with(csrf()).param("position", "front"))
+                    .andExpect(status().is3xxRedirection())
+                    .andExpect(redirectedUrl("/schedule"));
+
+            List<ScheduledRunStore.Item> pendingAfterMove = store.active();
+            assertThat(pendingAfterMove).extracting(ScheduledRunStore.Item::id)
+                    .containsExactly(backItem.id(), frontItem.id(), q1, q2);
+        } finally {
+            mvc.perform(post("/schedule/cancel-all-pending").with(csrf()));
+            jdbc.update("update generator set active_runs = 0 where id = ?", g.getId());
+            runService.update(activeRun.getId(), r -> r.setStatus(ru.k6lab.core.runstate.RunStatus.FINISHED));
+        }
+    }
 }

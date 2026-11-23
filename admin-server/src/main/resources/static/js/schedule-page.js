@@ -107,6 +107,7 @@
     var qProfile = document.getElementById('qm-profile');
     var qAt = document.getElementById('qm-at');
     var qIso = document.getElementById('qm-iso');
+    var qPos = document.getElementById('qm-pos');
     var qCount = document.getElementById('qm-count');
     var qMeta = document.getElementById('qm-meta');
     var qErr = document.getElementById('qm-err');
@@ -201,11 +202,23 @@
     if (qModalEl && qForm && qScript) {
         qScript.addEventListener('change', function () { loadScriptMeta(qScript.value, null, null); });
         qProfile.addEventListener('change', applyQuickProfile);
-        qAt.addEventListener('input', syncQuickIso);
+        qAt.addEventListener('input', function () {
+            if (qPos) { qPos.value = ''; }
+            qModalEl.querySelectorAll('[data-qm-time]').forEach(function (b) { b.classList.remove('active'); });
+            syncQuickIso();
+        });
 
         qModalEl.querySelectorAll('[data-qm-time]').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 var p = btn.dataset.qmTime, d = new Date();
+                qModalEl.querySelectorAll('[data-qm-time]').forEach(function (b) { b.classList.toggle('active', b === btn); });
+                if (p === 'front' || p === 'back') {
+                    qAt.value = '';
+                    qIso.value = '';
+                    if (qPos) { qPos.value = p; }
+                    return;
+                }
+                if (qPos) { qPos.value = ''; }
                 if (p === 'auto') { qAt.value = ''; qIso.value = ''; return; }
                 if (p === '+15m') { d.setMinutes(d.getMinutes() + 15); }
                 else if (p === '+1h') { d.setHours(d.getHours() + 1); }
@@ -234,6 +247,8 @@
             if (presetScript) { qScript.value = presetScript; }
             qAt.value = '';
             qIso.value = '';
+            if (qPos) { qPos.value = ''; }
+            qModalEl.querySelectorAll('[data-qm-time]').forEach(function (b) { b.classList.toggle('active', b.dataset.qmTime === 'auto'); });
             if (qScript.value) { loadScriptMeta(qScript.value, presetProf, presetCnt); }
         });
     }

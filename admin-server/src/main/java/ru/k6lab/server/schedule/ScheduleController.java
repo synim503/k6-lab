@@ -238,10 +238,13 @@ public class ScheduleController {
 
     /**
      * Форма «Запланировать» на странице запуска скрипта (и из быстрого диалога на /schedule). Время приходит в ISO (браузер переводит локальное время в UTC),
+     * либо выбирается queuePosition=front (в начало очереди после текущего запуска) / queuePosition=back (в конец очереди);
      * процент интенсивности - полями pct_ИМЯОПЕРАЦИИ, переменные - текстом KEY=VALUE, если выбран режим «свои».
      */
     @PostMapping("/scripts/{id}/schedule")
-    public String create(@PathVariable Long id, @RequestParam(required = false) String runAt, @RequestParam(required = false) Integer count,
+    public String create(@PathVariable Long id, @RequestParam(required = false) String runAt,
+                         @RequestParam(required = false) String queuePosition,
+                         @RequestParam(required = false) Integer count,
                          @RequestParam(name = "generatorId", required = false) List<Long> generatorIds,
                          @RequestParam(required = false) Long profile,
                          @RequestParam(defaultValue = "false") boolean shift,
@@ -249,14 +252,6 @@ public class ScheduleController {
                          @RequestParam(required = false) String returnTo,
                          @RequestParam Map<String, String> all, Principal user, RedirectAttributes ra) {
         try {
-            Instant at = null; // время не выбрано - ближайшее доступное
-            if (runAt != null && !runAt.isBlank()) {
-                try {
-                    at = Instant.parse(runAt.trim());
-                } catch (DateTimeParseException e) {
-                    throw new IllegalArgumentException("Укажите дату и время запуска");
-                }
-            }
             Map<String, String> env = "custom".equals(envMode) ? LoadForm.parseKv(envText) : null;
             Map<String, Double> pct = new LinkedHashMap<>();
             List<String> bad = new ArrayList<>();
@@ -272,13 +267,87 @@ public class ScheduleController {
             if (!bad.isEmpty()) {
                 throw new IllegalArgumentException("Интенсивность должна быть числом (операции: " + String.join(", ", bad) + ")");
             }
-            long sid = service.schedule(id, at, generatorIds, count, env, pct, profile, user == null ? "system" : user.getName(), shift);
+            String by = user == null ? "system" : user.getName();
+            if ("front".equalsIgnoreCase(queuePosition) || "back".equalsIgnoreCase(queuePosition)) {
+                var pos = "front".equalsIgnoreCase(queuePosition)
+                        ? ScheduledRunService.QueuePosition.FRONT : ScheduledRunService.QueuePosition.BACK;
+                var res = service.enqueueParams(id, profile, generatorIds, count, env, pct, pos, by);
+                ra.addFlashAttribute("info", formatEnqueueMessage("Тест «" + res.title() + "» добавлен", res, pos));
+                return "redirect:/schedule";
+            }
+            Instant at = null; // время не выбрано - ближайшее доступное
+            if (runAt != null && !runAt.isBlank()) {
+                try {
+                    at = Instant.parse(runAt.trim());
+                } catch (DateTimeParseException e) {
+                    throw new IllegalArgumentException("Укажите дату и время запуска");
+                }
+            }
+            long sid = service.schedule(id, at, generatorIds, count, env, pct, profile, by, shift);
             ra.addFlashAttribute("info", "Запуск запланирован (#" + sid + ")");
             return "redirect:/schedule";
         } catch (IllegalArgumentException | IllegalStateException e) {
             ra.addFlashAttribute("error", e.getMessage());
             return "schedule".equals(returnTo) ? "redirect:/schedule" : "redirect:/scripts/" + id + "/run#schedule";
         }
+    }
+
+    /** Повторная постановка записи расписания в очередь: в начало (сразу после текущего запуска) или в конец очереди. */
+    @PostMapping("/schedule/{id}/requeue")
+    public String requeueSchedule(@PathVariable Long id,
+                                  @RequestParam(defaultValue = "back") String position,
+                                  Principal user, RedirectAttributes ra) {
+        try {
+            var pos = "front".equalsIgnoreCase(position)
+                    ? ScheduledRunService.QueuePosition.FRONT : ScheduledRunService.QueuePosition.BACK;
+            var res = service.requeueScheduleItem(id, pos, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", formatEnqueueMessage("Прогон «" + res.title() + "» снова добавлен", res, pos));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule";
+    }
+
+    /** Перемещение уже ожидающей записи расписания (PENDING) в начало очереди (после текущего теста) или в конец очереди. */
+    @PostMapping("/schedule/{id}/move")
+    public String movePending(@PathVariable Long id,
+                              @RequestParam(defaultValue = "front") String position,
+                              Principal user, RedirectAttributes ra) {
+        try {
+            var pos = "front".equalsIgnoreCase(position)
+                    ? ScheduledRunService.QueuePosition.FRONT : ScheduledRunService.QueuePosition.BACK;
+            var res = service.movePending(id, pos, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", formatEnqueueMessage("Запись #" + id + " («" + res.title() + "») перемещена", res, pos));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule";
+    }
+
+    /** Повторная постановка уже проведённого (или идущего) прогона Run в очередь: в начало (после текущего) или в конец. */
+    @PostMapping("/runs/{runId}/requeue")
+    public String requeueRun(@PathVariable Long runId,
+                             @RequestParam(defaultValue = "back") String position,
+                             Principal user, RedirectAttributes ra) {
+        try {
+            var pos = "front".equalsIgnoreCase(position)
+                    ? ScheduledRunService.QueuePosition.FRONT : ScheduledRunService.QueuePosition.BACK;
+            var res = service.requeueRun(runId, pos, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", formatEnqueueMessage("Прогон #" + runId + " («" + res.title() + "») добавлен", res, pos));
+            return "redirect:/schedule";
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+            return "redirect:/runs/" + runId;
+        }
+    }
+
+    private static String formatEnqueueMessage(String prefix, ScheduledRunService.EnqueueResult res,
+                                               ScheduledRunService.QueuePosition pos) {
+        String where = pos == ScheduledRunService.QueuePosition.FRONT
+                ? "в начало очереди (после текущего запуска)"
+                : "в конец очереди";
+        String shifted = res.shiftedCount() > 0 ? ", сдвинуто ожидающих записей: " + res.shiftedCount() : "";
+        return prefix + " " + where + " (#" + res.scheduleId() + " · старт " + new ReportFormat().dt(res.runAt()) + shifted + ")";
     }
 
     @PostMapping("/schedule/{id}/cancel")

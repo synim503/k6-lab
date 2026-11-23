@@ -187,10 +187,8 @@ public class ScheduleTimelineService {
                     .toEpochMilli();
             long span = ConfigDuration.of(r.getK6Config()).totalSec();
             long to = Math.max(now + 30_000, from + (span + TAIL_SEC) * 1000L);
-            for (RunGenerator rg : runs.generatorsOf(r.getId())) {
-                if (rg.getGeneratorId() != null && !rg.getStatus().isDone()) {
-                    bars.add(new Snapshot.SlotBar(from, to, rg.getGeneratorId(), null, 1));
-                }
+            for (Long gid : activeGeneratorIdsOf(r)) {
+                bars.add(new Snapshot.SlotBar(from, to, gid, null, 1));
             }
         }
         // недавно завершившиеся запуски держат паузу TAIL_SEC (5 мин) на своих генераторах, чтобы shiftQueue не запускал следующий тест без перерыва
@@ -247,13 +245,57 @@ public class ScheduleTimelineService {
                     .toEpochMilli();
             long span = ConfigDuration.of(r.getK6Config()).totalSec();
             long to = Math.max(now + 30_000, from + (span + TAIL_SEC) * 1000L);
-            for (RunGenerator rg : runs.generatorsOf(r.getId())) {
-                if (rg.getGeneratorId() != null && !rg.getStatus().isDone()) {
-                    bars.add(new Snapshot.SlotBar(from, to, rg.getGeneratorId(), null, 1));
-                }
+            for (Long gid : activeGeneratorIdsOf(r)) {
+                bars.add(new Snapshot.SlotBar(from, to, gid, null, 1));
             }
         }
         return new Snapshot(gens, bars);
+    }
+
+    /** Идентификаторы генераторов активного запуска: из run_generator, а если они ещё не созданы — из request["generators"]. */
+    List<Long> activeGeneratorIdsOf(Run r) {
+        List<Long> out = new ArrayList<>();
+        for (RunGenerator rg : runs.generatorsOf(r.getId())) {
+            if (rg.getGeneratorId() != null && !rg.getStatus().isDone()) {
+                out.add(rg.getGeneratorId());
+            }
+        }
+        if (out.isEmpty() && r.getRequest() != null && r.getRequest().get("generators") instanceof List<?> sel) {
+            for (Object item : sel) {
+                if (item instanceof Map<?, ?> m && m.get("id") instanceof Number num) {
+                    out.add(num.longValue());
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Снимок активных (идущих сейчас) запусков и недавно завершившихся запусков (5-минутная пауза остывания),
+     * но БЕЗ ожидающих записей расписания — для вставки нового теста в начало очереди (после текущего теста) и сдвига остальных.
+     */
+    Snapshot snapshotRunningWithCooldown() {
+        Snapshot snap = snapshotRunningOnly();
+        long now = Instant.now().toEpochMilli();
+        java.util.Set<Long> activeRunIds = new java.util.HashSet<>();
+        runs.activeRuns().forEach(r -> activeRunIds.add(r.getId()));
+        long cooldownCutoff = now - TAIL_SEC * 1000L;
+        for (Run r : runs.search(null, null, 20)) {
+            if (activeRunIds.contains(r.getId()) || r.getFinishedAt() == null) {
+                continue;
+            }
+            long fin = r.getFinishedAt().toEpochMilli();
+            if (fin <= cooldownCutoff) {
+                continue;
+            }
+            long to = fin + TAIL_SEC * 1000L;
+            for (RunGenerator rg : runs.generatorsOf(r.getId())) {
+                if (rg.getGeneratorId() != null) {
+                    snap.bars.add(new Snapshot.SlotBar(fin, to, rg.getGeneratorId(), null, 1));
+                }
+            }
+        }
+        return snap;
     }
 
     int durationSecFor(ScheduledRunStore.Item it) {

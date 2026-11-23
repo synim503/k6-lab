@@ -65,6 +65,13 @@ public class ScheduledRunService {
     public record ResumeResult(Long startedScheduleId, Long startedRunId, String startedName, int moved) {
     }
 
+    /** Позиция при постановке запуска в очередь расписания: FRONT — в начало очереди (сразу после текущего запуска), BACK — в конец очереди. */
+    public enum QueuePosition { FRONT, BACK }
+
+    /** Результат постановки в очередь (или перемещения в очереди): id созданной/перемещённой записи, назначенное время и сколько других записей сдвинуто. */
+    public record EnqueueResult(long scheduleId, Instant runAt, String title, int shiftedCount) {
+    }
+
     public ScheduledRunService(ScheduledRunStore store, RunService runs, RunPlanner planner, ScriptService scripts,
                                GeneratorRepository generators, SecretService secrets, AuditService audit, LoadService load,
                                ScheduleTimelineService timeline, SettingsService settings) {
@@ -286,6 +293,228 @@ public class ScheduledRunService {
 
     public List<ScheduledRunStore.Item> pendingOf(long scriptId) {
         return store.pendingOfScript(scriptId);
+    }
+
+    /**
+     * Повторно ставит в очередь запись расписания (завершённую, упавшую, отменённую или ожидающую) с сохранением всех её параметров
+     * (скрипт, профиль, генераторы, переменные, масштаб интенсивности):
+     * - {@link QueuePosition#FRONT} — в самое начало очереди (сразу после текущего выполняющегося теста или через 1 мин, если сейчас ничего не идёт),
+     *   автоматически сдвигая все остальные ожидающие записи следом;
+     * - {@link QueuePosition#BACK} — в конец очереди (после всех уже запланированных ожидающих тестов).
+     */
+    public EnqueueResult requeueScheduleItem(long sourceScheduleId, QueuePosition position, String user) {
+        ScheduledRunStore.Item src = store.find(sourceScheduleId)
+                .orElseThrow(() -> new IllegalArgumentException("Запись расписания #" + sourceScheduleId + " не найдена"));
+        return enqueueParams(src.scriptId(), src.profileId(), src.generatorIds(), src.generatorCount(),
+                src.env(), src.intensity(), position, user);
+    }
+
+    /**
+     * Повторно ставит в очередь уже проведённый (или идущий) прогон {@link Run} по его id:
+     * переносит скрипт, профиль нагрузки, генераторы и переменные/интенсивность (если запуск был из расписания)
+     * в начало очереди (сразу после текущего запуска) или в конец очереди.
+     */
+    public EnqueueResult requeueRun(long runId, QueuePosition position, String user) {
+        Run run = runs.get(runId);
+        if (run.getScriptId() == null) {
+            throw new IllegalArgumentException("У запуска #" + runId + " не указан скрипт");
+        }
+        Map<String, Object> req = run.getRequest() == null ? Map.of() : run.getRequest();
+        Long scheduleId = toLong(req.get("scheduleId"));
+        if (scheduleId != null) {
+            var fromSched = store.find(scheduleId);
+            if (fromSched.isPresent()) {
+                ScheduledRunStore.Item s = fromSched.get();
+                return enqueueParams(run.getScriptId(), s.profileId(), s.generatorIds(), s.generatorCount(),
+                        s.env(), s.intensity(), position, user);
+            }
+        }
+        Long profileId = toLong(req.get("loadProfileId"));
+        List<Long> genIds = new ArrayList<>(runs.generatorsOf(runId).stream()
+                .map(ru.k6lab.server.run.RunGenerator::getGeneratorId)
+                .filter(java.util.Objects::nonNull)
+                .distinct().sorted().toList());
+        if (genIds.isEmpty() && req.get("generators") instanceof List<?> sel) {
+            for (Object item : sel) {
+                if (item instanceof Map<?, ?> m && m.get("id") instanceof Number num) {
+                    long gid = num.longValue();
+                    if (!genIds.contains(gid)) {
+                        genIds.add(gid);
+                    }
+                }
+            }
+            genIds.sort(Comparator.naturalOrder());
+        }
+        Integer count = genIds.isEmpty() ? scripts.get(run.getScriptId()).getGeneratorCount() : genIds.size();
+        return enqueueParams(run.getScriptId(), profileId, genIds, count, null, Map.of(), position, user);
+    }
+
+    private static Long toLong(Object val) {
+        if (val instanceof Number n) {
+            return n.longValue();
+        }
+        if (val instanceof String s && !s.isBlank()) {
+            try {
+                return Long.parseLong(s.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Перемещает уже ожидающую запись расписания (PENDING) в начало очереди (после текущего теста) или в самый конец очереди.
+     */
+    public EnqueueResult movePending(long scheduleId, QueuePosition position, String user) {
+        synchronized (schedulerLock) {
+            ScheduledRunStore.Item target = store.find(scheduleId)
+                    .orElseThrow(() -> new IllegalArgumentException("Запись расписания #" + scheduleId + " не найдена"));
+            if (!target.pending()) {
+                throw new IllegalArgumentException("Запись #" + scheduleId + " уже не ожидает в очереди");
+            }
+            List<ScheduledRunStore.Item> pending = new ArrayList<>(store.active().stream()
+                    .filter(ScheduledRunStore.Item::pending)
+                    .toList());
+            pending.removeIf(i -> i.id() == scheduleId);
+            if (position == QueuePosition.FRONT) {
+                pending.add(0, target);
+            } else {
+                pending.add(target);
+            }
+            int shifted = reflowPendingOrder(pending);
+            ScheduledRunStore.Item updated = store.find(scheduleId).orElse(target);
+            String title = updated.profileName() == null || updated.profileName().isBlank()
+                    ? updated.scriptName() : updated.scriptName() + " · " + updated.profileName();
+            audit.record("run.schedule_move", "scheduled_run", scheduleId,
+                    Map.of("position", position.name(), "runAt", updated.runAt().toString(), "shifted", shifted, "by", String.valueOf(user)));
+            return new EnqueueResult(scheduleId, updated.runAt(), title, Math.max(0, shifted - 1));
+        }
+    }
+
+    /**
+     * Ставит тест с указанными параметрами в начало очереди (FRONT — сразу после текущего идущего теста, сдвигая остальные)
+     * или в конец очереди (BACK — после всех ожидающих записей).
+     */
+    public EnqueueResult enqueueParams(long scriptId, Long profileId, List<Long> generatorIds, Integer count,
+                                       Map<String, String> env, Map<String, Double> intensityPct,
+                                       QueuePosition position, String user) {
+        synchronized (schedulerLock) {
+            var script = scripts.get(scriptId);
+            Long validProfileId = profileId;
+            LoadService.BuiltLoad built = null;
+            if (validProfileId != null) {
+                try {
+                    built = load.fromProfile(scriptId, validProfileId);
+                } catch (IllegalArgumentException e) {
+                    validProfileId = null;
+                }
+            }
+            List<Long> validGenIds = new ArrayList<>();
+            if (generatorIds != null) {
+                for (Long gid : generatorIds) {
+                    if (gid != null && generators.existsById(gid) && !validGenIds.contains(gid)) {
+                        validGenIds.add(gid);
+                    }
+                }
+                validGenIds.sort(Comparator.naturalOrder());
+            }
+            int n = !validGenIds.isEmpty() ? validGenIds.size()
+                    : (count != null && count >= 1 ? count : Math.max(1, script.getGeneratorCount()));
+            RunPlan plan = planner.plan(scriptId, n, built);
+            if (!plan.ok()) {
+                throw new IllegalArgumentException("Скрипт нельзя запустить: " + String.join("; ", plan.errors()));
+            }
+            Set<String> ops = new HashSet<>();
+            plan.operations().forEach(o -> ops.add(o.getName()));
+            Map<String, Double> pct = new LinkedHashMap<>();
+            if (intensityPct != null) {
+                intensityPct.forEach((op, v) -> {
+                    if (ops.contains(op) && v != null && Double.isFinite(v) && v >= MIN_PCT && v <= MAX_PCT && Math.abs(v - 100) > 1e-9) {
+                        pct.put(op, v);
+                    }
+                });
+            }
+            Map<String, String> cleanEnv = env == null ? null : cleanEnv(env);
+            if (cleanEnv != null) {
+                secrets.requireExist(SecretService.referencedNames(cleanEnv));
+            }
+            int dur = plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC;
+            String title = built == null || built.profileName() == null || built.profileName().isBlank()
+                    ? script.getName() : script.getName() + " · " + built.profileName();
+
+            if (position == QueuePosition.BACK) {
+                ScheduleTimelineService.Snapshot snap = timeline.snapshot();
+                Instant notBefore = Instant.now().plus(MIN_LEAD).plusSeconds(30);
+                List<ScheduledRunStore.Item> pending = store.active().stream()
+                        .filter(ScheduledRunStore.Item::pending)
+                        .toList();
+                for (ScheduledRunStore.Item it : pending) {
+                    Instant itemEnd = it.runAt().plusSeconds((long) timeline.durationSecFor(it) + ScheduleTimelineService.TAIL_SEC);
+                    if (itemEnd.isAfter(notBefore)) {
+                        notBefore = itemEnd;
+                    }
+                }
+                Instant slot = timeline.earliestSlot(snap, validGenIds, n, dur, notBefore);
+                List<Long> chosenIds = !validGenIds.isEmpty() ? validGenIds
+                        : timeline.pickFree(snap, slot, dur, n).stream().sorted().toList();
+                long id = store.create(scriptId, script.getName(), slot, user, chosenIds, null, cleanEnv, pct,
+                        validProfileId, built == null ? null : built.profileName(), true);
+                audit.record("run.schedule", "script", scriptId,
+                        Map.of("scheduleId", id, "runAt", slot.toString(), "position", "BACK"));
+                return new EnqueueResult(id, slot, title, 0);
+            }
+
+            // QueuePosition.FRONT: ставим первым сразу после текущего идущего теста и сдвигаем остальные ожидающие записи следом
+            List<ScheduledRunStore.Item> existingPending = store.active().stream()
+                    .filter(ScheduledRunStore.Item::pending)
+                    .toList();
+            ScheduleTimelineService.Snapshot snap = timeline.snapshotRunningWithCooldown();
+            Instant earliest = Instant.now().plus(MIN_LEAD).plusSeconds(30);
+            Instant firstSlot = timeline.earliestSlot(snap, validGenIds, n, dur, earliest);
+            List<Long> chosenIds = !validGenIds.isEmpty() ? validGenIds
+                    : timeline.pickFree(snap, firstSlot, dur, n).stream().sorted().toList();
+            long newId = store.create(scriptId, script.getName(), firstSlot, user, chosenIds, null, cleanEnv, pct,
+                    validProfileId, built == null ? null : built.profileName(), true);
+            snap.book(newId, chosenIds, firstSlot, dur);
+
+            Instant prevEnd = firstSlot.plusSeconds((long) dur + ScheduleTimelineService.TAIL_SEC);
+            int shifted = 0;
+            for (ScheduledRunStore.Item item : existingPending) {
+                int itemN = !item.generatorIds().isEmpty() ? item.generatorIds().size()
+                        : item.generatorCount() == null ? 1 : item.generatorCount();
+                int itemDur = timeline.durationSecFor(item);
+                Instant notBefore = item.runAt().isAfter(prevEnd) ? item.runAt() : prevEnd;
+                Instant slot = findSlotOrFallback(snap, item.generatorIds(), itemN, itemDur, notBefore);
+                if (!slot.equals(item.runAt()) && store.reschedule(item.id(), slot)) {
+                    shifted++;
+                }
+                snap.book(item.id(), item.generatorIds(), slot, itemDur);
+                prevEnd = slot.plusSeconds((long) itemDur + ScheduleTimelineService.TAIL_SEC);
+            }
+            audit.record("run.schedule", "script", scriptId,
+                    Map.of("scheduleId", newId, "runAt", firstSlot.toString(), "position", "FRONT", "shifted", shifted));
+            return new EnqueueResult(newId, firstSlot, title, shifted);
+        }
+    }
+
+    /** Перекладывает список ожидающих записей строго в переданном порядке после текущего выполняющегося теста. */
+    private int reflowPendingOrder(List<ScheduledRunStore.Item> orderedPending) {
+        ScheduleTimelineService.Snapshot snap = timeline.snapshotRunningWithCooldown();
+        Instant prevEnd = Instant.now().plus(MIN_LEAD).plusSeconds(30);
+        int shifted = 0;
+        for (ScheduledRunStore.Item item : orderedPending) {
+            int n = !item.generatorIds().isEmpty() ? item.generatorIds().size()
+                    : item.generatorCount() == null ? 1 : item.generatorCount();
+            int dur = timeline.durationSecFor(item);
+            Instant slot = findSlotOrFallback(snap, item.generatorIds(), n, dur, prevEnd);
+            if (!slot.equals(item.runAt()) && store.reschedule(item.id(), slot)) {
+                shifted++;
+            }
+            snap.book(item.id(), item.generatorIds(), slot, dur);
+            prevEnd = slot.plusSeconds((long) dur + ScheduleTimelineService.TAIL_SEC);
+        }
+        return shifted;
     }
 
     /** Планировщик на паузе: новые запуски по расписанию не стартуют (идущие тесты доходят до конца), записи ждут. */

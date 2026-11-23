@@ -150,12 +150,14 @@
                             <label class="form-label fw-semibold mb-1" for="sch-at">Время старта</label>
                             <input class="form-control form-control-sm" type="datetime-local" id="sch-at">
                             <input type="hidden" name="runAt" id="sch-iso">
+                            <input type="hidden" name="queuePosition" id="sch-pos" value="">
                             <div class="sch-preset-chips">
-                                <button type="button" class="sch-preset-chip" data-time-preset="auto">Ближайшее авто</button>
+                                <button type="button" class="sch-preset-chip" data-time-preset="front" title="Поставить первым сразу после текущего теста (остальные сдвинутся)">В начало (после текущего)</button>
+                                <button type="button" class="sch-preset-chip" data-time-preset="back" title="Поставить в конец очереди после всех ожидающих тестов">В конец очереди</button>
+                                <button type="button" class="sch-preset-chip active" data-time-preset="auto">Ближайшее авто</button>
                                 <button type="button" class="sch-preset-chip" data-time-preset="+15m">+15 мин</button>
                                 <button type="button" class="sch-preset-chip" data-time-preset="+1h">+1 час</button>
-                                <button type="button" class="sch-preset-chip" data-time-preset="22:00">Сегодня 22:00</button>
-                                <button type="button" class="sch-preset-chip" data-time-preset="02:00">Ночью 02:00</button>
+                                <button type="button" class="sch-preset-chip" data-time-preset="22:00">22:00</button>
                             </div>
                         </div>
                         <div class="col-md-6">
@@ -361,12 +363,24 @@
             }
 
             // Планирование: время, пресеты времени, профиль, множитель интенсивности, переменные
-            var at = document.getElementById('sch-at'), iso = document.getElementById('sch-iso'), env = document.getElementById('sch-env');
+            var at = document.getElementById('sch-at'), iso = document.getElementById('sch-iso'), pos = document.getElementById('sch-pos'), env = document.getElementById('sch-env');
             if (at) {
-                at.addEventListener('input', function () { var d = new Date(at.value); iso.value = isNaN(d) ? '' : d.toISOString(); });
+                at.addEventListener('input', function () {
+                    var d = new Date(at.value);
+                    iso.value = isNaN(d) ? '' : d.toISOString();
+                    if (!isNaN(d) && pos) { pos.value = ''; }
+                });
                 document.querySelectorAll('[data-time-preset]').forEach(function (btn) {
                     btn.addEventListener('click', function () {
                         var p = btn.dataset.timePreset, d = new Date();
+                        document.querySelectorAll('[data-time-preset]').forEach(function (b) { b.classList.toggle('active', b === btn); });
+                        if (p === 'front' || p === 'back') {
+                            at.value = '';
+                            iso.value = '';
+                            if (pos) { pos.value = p; }
+                            return;
+                        }
+                        if (pos) { pos.value = ''; }
                         if (p === 'auto') { at.value = ''; iso.value = ''; at.dispatchEvent(new Event('input')); return; }
                         if (p === '+15m') { d.setMinutes(d.getMinutes() + 15); }
                         else if (p === '+1h') { d.setHours(d.getHours() + 1); }

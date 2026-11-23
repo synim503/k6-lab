@@ -192,16 +192,66 @@
                         <div class="small text-danger mt-1" th:if="${s.error != null}" th:text="${s.error}"></div>
                     </td>
                     <td class="text-end text-nowrap">
-                        <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2"
-                                data-bs-toggle="modal" data-bs-target="#sch-quick-modal"
-                                th:attr="data-repeat-script=${s.scriptId},data-repeat-profile=${s.profileId},data-repeat-count=${s.generatorCount}"
-                                title="Запланировать этот же тест с профилем ещё раз">
-                            <i class="bi bi-arrow-repeat"></i>
-                        </button>
-                        <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
-                              onsubmit="return confirm('Отменить запланированный запуск?')">
-                            <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить">Отменить</button>
-                        </form>
+                        <div class="d-inline-flex align-items-center gap-1">
+                            <!-- Если запись уже ожидает в очереди (PENDING): быстрые кнопки перемещения в начало / в конец очереди -->
+                            <th:block th:if="${s.pending}">
+                                <form th:action="@{/schedule/{id}/move(id=${s.id},position='front')}" method="post" class="d-inline m-0">
+                                    <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2"
+                                            title="Переместить в начало очереди (сразу после текущего выполняющегося запуска)">
+                                        <i class="bi bi-chevron-bar-up"></i>
+                                    </button>
+                                </form>
+                                <form th:action="@{/schedule/{id}/move(id=${s.id},position='back')}" method="post" class="d-inline m-0">
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                                            title="Переместить в конец очереди">
+                                        <i class="bi bi-chevron-bar-down"></i>
+                                    </button>
+                                </form>
+                            </th:block>
+
+                            <!-- Повторное добавление прогона в очередь (в начало после текущего или в конец) -->
+                            <div class="btn-group btn-group-sm">
+                                <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='back')}" method="post" class="d-inline m-0">
+                                    <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2"
+                                            title="Снова добавить этот прогон в конец очереди (со всеми параметрами)">
+                                        <i class="bi bi-arrow-repeat me-1"></i>В очередь
+                                    </button>
+                                </form>
+                                <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split py-0 px-1"
+                                        data-bs-toggle="dropdown" aria-expanded="false" title="Выбрать позицию в очереди">
+                                    <span class="visually-hidden">Выбрать позицию</span>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li>
+                                        <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='front')}" method="post" class="m-0">
+                                            <button type="submit" class="dropdown-item small">
+                                                <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
+                                            </button>
+                                        </form>
+                                    </li>
+                                    <li>
+                                        <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='back')}" method="post" class="m-0">
+                                            <button type="submit" class="dropdown-item small">
+                                                <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
+                                            </button>
+                                        </form>
+                                    </li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <button type="button" class="dropdown-item small"
+                                                data-bs-toggle="modal" data-bs-target="#sch-quick-modal"
+                                                th:attr="data-repeat-script=${s.scriptId},data-repeat-profile=${s.profileId},data-repeat-count=${s.generatorCount}">
+                                            <i class="bi bi-sliders me-2"></i>Настроить и запланировать…
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
+                                  onsubmit="return confirm('Отменить запланированный запуск?')">
+                                <button class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить">Отменить</button>
+                            </form>
+                        </div>
                     </td>
                 </tr>
                 <tr class="d-none" id="sch-filter-empty"><td colspan="7" class="text-center text-muted py-4 small">Нет записей по выбранному фильтру.</td></tr>
@@ -246,12 +296,14 @@
                             <label class="form-label small fw-semibold mb-1" for="qm-at">Когда запустить</label>
                             <input class="form-control form-control-sm" type="datetime-local" id="qm-at">
                             <input type="hidden" name="runAt" id="qm-iso">
+                            <input type="hidden" name="queuePosition" id="qm-pos" value="">
                             <div class="sch-preset-chips">
+                                <button type="button" class="sch-preset-chip active" data-qm-time="front" title="Поставить первым сразу после текущего теста (остальные сдвинутся)">В начало (после текущего)</button>
+                                <button type="button" class="sch-preset-chip" data-qm-time="back" title="Поставить в конец очереди после всех ожидающих тестов">В конец очереди</button>
                                 <button type="button" class="sch-preset-chip" data-qm-time="auto">Ближайшее авто</button>
                                 <button type="button" class="sch-preset-chip" data-qm-time="+15m">+15 мин</button>
                                 <button type="button" class="sch-preset-chip" data-qm-time="+1h">+1 час</button>
-                                <button type="button" class="sch-preset-chip" data-qm-time="22:00">Сегодня 22:00</button>
-                                <button type="button" class="sch-preset-chip" data-qm-time="02:00">Ночью 02:00</button>
+                                <button type="button" class="sch-preset-chip" data-qm-time="22:00">22:00</button>
                             </div>
                         </div>
                         <div class="col-md-5">

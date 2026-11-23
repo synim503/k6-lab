@@ -9,7 +9,35 @@
         <i class="bi bi-chevron-right"></i><span th:text="'Запуск #' + ${run.id}"></span></nav>
     <div class="page-head mb-1">
         <h3><span class="icon-tile"><i class="bi bi-activity"></i></span>Запуск #<span th:text="${run.id}"></span></h3>
-        <a class="btn btn-outline-secondary btn-sm" th:if="${run.scriptId != null}" th:href="@{/scripts/{id}(id=${run.scriptId})}"><i class="bi bi-arrow-left me-1"></i>К скрипту</a>
+        <div class="d-flex flex-wrap align-items-center gap-2" th:if="${run.scriptId != null}">
+            <div class="btn-group btn-group-sm">
+                <form th:action="@{/runs/{id}/requeue(id=${run.id},position='back')}" method="post" class="d-inline m-0">
+                    <button type="submit" class="btn btn-sm btn-outline-primary" title="Повторно добавить этот прогон в конец очереди расписания">
+                        <i class="bi bi-arrow-repeat me-1"></i>Снова в очередь
+                    </button>
+                </form>
+                <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+                    <span class="visually-hidden">Позиция в очереди</span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li>
+                        <form th:action="@{/runs/{id}/requeue(id=${run.id},position='front')}" method="post" class="m-0">
+                            <button type="submit" class="dropdown-item small">
+                                <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
+                            </button>
+                        </form>
+                    </li>
+                    <li>
+                        <form th:action="@{/runs/{id}/requeue(id=${run.id},position='back')}" method="post" class="m-0">
+                            <button type="submit" class="dropdown-item small">
+                                <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
+                            </button>
+                        </form>
+                    </li>
+                </ul>
+            </div>
+            <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}(id=${run.scriptId})}"><i class="bi bi-arrow-left me-1"></i>К скрипту</a>
+        </div>
     </div>
     <div class="small text-muted mb-3">
         <strong th:text="${snap.script.name}"></strong> v<span th:text="${snap.script.versionNumber}"></span>
