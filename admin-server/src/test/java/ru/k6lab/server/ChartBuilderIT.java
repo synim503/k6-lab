@@ -333,4 +333,109 @@ class ChartBuilderIT extends AbstractIT {
         assertThat(list.get(1).name()).isEqualTo("RPS");
         assertThat(list.get(1).variables()).containsExactlyEntriesOf(Map.of("job", "api"));
     }
+
+    @Test
+    void copyChartsAndVariablesFromAnotherScriptSelectiveRenameAndOverwrite() throws Exception {
+        Script src = newScript();
+        Script dst = newScript();
+        String srcBase = "/scripts/" + src.getId() + "/charts";
+        String dstBase = "/scripts/" + dst.getId() + "/charts";
+
+        // В скрипте-источнике задаём общую переменную $env=prod и два графика (один со своей локальной переменной $instance=app-01)
+        mvc.perform(post(srcBase + "/api/variables/save").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"env\",\"value\":\"prod\"}"))
+                .andExpect(status().isOk());
+
+        String g1 = mvc.perform(post(srcBase + "/api/save").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"CPU $instance ($env)",
+                                  "unit":"%",
+                                  "enabled":true,
+                                  "variables":{"instance":"app-01"},
+                                  "queries":[{"promql":"rate(node_cpu_seconds_total{instance=\\"$instance\\",env=\\"$env\\"}[{range}])","legend":"{{instance}}"}]
+                                }
+                                """))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        long srcTpl1 = MAPPER.readTree(g1).path("template").path("id").asLong();
+
+        String g2 = mvc.perform(post(srcBase + "/api/save").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"RAM серверов",
+                                  "unit":"Б",
+                                  "enabled":true,
+                                  "queries":[
+                                    {"promql":"node_memory_MemUsed_bytes","legend":"Used"},
+                                    {"promql":"node_memory_MemTotal_bytes","legend":"Total"}
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        long srcTpl2 = MAPPER.readTree(g2).path("template").path("id").asLong();
+
+        // 1. В целевом скрипте запрашиваем список других скриптов с графиками
+        String otherRes = mvc.perform(get(dstBase + "/api/other-scripts"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        JsonNode scriptsNode = MAPPER.readTree(otherRes).path("scripts");
+        JsonNode foundSrc = null;
+        for (JsonNode n : scriptsNode) {
+            if (n.path("id").asLong() == src.getId()) {
+                foundSrc = n;
+                break;
+            }
+        }
+        assertThat(foundSrc).isNotNull();
+        assertThat(foundSrc.path("chartCount").asInt()).isEqualTo(2);
+        assertThat(foundSrc.path("variableCount").asInt()).isEqualTo(1);
+
+        // 2. Копируем только первый график + общие переменные в целевой скрипт
+        String copy1 = mvc.perform(post(dstBase + "/api/copy-from-script").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sourceScriptId\":" + src.getId() + ",\"templateIds\":[" + srcTpl1 + "],\"copyVariables\":true,\"overwriteExisting\":false}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        JsonNode copy1Node = MAPPER.readTree(copy1);
+        assertThat(copy1Node.path("ok").asBoolean()).isTrue();
+        assertThat(copy1Node.path("copiedCount").asInt()).isEqualTo(1);
+        assertThat(copy1Node.path("copiedVariablesCount").asInt()).isEqualTo(1);
+
+        List<ChartTemplateStore.Template> dstList = store.list(dst.getId());
+        assertThat(dstList).hasSize(1);
+        assertThat(dstList.get(0).name()).isEqualTo("CPU $instance ($env)");
+        assertThat(dstList.get(0).unit()).isEqualTo("%");
+        assertThat(dstList.get(0).variables()).containsExactlyEntriesOf(Map.of("instance", "app-01"));
+
+        // 3. Повторное копирование обоих графиков с overwriteExisting=false:
+        // существующий график не затирается, а получает имя «CPU $instance ($env) (2)», плюс добавляется «RAM серверов»
+        mvc.perform(post(dstBase + "/api/copy-from-script").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sourceScriptId\":" + src.getId() + ",\"templateIds\":[" + srcTpl1 + "," + srcTpl2 + "],\"copyVariables\":false,\"overwriteExisting\":false}"))
+                .andExpect(status().isOk());
+
+        List<ChartTemplateStore.Template> dstList2 = store.list(dst.getId());
+        assertThat(dstList2).extracting(ChartTemplateStore.Template::name)
+                .containsExactly("CPU $instance ($env)", "CPU $instance ($env) (2)", "RAM серверов");
+        assertThat(dstList2.get(2).queries()).hasSize(2);
+
+        // 4. Меняем график в источнике и копируем с overwriteExisting=true — одноимённый график в целевом скрипте обновляется
+        mvc.perform(post(srcBase + "/api/save").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":" + srcTpl1 + ",\"name\":\"CPU $instance ($env)\",\"unit\":\"%\",\"enabled\":true,"
+                                + "\"variables\":{\"instance\":\"app-99\"},"
+                                + "\"queries\":[{\"promql\":\"up\",\"legend\":\"{{instance}}\"}]}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(post(dstBase + "/api/copy-from-script").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sourceScriptId\":" + src.getId() + ",\"templateIds\":[" + srcTpl1 + "],\"copyVariables\":true,\"overwriteExisting\":true}"))
+                .andExpect(status().isOk());
+
+        List<ChartTemplateStore.Template> dstList3 = store.list(dst.getId());
+        assertThat(dstList3).hasSize(3);
+        assertThat(dstList3.get(0).variables()).containsExactlyEntriesOf(Map.of("instance", "app-99"));
+        assertThat(dstList3.get(0).promql()).isEqualTo("up");
+    }
 }

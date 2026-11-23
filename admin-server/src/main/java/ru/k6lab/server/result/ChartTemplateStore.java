@@ -112,6 +112,53 @@ public class ChartTemplateStore {
         return r.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(r.get(0));
     }
 
+    /** Идентификаторы скриптов (кроме исключённого), у которых есть хотя бы один свой график отчёта. */
+    public Map<Long, Integer> chartCountsByScript(long excludeScriptId) {
+        Map<Long, Integer> out = new LinkedHashMap<>();
+        jdbc.query("select script_id, count(*) as cnt from chart_template where script_id <> ? group by script_id", rs -> {
+            out.put(rs.getLong("script_id"), rs.getInt("cnt"));
+        }, excludeScriptId);
+        return out;
+    }
+
+    /**
+     * Копирует выбранные графики (или все, если templateIds пуст) из скрипта-источника в целевой скрипт.
+     * Если overwriteExisting=false и график с таким именем уже есть в целевом скрипте, к имени добавляется суффикс « (2)», « (3)» и т.д.
+     * Если overwriteExisting=true, одноимённый график в целевом скрипте обновляется.
+     */
+    public List<Template> copyFromScript(long sourceScriptId, long targetScriptId, List<Long> templateIds,
+                                         boolean overwriteExisting, String user) {
+        if (sourceScriptId == targetScriptId) {
+            throw new IllegalArgumentException("Нельзя копировать графики скрипта в самого себя (используйте «Дублировать»)");
+        }
+        List<Template> sourceAll = list(sourceScriptId);
+        if (sourceAll.isEmpty()) {
+            throw new IllegalArgumentException("У выбранного скрипта нет своих графиков отчёта");
+        }
+        java.util.Set<Long> filter = templateIds == null || templateIds.isEmpty() ? null : new java.util.LinkedHashSet<>(templateIds);
+        List<Template> toCopy = sourceAll.stream()
+                .filter(t -> filter == null || filter.contains(t.id()))
+                .toList();
+        if (toCopy.isEmpty()) {
+            throw new IllegalArgumentException("Выберите хотя бы один график для копирования");
+        }
+        java.util.Set<String> occupiedNames = new java.util.HashSet<>();
+        list(targetScriptId).forEach(t -> occupiedNames.add(t.name()));
+        List<Template> copied = new ArrayList<>();
+        for (Template src : toCopy) {
+            String targetName = src.name();
+            if (!overwriteExisting && occupiedNames.contains(targetName)) {
+                for (int i = 2; occupiedNames.contains(targetName); i++) {
+                    targetName = truncateName(src.name(), " (" + i + ")");
+                }
+            }
+            occupiedNames.add(targetName);
+            Template saved = save(targetScriptId, null, targetName, src.queries(), src.unit(), src.enabled(), src.variables(), user);
+            copied.add(saved);
+        }
+        return copied;
+    }
+
     /** Новый график или обновление существующего с тем же именем. */
     public void save(long scriptId, String name, List<Query> queries, String unit, String user) {
         save(scriptId, null, name, queries, unit, true, null, user);

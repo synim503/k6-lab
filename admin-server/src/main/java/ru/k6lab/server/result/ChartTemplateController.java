@@ -63,6 +63,13 @@ public class ChartTemplateController {
     public record VarReq(String name, String value) {
     }
 
+    public record CopyFromScriptReq(Long sourceScriptId, List<Long> templateIds, Boolean copyVariables, Boolean overwriteExisting) {
+    }
+
+    public record SourceScriptDto(long id, String name, int chartCount, int variableCount,
+                                  List<ChartTemplateStore.Template> templates, List<ChartVariableStore.Variable> variables) {
+    }
+
     private final ScriptService scripts;
     private final ChartTemplateStore store;
     private final GrafanaDashboardImport grafana;
@@ -398,6 +405,66 @@ public class ChartTemplateController {
         scripts.get(id);
         variables.delete(id, vid);
         return Map.of("ok", true, "variables", variables.list(id));
+    }
+
+    /** Список других скриптов, у которых настроены свои графики отчёта, вместе с их графиками и общими переменными. */
+    @GetMapping("/scripts/{id}/charts/api/other-scripts")
+    @ResponseBody
+    public Map<String, Object> apiOtherScripts(@PathVariable Long id) {
+        scripts.get(id);
+        Map<Long, Integer> counts = store.chartCountsByScript(id);
+        List<SourceScriptDto> list = new ArrayList<>();
+        for (var s : scripts.list()) {
+            if (s.getId().equals(id) || !counts.containsKey(s.getId())) {
+                continue;
+            }
+            List<ChartTemplateStore.Template> tpls = store.list(s.getId());
+            List<ChartVariableStore.Variable> vars = variables.list(s.getId());
+            list.add(new SourceScriptDto(s.getId(), s.getName(), tpls.size(), vars.size(), tpls, vars));
+        }
+        return Map.of("ok", true, "scripts", list);
+    }
+
+    /** Копирование выбранных (или всех) графиков отчёта и опционально общих переменных из другого скрипта. */
+    @PostMapping("/scripts/{id}/charts/api/copy-from-script")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> apiCopyFromScript(@PathVariable Long id, @RequestBody CopyFromScriptReq req, Principal user) {
+        scripts.get(id);
+        if (req.sourceScriptId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "Выберите скрипт-источник"));
+        }
+        var srcScript = scripts.get(req.sourceScriptId());
+        try {
+            boolean overwrite = Boolean.TRUE.equals(req.overwriteExisting());
+            boolean copyVars = req.copyVariables() == null || req.copyVariables();
+            String by = user == null ? "system" : user.getName();
+            List<ChartTemplateStore.Template> copied = store.copyFromScript(
+                    srcScript.getId(), id, req.templateIds(), overwrite, by);
+            int copiedVars = 0;
+            if (copyVars) {
+                for (ChartVariableStore.Variable v : variables.list(srcScript.getId())) {
+                    if (overwrite) {
+                        variables.save(id, v.name(), v.value());
+                        copiedVars++;
+                    } else if (variables.addIfAbsent(id, v.name(), v.value())) {
+                        copiedVars++;
+                    }
+                }
+            }
+            String msg = "Из скрипта «" + srcScript.getName() + "» скопировано графиков: " + copied.size()
+                    + (copiedVars > 0 ? ", общих переменных: " + copiedVars : "");
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("ok", true);
+            body.put("copiedCount", copied.size());
+            body.put("copiedVariablesCount", copiedVars);
+            body.put("copied", copied);
+            body.put("templates", store.list(id));
+            body.put("variables", variables.list(id));
+            body.put("message", msg);
+            return ResponseEntity.ok(body);
+        } catch (IllegalArgumentException | org.springframework.dao.InvalidDataAccessApiUsageException e) {
+            return ResponseEntity.badRequest().body(Map.of("ok", false, "error", rootMessage(e)));
+        }
     }
 
     // ==================== helpers ====================

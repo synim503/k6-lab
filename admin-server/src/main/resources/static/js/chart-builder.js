@@ -463,8 +463,9 @@
             elList.innerHTML = '<div class="empty-state py-4">' +
                 '<i class="bi bi-graph-up"></i>' +
                 '<div class="fw-semibold text-body mb-1">Своих графиков пока нет</div>' +
-                '<div class="small mb-3">Создайте первый график справа, выберите готовый шаблон или импортируйте дашборд Grafana.</div>' +
+                '<div class="small mb-3">Создайте первый график справа, скопируйте из другого скрипта, выберите шаблон или импортируйте дашборд Grafana.</div>' +
                 '<div class="d-flex justify-content-center gap-2 flex-wrap">' +
+                '<button type="button" class="btn btn-sm btn-outline-primary" data-cb-open-copy-script><i class="bi bi-files me-1"></i>Из другого скрипта</button>' +
                 '<button type="button" class="btn btn-sm btn-outline-primary" data-cb-open-presets><i class="bi bi-magic me-1"></i>Готовый шаблон</button>' +
                 '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#cb-grafana-modal"><i class="bi bi-upload me-1"></i>Импорт Grafana</button>' +
                 '</div></div>';
@@ -1162,6 +1163,10 @@
 
     // Left list interactions (click select, checkbox, toggle switch, move up/down, open presets)
     elList.addEventListener('click', function (e) {
+        if (e.target.closest('[data-cb-open-copy-script]')) {
+            openCopyFromScriptModal();
+            return;
+        }
         if (e.target.closest('[data-cb-open-presets]')) {
             var pBtn = document.getElementById('cb-presets-btn');
             if (pBtn) { bootstrap.Dropdown.getOrCreateInstance(pBtn).show(); }
@@ -1579,6 +1584,258 @@
             renderList();
             toast('Переменная $' + res.data.name + ' сохранена', 'ok');
             if (onSuccess) { onSuccess(); }
+        });
+    }
+
+    // ==================== Copy Charts from Another Script ====================
+    var elCopyScriptBtn = document.getElementById('cb-copy-script-btn');
+    var elCsModal = document.getElementById('cb-copy-script-modal');
+    var elCsLoading = document.getElementById('cb-cs-loading');
+    var elCsEmpty = document.getElementById('cb-cs-empty');
+    var elCsBody = document.getElementById('cb-cs-body');
+    var elCsErr = document.getElementById('cb-cs-err');
+    var elCsScript = document.getElementById('cb-cs-script');
+    var elCsFilter = document.getElementById('cb-cs-filter');
+    var elCsAll = document.getElementById('cb-cs-all');
+    var elCsCountLbl = document.getElementById('cb-cs-count-lbl');
+    var elCsList = document.getElementById('cb-cs-list');
+    var elCsVars = document.getElementById('cb-cs-vars');
+    var elCsVarsLbl = document.getElementById('cb-cs-vars-lbl');
+    var elCsOverwrite = document.getElementById('cb-cs-overwrite');
+    var elCsSubmit = document.getElementById('cb-cs-submit');
+    var otherScriptsData = [];
+    var csSelectedIds = new Set();
+
+    function showCsError(msg) {
+        if (!elCsErr) { return; }
+        if (!msg) {
+            elCsErr.classList.add('d-none');
+            elCsErr.textContent = '';
+        } else {
+            elCsErr.textContent = msg;
+            elCsErr.classList.remove('d-none');
+        }
+    }
+
+    function currentSourceScript() {
+        if (!elCsScript || !otherScriptsData.length) { return null; }
+        var sid = +elCsScript.value;
+        return otherScriptsData.find(function (s) { return s.id === sid; }) || otherScriptsData[0];
+    }
+
+    function filteredSourceTemplates(src) {
+        if (!src || !Array.isArray(src.templates)) { return []; }
+        var q = (elCsFilter ? elCsFilter.value : '').trim().toLowerCase();
+        if (!q) { return src.templates; }
+        return src.templates.filter(function (t) {
+            if ((t.name || '').toLowerCase().indexOf(q) >= 0) { return true; }
+            if ((t.unit || '').toLowerCase().indexOf(q) >= 0) { return true; }
+            return (t.queries || []).some(function (qr) {
+                return (qr.promql || '').toLowerCase().indexOf(q) >= 0 || (qr.legend || '').toLowerCase().indexOf(q) >= 0;
+            });
+        });
+    }
+
+    function selectSourceScript(src) {
+        csSelectedIds.clear();
+        if (src && Array.isArray(src.templates)) {
+            src.templates.forEach(function (t) { csSelectedIds.add(t.id); });
+        }
+        if (elCsFilter) { elCsFilter.value = ''; }
+        if (elCsVarsLbl && src) {
+            var vCnt = Array.isArray(src.variables) ? src.variables.length : 0;
+            if (vCnt > 0) {
+                var names = src.variables.slice(0, 5).map(function (v) { return '$' + v.name; }).join(', ') + (vCnt > 5 ? '…' : '');
+                elCsVarsLbl.innerHTML = 'Скопировать также общие переменные скрипта-источника (<b>' + vCnt + '</b>: <code>' + esc(names) + '</code>)';
+                elCsVars.disabled = false;
+            } else {
+                elCsVarsLbl.textContent = 'Скопировать также общие переменные скрипта-источника (в этом скрипте их нет)';
+                elCsVars.disabled = true;
+            }
+        }
+        renderCsTemplatesList();
+    }
+
+    function renderCsTemplatesList() {
+        var src = currentSourceScript();
+        if (!src || !elCsList) { return; }
+        var vis = filteredSourceTemplates(src);
+        var existingNames = new Set(templates.map(function (t) { return t.name; }));
+        if (vis.length === 0) {
+            elCsList.innerHTML = '<div class="text-muted small text-center py-3">По фильтру графиков не найдено</div>';
+        } else {
+            elCsList.innerHTML = vis.map(function (t, idx) {
+                var checked = csSelectedIds.has(t.id);
+                var qCount = (t.queries || []).length;
+                var firstQ = qCount > 0 ? t.queries[0].promql : '';
+                var varKeys = t.variables && typeof t.variables === 'object' ? Object.keys(t.variables) : [];
+                var clash = existingNames.has(t.name);
+                return '<div class="d-flex align-items-start gap-2 p-2 rounded border bg-body" data-cs-item="' + t.id + '">' +
+                    '<input class="form-check-input mt-1" type="checkbox" data-cs-check="' + t.id + '"' + (checked ? ' checked' : '') + '>' +
+                    '<div class="flex-grow-1 min-w-0" style="cursor:pointer" data-cs-toggle="' + t.id + '">' +
+                        '<div class="d-flex align-items-center flex-wrap gap-1">' +
+                            '<span class="fw-semibold small">' + esc(t.name) + '</span>' +
+                            (t.unit ? '<span class="badge text-bg-light border">' + esc(t.unit) + '</span>' : '') +
+                            '<span class="badge text-bg-light border">' + qCount + ' запр.</span>' +
+                            (varKeys.length > 0 ? '<span class="badge text-bg-info bg-opacity-10 text-info border border-info-subtle" title="Локальные переменные графика">' +
+                                esc(varKeys.map(function (k) { return '$' + k + '=' + t.variables[k]; }).join(', ')) + '</span>' : '') +
+                            (clash ? '<span class="badge text-bg-warning bg-opacity-25 text-dark border" title="В текущем скрипте уже есть график с таким именем">есть в скрипте</span>' : '') +
+                        '</div>' +
+                        '<div class="text-muted font-monospace text-truncate mt-1" style="font-size:.75rem" title="' + esc(firstQ) + '">' + esc(firstQ) + '</div>' +
+                    '</div>' +
+                    '<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 flex-shrink-0" data-cs-draft="' + t.id + '" title="Загрузить этот график в конструктор справа без сохранения (чтобы отредактировать перед созданием)">' +
+                        '<i class="bi bi-pencil-square me-1"></i>В конструктор' +
+                    '</button>' +
+                '</div>';
+            }).join('');
+        }
+        syncCsHeader(src, vis);
+    }
+
+    function syncCsHeader(src, vis) {
+        var total = src && src.templates ? src.templates.length : 0;
+        var selCount = csSelectedIds.size;
+        if (elCsCountLbl) {
+            elCsCountLbl.textContent = 'Выбрано графиков: ' + selCount + ' из ' + total;
+        }
+        if (elCsAll && vis) {
+            if (vis.length > 0) {
+                var allVis = vis.every(function (t) { return csSelectedIds.has(t.id); });
+                var someVis = vis.some(function (t) { return csSelectedIds.has(t.id); });
+                elCsAll.checked = allVis;
+                elCsAll.indeterminate = !allVis && someVis;
+                elCsAll.disabled = false;
+            } else {
+                elCsAll.checked = false;
+                elCsAll.indeterminate = false;
+                elCsAll.disabled = true;
+            }
+        }
+        if (elCsSubmit) {
+            elCsSubmit.disabled = selCount === 0;
+            elCsSubmit.innerHTML = '<i class="bi bi-files me-1"></i>Скопировать выбранные (' + selCount + ')';
+        }
+    }
+
+    function openCopyFromScriptModal() {
+        if (!elCsModal) { return; }
+        showCsError('');
+        elCsLoading.classList.remove('d-none');
+        elCsEmpty.classList.add('d-none');
+        elCsBody.classList.add('d-none');
+        elCsSubmit.disabled = true;
+        bootstrap.Modal.getOrCreateInstance(elCsModal).show();
+
+        api('/api/other-scripts', 'GET').then(function (res) {
+            elCsLoading.classList.add('d-none');
+            if (!res.ok || !res.data || !Array.isArray(res.data.scripts)) {
+                showCsError((res.data && res.data.error) || 'Не удалось загрузить список скриптов');
+                return;
+            }
+            otherScriptsData = res.data.scripts;
+            if (otherScriptsData.length === 0) {
+                elCsEmpty.classList.remove('d-none');
+                return;
+            }
+            elCsScript.innerHTML = otherScriptsData.map(function (s) {
+                return '<option value="' + s.id + '">' + esc(s.name) + ' (' + s.chartCount + ' граф.' +
+                    (s.variableCount > 0 ? ', ' + s.variableCount + ' перем.' : '') + ')</option>';
+            }).join('');
+            elCsBody.classList.remove('d-none');
+            selectSourceScript(otherScriptsData[0]);
+        }).catch(function () {
+            elCsLoading.classList.add('d-none');
+            showCsError('Сетевая ошибка при загрузке скриптов');
+        });
+    }
+
+    if (elCopyScriptBtn) {
+        elCopyScriptBtn.addEventListener('click', openCopyFromScriptModal);
+    }
+    if (elCsScript) {
+        elCsScript.addEventListener('change', function () {
+            selectSourceScript(currentSourceScript());
+        });
+    }
+    if (elCsFilter) {
+        elCsFilter.addEventListener('input', renderCsTemplatesList);
+    }
+    if (elCsAll) {
+        elCsAll.addEventListener('change', function () {
+            var vis = filteredSourceTemplates(currentSourceScript());
+            if (elCsAll.checked) {
+                vis.forEach(function (t) { csSelectedIds.add(t.id); });
+            } else {
+                vis.forEach(function (t) { csSelectedIds.delete(t.id); });
+            }
+            renderCsTemplatesList();
+        });
+    }
+    if (elCsList) {
+        elCsList.addEventListener('change', function (e) {
+            if (e.target.dataset.csCheck != null) {
+                var tid = +e.target.dataset.csCheck;
+                if (e.target.checked) { csSelectedIds.add(tid); } else { csSelectedIds.delete(tid); }
+                syncCsHeader(currentSourceScript(), filteredSourceTemplates(currentSourceScript()));
+            }
+        });
+        elCsList.addEventListener('click', function (e) {
+            var draftBtn = e.target.closest('[data-cs-draft]');
+            if (draftBtn) {
+                var src = currentSourceScript();
+                var tpl = src && src.templates ? src.templates.find(function (t) { return t.id === +draftBtn.dataset.csDraft; }) : null;
+                if (!tpl) { return; }
+                if (!confirmDiscardIfDirty()) { return; }
+                bootstrap.Modal.getOrCreateInstance(elCsModal).hide();
+                loadNew({
+                    name: tpl.name,
+                    unit: tpl.unit || '',
+                    queries: tpl.queries || [],
+                    variables: tpl.variables || {}
+                });
+                toast('График «' + tpl.name + '» из скрипта «' + src.name + '» подставлен в конструктор — проверьте и сохраните', 'info');
+                return;
+            }
+            var toggleArea = e.target.closest('[data-cs-toggle]');
+            if (toggleArea) {
+                var id = +toggleArea.dataset.csToggle;
+                if (csSelectedIds.has(id)) { csSelectedIds.delete(id); } else { csSelectedIds.add(id); }
+                renderCsTemplatesList();
+            }
+        });
+    }
+    if (elCsSubmit) {
+        elCsSubmit.addEventListener('click', function () {
+            var src = currentSourceScript();
+            var ids = Array.from(csSelectedIds);
+            if (!src || ids.length === 0) { return; }
+            showCsError('');
+            elCsSubmit.disabled = true;
+            api('/api/copy-from-script', 'POST', {
+                sourceScriptId: src.id,
+                templateIds: ids,
+                copyVariables: elCsVars ? elCsVars.checked : true,
+                overwriteExisting: elCsOverwrite ? elCsOverwrite.checked : false
+            }).then(function (res) {
+                elCsSubmit.disabled = false;
+                if (!res.ok || !res.data || !res.data.ok) {
+                    showCsError((res.data && res.data.error) || 'Не удалось скопировать графики');
+                    return;
+                }
+                templates = res.data.templates || templates;
+                if (res.data.variables) { variables = res.data.variables; }
+                bootstrap.Modal.getOrCreateInstance(elCsModal).hide();
+                renderVariables();
+                renderList();
+                var copied = res.data.copied;
+                if (Array.isArray(copied) && copied.length > 0 && !isDirty()) {
+                    loadTemplate(copied[0].id, false);
+                }
+                toast(res.data.message || ('Скопировано графиков: ' + ids.length), 'ok');
+            }).catch(function () {
+                elCsSubmit.disabled = false;
+                showCsError('Сетевая ошибка при копировании графиков');
+            });
         });
     }
 
