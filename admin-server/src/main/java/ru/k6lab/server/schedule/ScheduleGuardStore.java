@@ -128,6 +128,29 @@ public class ScheduleGuardStore {
             return formatNum(lastValue) + (unit == null || unit.isBlank() ? "" : " " + unit);
         }
 
+        public List<String> hostEntries() {
+            if (sshHost == null || sshHost.isBlank()) {
+                return List.of();
+            }
+            return java.util.Arrays.stream(sshHost.split("[\\r\\n,;\\s]+"))
+                    .map(String::strip)
+                    .filter(s -> !s.isEmpty())
+                    .distinct()
+                    .toList();
+        }
+
+        public String hostSummary() {
+            List<String> list = hostEntries();
+            if (list.isEmpty()) {
+                return sshHost == null ? "" : sshHost;
+            }
+            if (list.size() == 1) {
+                String h = list.get(0);
+                return h.contains(":") || sshPort == 22 ? h : h + ":" + sshPort;
+            }
+            return list.size() + " серв.: " + String.join(", ", list);
+        }
+
         public static String formatNum(double v) {
             if (Math.abs(v - Math.rint(v)) < 1e-9 && Math.abs(v) < 1e12) {
                 return Long.toString(Math.round(v));

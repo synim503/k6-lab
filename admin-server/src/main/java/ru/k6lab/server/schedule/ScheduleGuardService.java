@@ -50,6 +50,33 @@ public class ScheduleGuardService {
     public record BeforeStartResult(boolean blocked, String reason, int executedCount) {
     }
 
+    public record SeriesPoint(String series, double value, String formattedValue, boolean triggered) {
+    }
+
+    public record PromqlTestResult(boolean ok, Double worstValue, String formattedValue, String worstSeries,
+                                   boolean triggered, String thresholdText, List<SeriesPoint> samples,
+                                   String message, String error) {
+    }
+
+    public record SshTarget(String host, int port) {
+        public String label() {
+            return port == 22 ? host : host + ":" + port;
+        }
+    }
+
+    public record HostExecResult(String host, int port, boolean ok, Integer exitCode, long durationMs,
+                                 String stdout, String stderr, String error,
+                                 SshExceptions.HostKeyUnconfirmed unconfirmedHostKey) {
+        public String label() {
+            return port == 22 ? host : host + ":" + port;
+        }
+    }
+
+    public record SshTestResult(boolean ok, Integer exitCode, long durationMs, String stdout, String stderr,
+                                String message, String error, SshExceptions.HostKeyUnconfirmed unconfirmedHostKey,
+                                List<HostExecResult> hosts) {
+    }
+
     private final ScheduleGuardStore store;
     private final PrometheusClient prom;
     private final SettingsService settings;
@@ -134,14 +161,12 @@ public class ScheduleGuardService {
         if (unit.length() > 32) {
             throw new IllegalArgumentException("Единицы измерения: не более 32 символов");
         }
-        String host = in.sshHost() == null ? "" : in.sshHost().strip();
-        if (host.isEmpty() || host.length() > 255 || host.chars().anyMatch(Character::isWhitespace)) {
-            throw new IllegalArgumentException("Укажите корректный хост или IP сервера для SSH (без пробелов)");
-        }
         int port = in.sshPort() <= 0 ? 22 : in.sshPort();
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException("SSH-порт: от 1 до 65535");
         }
+        List<SshTarget> targets = parseTargets(in.sshHost(), port);
+        String normalizedHosts = formatTargets(targets, port);
         credentials.get(in.sshCredentialId());
         String script = in.script() == null ? "" : in.script().replace("\r\n", "\n").replace('\r', '\n').strip();
         if (script.isEmpty()) {
@@ -160,8 +185,59 @@ public class ScheduleGuardService {
                 in.cmp() == null ? ScheduleGuardStore.Cmp.GT : in.cmp(),
                 in.threshold(), unit,
                 in.runWhen() == null ? ScheduleGuardStore.RunWhen.BOTH : in.runWhen(),
-                host, port, in.sshCredentialId(), in.useSudo(), script, timeout, cooldown, in.blockOnFail()
+                normalizedHosts, port, in.sshCredentialId(), in.useSudo(), script, timeout, cooldown, in.blockOnFail()
         );
+    }
+
+    /** Разбирает список серверов (по строкам, запятым, точкам с запятой или пробелам); поддерживает host и host:port. */
+    public static List<SshTarget> parseTargets(String rawHosts, int defaultPort) {
+        if (rawHosts == null || rawHosts.isBlank()) {
+            throw new IllegalArgumentException("Укажите хотя бы один хост или IP сервера для SSH");
+        }
+        String[] tokens = rawHosts.split("[\\r\\n,;\\s]+");
+        List<SshTarget> out = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String raw : tokens) {
+            String tok = raw.strip();
+            if (tok.isEmpty()) {
+                continue;
+            }
+            String host = tok;
+            int port = defaultPort;
+            int colon = tok.lastIndexOf(':');
+            if (colon > 0 && tok.indexOf(':') == colon) {
+                String pPart = tok.substring(colon + 1);
+                try {
+                    port = Integer.parseInt(pPart);
+                    host = tok.substring(0, colon).strip();
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("Некорректный порт в адресе «" + tok + "»");
+                }
+            }
+            if (host.isEmpty() || host.length() > 255 || host.chars().anyMatch(Character::isWhitespace)) {
+                throw new IllegalArgumentException("Некорректный хост: «" + tok + "»");
+            }
+            if (port < 1 || port > 65535) {
+                throw new IllegalArgumentException("SSH-порт должен быть от 1 до 65535 («" + tok + "»)");
+            }
+            String key = host + ":" + port;
+            if (seen.add(key)) {
+                out.add(new SshTarget(host, port));
+            }
+        }
+        if (out.isEmpty()) {
+            throw new IllegalArgumentException("Укажите хотя бы один хост или IP сервера для SSH");
+        }
+        if (out.size() > 100) {
+            throw new IllegalArgumentException("Слишком много серверов в одном правиле (максимум 100)");
+        }
+        return out;
+    }
+
+    private static String formatTargets(List<SshTarget> targets, int defaultPort) {
+        return targets.stream()
+                .map(t -> t.port() == defaultPort ? t.host() : t.host() + ":" + t.port())
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 
     // ------------------------------------------------------------------ жизненный цикл планировщика
@@ -304,6 +380,173 @@ public class ScheduleGuardService {
         }
     }
 
+    /** Тестовая проверка PromQL-запроса прямо из модалки (до сохранения правила): возвращает все серии и вердикт по порогу. */
+    public PromqlTestResult testPromql(String promql, ScheduleGuardStore.Cmp cmp, double threshold, String unit) {
+        String q = promql == null ? "" : promql.strip();
+        if (q.isEmpty()) {
+            return new PromqlTestResult(false, null, null, null, false, "", List.of(), null, "Введите PromQL-запрос");
+        }
+        if (!Double.isFinite(threshold)) {
+            return new PromqlTestResult(false, null, null, null, false, "", List.of(), null, "Порог должен быть числом");
+        }
+        ScheduleGuardStore.Cmp c = cmp == null ? ScheduleGuardStore.Cmp.GT : cmp;
+        String u = unit == null ? "" : unit.strip();
+        String thrText = c.symbol() + " " + ScheduleGuardStore.Guard.formatNum(threshold) + (u.isEmpty() ? "" : " " + u);
+        SettingsService.Prometheus p = settings.prometheus();
+        if (p == null || !p.configured()) {
+            return new PromqlTestResult(false, null, null, null, false, thrText, List.of(), null,
+                    "Prometheus не настроен (укажите URL в разделе «Настройки»)");
+        }
+        try {
+            List<PrometheusClient.Sample> raw = prom.query(p, q, Instant.now());
+            if (raw.isEmpty()) {
+                return new PromqlTestResult(false, null, null, null, false, thrText, List.of(), null,
+                        "Prometheus не вернул данных по запросу (пустой результат)");
+            }
+            boolean high = c.triggersHigh();
+            List<PrometheusClient.Sample> sorted = new ArrayList<>(raw);
+            sorted.sort((a, b) -> high ? Double.compare(b.value(), a.value()) : Double.compare(a.value(), b.value()));
+            PrometheusClient.Sample worst = sorted.get(0);
+            String worstSeries = formatSeries(worst.labels());
+            boolean triggered = c.matches(worst.value(), threshold);
+            String formattedWorst = formatVal(worst.value(), u);
+            List<SeriesPoint> pts = new ArrayList<>();
+            int limit = Math.min(sorted.size(), 12);
+            for (int i = 0; i < limit; i++) {
+                var s = sorted.get(i);
+                pts.add(new SeriesPoint(formatSeries(s.labels()), s.value(), formatVal(s.value(), u), c.matches(s.value(), threshold)));
+            }
+            String msg = triggered
+                    ? "Порог СРАБОТАЕТ: " + formattedWorst
+                            + (worstSeries.isEmpty() ? "" : " [" + worstSeries + "]")
+                            + " удовлетворяет условию " + thrText + " — SSH-скрипт будет выполнен."
+                    : "В норме: " + formattedWorst
+                            + (worstSeries.isEmpty() ? "" : " [" + worstSeries + "]")
+                            + " (порог срабатывания " + thrText + ") — SSH-скрипт не нужен.";
+            return new PromqlTestResult(true, worst.value(), formattedWorst, worstSeries, triggered, thrText, pts, msg, null);
+        } catch (IOException | RuntimeException e) {
+            return new PromqlTestResult(false, null, null, null, false, thrText, List.of(), null,
+                    "Ошибка запроса Prometheus: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
+        }
+    }
+
+    /** Тестовый прогон SSH-скрипта прямо из модалки (до сохранения правила) на одном или списке серверов. */
+    public SshTestResult testSsh(String sshHost, int sshPort, Long sshCredentialId, boolean useSudo,
+                                 String scriptRaw, int timeoutSec, String user) {
+        int port = sshPort <= 0 ? 22 : sshPort;
+        if (port < 1 || port > 65535) {
+            return new SshTestResult(false, null, 0, "", "", null, "SSH-порт: от 1 до 65535", null, List.of());
+        }
+        List<SshTarget> targets;
+        try {
+            targets = parseTargets(sshHost, port);
+        } catch (IllegalArgumentException e) {
+            return new SshTestResult(false, null, 0, "", "", null, e.getMessage(), null, List.of());
+        }
+        if (sshCredentialId == null) {
+            return new SshTestResult(false, null, 0, "", "", null, "Выберите SSH-учётку", null, List.of());
+        }
+        String script = scriptRaw == null ? "" : scriptRaw.replace("\r\n", "\n").replace('\r', '\n').strip();
+        if (script.isEmpty()) {
+            return new SshTestResult(false, null, 0, "", "", null, "Введите SSH-скрипт для тестового прогона", null, List.of());
+        }
+        int tSec = timeoutSec <= 0 ? 120 : Math.max(10, Math.min(timeoutSec, 1800));
+        ResolvedCredential cred;
+        try {
+            cred = credentials.resolve(sshCredentialId);
+        } catch (RuntimeException e) {
+            return new SshTestResult(false, null, 0, "", "", null, "SSH-учётка недоступна: " + e.getMessage(), null, List.of());
+        }
+        SecretMasker masker = maskerFor(cred);
+        long totalStart = System.currentTimeMillis();
+        List<HostExecResult> results = executeOnTargets(targets, cred, masker, useSudo, script, Duration.ofSeconds(tSec));
+        long totalElapsed = System.currentTimeMillis() - totalStart;
+
+        int okCount = (int) results.stream().filter(HostExecResult::ok).count();
+        boolean allOk = okCount == results.size();
+        Integer exitCode = results.size() == 1 ? results.get(0).exitCode() : Integer.valueOf(allOk ? 0 : 1);
+        SshExceptions.HostKeyUnconfirmed firstHk = results.stream()
+                .map(HostExecResult::unconfirmedHostKey).filter(java.util.Objects::nonNull).findFirst().orElse(null);
+
+        audit.record("schedule.guard_test_ssh", "schedule_guard", 0L,
+                Map.of("hosts", targets.stream().map(SshTarget::label).toList(), "ok", okCount, "total", results.size(), "by", String.valueOf(user)));
+
+        String msg;
+        if (results.size() == 1) {
+            HostExecResult r = results.get(0);
+            if (r.ok()) {
+                msg = "Скрипт выполнен успешно на " + r.label() + " (код 0, " + r.durationMs() + " мс)";
+            } else if (r.exitCode() != null) {
+                msg = "Скрипт на " + r.label() + " завершился с кодом " + r.exitCode() + " (" + r.durationMs() + " мс)";
+            } else {
+                msg = r.error();
+            }
+        } else {
+            msg = allOk
+                    ? "Скрипт выполнен успешно на всех серверах (" + okCount + "/" + results.size() + ", " + totalElapsed + " мс)"
+                    : "Выполнено успешно: " + okCount + " из " + results.size() + " серверов (" + totalElapsed + " мс)";
+        }
+
+        String combinedOut = results.size() == 1 ? results.get(0).stdout() : formatMultiHostOutput(results);
+        String combinedErr = results.size() == 1 ? results.get(0).stderr() : "";
+        return new SshTestResult(allOk, exitCode, totalElapsed, combinedOut, combinedErr, msg, allOk ? null : msg, firstHk, results);
+    }
+
+    private List<HostExecResult> executeOnTargets(List<SshTarget> targets, ResolvedCredential cred, SecretMasker masker,
+                                                  boolean useSudo, String script, Duration timeout) {
+        List<HostExecResult> out = new ArrayList<>(targets.size());
+        for (SshTarget t : targets) {
+            long started = System.currentTimeMillis();
+            try (SshConnection conn = ssh.open(t.host(), t.port(), cred, SSH_CONNECT_TIMEOUT)) {
+                SshConnection.ExecResult res = useSudo
+                        ? conn.sudo(script, timeout)
+                        : conn.exec("sh -c " + SshConnection.quote(script), timeout);
+                long elapsed = System.currentTimeMillis() - started;
+                String stdout = truncateOutput(res.stdout() == null ? "" : masker.mask(res.stdout()).strip());
+                String stderr = truncateOutput(res.stderr() == null ? "" : masker.mask(res.stderr()).strip());
+                String err = res.ok() ? null : "код выхода " + res.exitCode();
+                out.add(new HostExecResult(t.host(), t.port(), res.ok(), res.exitCode(), elapsed, stdout, stderr, err, null));
+            } catch (SshExceptions.HostKeyUnconfirmed e) {
+                long elapsed = System.currentTimeMillis() - started;
+                out.add(new HostExecResult(t.host(), t.port(), false, null, elapsed, "", "", masker.mask(e.getMessage()), e));
+            } catch (RuntimeException e) {
+                long elapsed = System.currentTimeMillis() - started;
+                String msg = masker.mask(e.getMessage() == null ? e.toString() : e.getMessage());
+                out.add(new HostExecResult(t.host(), t.port(), false, null, elapsed, "", "", msg, null));
+            }
+        }
+        return out;
+    }
+
+    private static String formatMultiHostOutput(List<HostExecResult> results) {
+        StringBuilder sb = new StringBuilder();
+        for (HostExecResult r : results) {
+            if (sb.length() > 0) {
+                sb.append("\n\n");
+            }
+            sb.append("=== ").append(r.label()).append(" (")
+                    .append(r.ok() ? "OK, exit=0" : (r.exitCode() != null ? "ОШИБКА, exit=" + r.exitCode() : "ОШИБКА"))
+                    .append(", ").append(r.durationMs()).append(" мс) ===");
+            if (r.error() != null && r.exitCode() == null) {
+                sb.append("\n").append(r.error());
+            }
+            if (r.stdout() != null && !r.stdout().isBlank()) {
+                sb.append("\n--- stdout ---\n").append(r.stdout());
+            }
+            if (r.stderr() != null && !r.stderr().isBlank()) {
+                sb.append("\n--- stderr ---\n").append(r.stderr());
+            }
+        }
+        return truncateOutput(sb.toString());
+    }
+
+    private static String truncateOutput(String s) {
+        if (s == null || s.length() <= 8000) {
+            return s == null ? "" : s;
+        }
+        return s.substring(0, 8000) + "\n… (вывод обрезан)";
+    }
+
     private Outcome runSshAndRecord(ScheduleGuardStore.Guard g, Instant now, Double metricVal, String series,
                                     boolean triggered, String reason) {
         ResolvedCredential cred;
@@ -315,39 +558,61 @@ public class ScheduleGuardService {
             return new Outcome(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, series, triggered, false, null, err, err, null);
         }
 
+        List<SshTarget> targets;
+        try {
+            targets = parseTargets(g.sshHost(), g.sshPort());
+        } catch (IllegalArgumentException e) {
+            String err = e.getMessage();
+            store.recordCheck(g.id(), now, metricVal, series, now, ScheduleGuardStore.LastStatus.SSH_ERROR, err);
+            return new Outcome(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, series, triggered, false, null, err, err, null);
+        }
+
         SecretMasker masker = maskerFor(cred);
         String script = g.script().replace("\r\n", "\n").replace('\r', '\n');
         Duration timeout = Duration.ofSeconds(Math.max(10, g.timeoutSec()));
 
-        try (SshConnection conn = ssh.open(g.sshHost(), g.sshPort(), cred, SSH_CONNECT_TIMEOUT)) {
-            SshConnection.ExecResult res = g.useSudo()
-                    ? conn.sudo(script, timeout)
-                    : conn.exec("sh -c " + SshConnection.quote(script), timeout);
-            String combined = formatExecOutput(masker, res);
-            ScheduleGuardStore.LastStatus st = res.ok()
-                    ? ScheduleGuardStore.LastStatus.EXECUTED
-                    : ScheduleGuardStore.LastStatus.SSH_ERROR;
-            String summary = res.ok()
-                    ? "SSH-скрипт выполнен на " + g.sshHost() + " (код 0)"
+        List<HostExecResult> results = executeOnTargets(targets, cred, masker, g.useSudo(), script, timeout);
+        int okCount = (int) results.stream().filter(HostExecResult::ok).count();
+        boolean allOk = okCount == results.size();
+        boolean anyExec = results.stream().anyMatch(r -> r.exitCode() != null);
+        SshExceptions.HostKeyUnconfirmed firstHk = results.stream()
+                .map(HostExecResult::unconfirmedHostKey).filter(java.util.Objects::nonNull).findFirst().orElse(null);
+
+        String combined = results.size() == 1 && results.get(0).exitCode() != null
+                ? formatExecOutput(masker, new SshConnection.ExecResult(results.get(0).exitCode(), results.get(0).stdout(), results.get(0).stderr()))
+                : (results.size() == 1 ? results.get(0).error() : formatMultiHostOutput(results));
+
+        ScheduleGuardStore.LastStatus st = allOk
+                ? ScheduleGuardStore.LastStatus.EXECUTED
+                : ScheduleGuardStore.LastStatus.SSH_ERROR;
+        Integer exitCode = results.size() == 1 ? results.get(0).exitCode() : Integer.valueOf(allOk ? 0 : 1);
+
+        String summary;
+        if (results.size() == 1) {
+            HostExecResult r = results.get(0);
+            if (r.ok()) {
+                summary = "SSH-скрипт выполнен на " + r.label() + " (код 0)"
+                        + (metricVal != null ? ", метрика " + formatVal(metricVal, g.unit()) : "");
+            } else if (r.exitCode() != null) {
+                summary = "SSH-скрипт на " + r.label() + " завершился с кодом " + r.exitCode();
+            } else {
+                summary = r.error();
+            }
+        } else {
+            summary = allOk
+                    ? "SSH-скрипт выполнен на всех серверах (" + okCount + "/" + results.size() + ")"
                             + (metricVal != null ? ", метрика " + formatVal(metricVal, g.unit()) : "")
-                    : "SSH-скрипт на " + g.sshHost() + " завершился с кодом " + res.exitCode();
-            store.recordCheck(g.id(), now, metricVal, series, now, st, combined);
-            recordAudit(g, st, metricVal, res.exitCode(), reason);
-            log.info("Автопроверка #{} («{}», {}): {}", g.id(), g.name(), reason, summary);
-            return new Outcome(g, st, metricVal, series, triggered, true, res.exitCode(), combined, summary, null);
-        } catch (SshExceptions.HostKeyUnconfirmed e) {
-            String err = masker.mask(e.getMessage());
-            store.recordCheck(g.id(), now, metricVal, series, now, ScheduleGuardStore.LastStatus.SSH_ERROR, err);
-            recordAudit(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, null, reason);
-            log.warn("Автопроверка #{} («{}»): {}", g.id(), g.name(), err);
-            return new Outcome(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, series, triggered, false, null, err, err, e);
-        } catch (RuntimeException e) {
-            String err = masker.mask(e.getMessage() == null ? e.toString() : e.getMessage());
-            store.recordCheck(g.id(), now, metricVal, series, now, ScheduleGuardStore.LastStatus.SSH_ERROR, err);
-            recordAudit(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, null, reason);
-            log.warn("Автопроверка #{} («{}», {}): ошибка SSH на {}: {}", g.id(), g.name(), reason, g.sshHost(), err);
-            return new Outcome(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, series, triggered, false, null, err, err, null);
+                    : "SSH-скрипт: успешно на " + okCount + " из " + results.size() + " серверов";
         }
+
+        store.recordCheck(g.id(), now, metricVal, series, now, st, combined);
+        recordAudit(g, st, metricVal, exitCode, reason);
+        if (allOk) {
+            log.info("Автопроверка #{} («{}», {}): {}", g.id(), g.name(), reason, summary);
+        } else {
+            log.warn("Автопроверка #{} («{}», {}): {}", g.id(), g.name(), reason, summary);
+        }
+        return new Outcome(g, st, metricVal, series, triggered, anyExec, exitCode, combined, summary, firstHk);
     }
 
     private void recordAudit(ScheduleGuardStore.Guard g, ScheduleGuardStore.LastStatus st, Double val, Integer code, String reason) {

@@ -187,7 +187,7 @@
                         <div class="small text-muted mt-1 d-flex flex-wrap align-items-center gap-3">
                             <span>
                                 <i class="bi bi-terminal me-1"></i>SSH:
-                                <code th:text="${g.sshHost} + (${g.sshPort != 22} ? ':' + ${g.sshPort} : '')"></code>
+                                <code th:text="${g.hostSummary()}"></code>
                                 · <span th:text="${sshCredNames.getOrDefault(g.sshCredentialId, '#' + g.sshCredentialId)}"></span>
                                 <span class="badge text-bg-secondary ms-1" th:if="${g.useSudo}">sudo</span>
                             </span>
@@ -907,34 +907,67 @@
                             <input class="form-control form-control-sm" type="text" name="unit" id="gd-unit" maxlength="32" value="%" placeholder="%, ГБ, МБ">
                         </div>
 
+                        <div class="col-12">
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="gd-test-promql-btn"
+                                        th:attr="data-url=@{/schedule/guards/test-promql}">
+                                    <i class="bi bi-activity me-1"></i>Проверить запрос PromQL
+                                </button>
+                                <span class="small text-muted">Выполнит запрос в Prometheus прямо сейчас и покажет, сработает ли порог</span>
+                            </div>
+                            <div id="gd-promql-result" class="mt-2 d-none"></div>
+                        </div>
+
                         <div class="col-12"><hr class="my-1"></div>
 
-                        <div class="col-md-5">
-                            <label class="form-label fw-semibold small mb-1" for="gd-host">Сервер (SSH host / IP)</label>
-                            <input class="form-control form-control-sm font-monospace" type="text" name="sshHost" id="gd-host" list="gd-host-list" required
-                                   placeholder="10.0.0.15 или app-stand-01">
-                            <datalist id="gd-host-list">
-                                <option th:each="g : ${generators}" th:value="${g.host}" th:label="${g.name}"></option>
-                            </datalist>
+                        <div class="col-md-7">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-1 mb-1">
+                                <label class="form-label fw-semibold small m-0" for="gd-host">Серверы (SSH host / IP — список)</label>
+                                <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.72rem"
+                                        id="gd-add-all-gens" th:if="${!generators.isEmpty()}" title="Добавить IP/хосты всех генераторов">
+                                    <i class="bi bi-plus-lg me-1"></i>Все генераторы (<span th:text="${generators.size()}"></span>)
+                                </button>
+                            </div>
+                            <textarea class="form-control form-control-sm font-monospace" rows="2" name="sshHost" id="gd-host" required
+                                      placeholder="10.0.0.15&#10;10.0.0.16&#10;10.0.0.17:2222"></textarea>
+                            <div class="form-text">Один сервер или список (по одному на строку или через запятую). Если порт отличается от порта по умолчанию — укажите <code>host:port</code>.</div>
+                            <div class="d-flex flex-wrap gap-1 mt-1" th:if="${!generators.isEmpty()}">
+                                <button type="button" class="btn btn-light border btn-sm py-0 px-2 gd-host-chip" style="font-size:.72rem"
+                                        th:each="g : ${generators}" th:attr="data-host=${g.host}"
+                                        th:title="'Добавить ' + ${g.host}" th:text="'+ ' + ${g.name} + ' (' + ${g.host} + ')'"></button>
+                            </div>
                         </div>
-                        <div class="col-md-2">
-                            <label class="form-label fw-semibold small mb-1" for="gd-port">Порт</label>
-                            <input class="form-control form-control-sm" type="number" min="1" max="65535" name="sshPort" id="gd-port" value="22" required>
-                        </div>
                         <div class="col-md-5">
-                            <label class="form-label fw-semibold small mb-1" for="gd-cred">
-                                SSH-учётка <a class="fw-normal ms-1" th:href="@{/ssh-credentials}" target="_blank">управлять</a>
-                            </label>
-                            <select class="form-select form-select-sm" name="sshCredentialId" id="gd-cred" required>
-                                <option value="" disabled selected th:if="${sshCredentials.isEmpty()}">Сначала добавьте SSH-учётку</option>
-                                <option th:each="c : ${sshCredentials}" th:value="${c.id}" th:text="${c.name} + ' (' + ${c.username} + ')'"></option>
-                            </select>
+                            <div class="row g-2">
+                                <div class="col-4">
+                                    <label class="form-label fw-semibold small mb-1" for="gd-port">Порт</label>
+                                    <input class="form-control form-control-sm" type="number" min="1" max="65535" name="sshPort" id="gd-port" value="22" required>
+                                </div>
+                                <div class="col-8">
+                                    <label class="form-label fw-semibold small mb-1" for="gd-cred">
+                                        SSH-учётка <a class="fw-normal ms-1" th:href="@{/ssh-credentials}" target="_blank">управлять</a>
+                                    </label>
+                                    <select class="form-select form-select-sm" name="sshCredentialId" id="gd-cred" required>
+                                        <option value="" disabled selected th:if="${sshCredentials.isEmpty()}">Сначала добавьте SSH-учётку</option>
+                                        <option th:each="c : ${sshCredentials}" th:value="${c.id}" th:text="${c.name} + ' (' + ${c.username} + ')'"></option>
+                                    </select>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="col-12">
-                            <label class="form-label fw-semibold small mb-1" for="gd-script">SSH-скрипт (выполняется через sh -c)</label>
+                            <label class="form-label fw-semibold small mb-1" for="gd-script">SSH-скрипт (выполняется через sh -c на каждом сервере из списка)</label>
                             <textarea class="form-control form-control-sm font-monospace" rows="4" name="script" id="gd-script" required
                                       placeholder="find /var/log/app -name '*.log' -mtime +1 -delete&#10;df -h /"></textarea>
+                            <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+                                <button type="button" class="btn btn-sm btn-outline-warning" id="gd-test-ssh-btn"
+                                        th:disabled="${sshCredentials.isEmpty()}"
+                                        th:attr="data-url=@{/schedule/guards/test-ssh},data-confirm-url=@{/schedule/guards/confirm-host-key-json}">
+                                    <i class="bi bi-terminal me-1"></i>Тестовый прогон SSH-скрипта
+                                </button>
+                                <span class="small text-muted">Выполнит скрипт на указанных серверах прямо сейчас и покажет вывод</span>
+                            </div>
+                            <div id="gd-ssh-result" class="mt-2 d-none"></div>
                         </div>
 
                         <div class="col-md-4">

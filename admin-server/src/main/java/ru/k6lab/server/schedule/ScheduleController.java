@@ -668,6 +668,124 @@ public class ScheduleController {
         return "redirect:/schedule#guards";
     }
 
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/test-promql")
+    @org.springframework.web.bind.annotation.ResponseBody
+    public Map<String, Object> testGuardPromql(@RequestParam String promql,
+                                               @RequestParam(defaultValue = "GT") String cmp,
+                                               @RequestParam(defaultValue = "0") String threshold,
+                                               @RequestParam(required = false) String unit) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        double thr;
+        try {
+            thr = Double.parseDouble(threshold.trim().replace(',', '.'));
+        } catch (NumberFormatException e) {
+            out.put("ok", false);
+            out.put("error", "Порог срабатывания должен быть числом");
+            return out;
+        }
+        ScheduleGuardStore.Cmp c;
+        try {
+            c = ScheduleGuardStore.Cmp.parse(cmp);
+        } catch (IllegalArgumentException e) {
+            out.put("ok", false);
+            out.put("error", e.getMessage());
+            return out;
+        }
+        var res = guardService.testPromql(promql, c, thr, unit);
+        out.put("ok", res.ok());
+        out.put("triggered", res.triggered());
+        out.put("worstValue", res.worstValue());
+        out.put("formattedValue", res.formattedValue());
+        out.put("worstSeries", res.worstSeries());
+        out.put("thresholdText", res.thresholdText());
+        out.put("message", res.message());
+        out.put("error", res.error());
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (var sp : res.samples()) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("series", sp.series());
+            r.put("value", sp.value());
+            r.put("formattedValue", sp.formattedValue());
+            r.put("triggered", sp.triggered());
+            rows.add(r);
+        }
+        out.put("samples", rows);
+        return out;
+    }
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/test-ssh")
+    @org.springframework.web.bind.annotation.ResponseBody
+    public Map<String, Object> testGuardSsh(@RequestParam String sshHost,
+                                            @RequestParam(defaultValue = "22") int sshPort,
+                                            @RequestParam(required = false) Long sshCredentialId,
+                                            @RequestParam(defaultValue = "false") boolean useSudo,
+                                            @RequestParam String script,
+                                            @RequestParam(defaultValue = "120") int timeoutSec,
+                                            Principal user) {
+        String by = user == null ? "system" : user.getName();
+        var res = guardService.testSsh(sshHost, sshPort, sshCredentialId, useSudo, script, timeoutSec, by);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", res.ok());
+        out.put("exitCode", res.exitCode());
+        out.put("durationMs", res.durationMs());
+        out.put("stdout", res.stdout());
+        out.put("stderr", res.stderr());
+        out.put("message", res.message());
+        out.put("error", res.error());
+        List<Map<String, Object>> hostRows = new ArrayList<>();
+        List<Map<String, Object>> unconfirmedKeys = new ArrayList<>();
+        for (var hr : res.hosts()) {
+            Map<String, Object> hm = new LinkedHashMap<>();
+            hm.put("host", hr.host());
+            hm.put("port", hr.port());
+            hm.put("label", hr.label());
+            hm.put("ok", hr.ok());
+            hm.put("exitCode", hr.exitCode());
+            hm.put("durationMs", hr.durationMs());
+            hm.put("stdout", hr.stdout());
+            hm.put("stderr", hr.stderr());
+            hm.put("error", hr.error());
+            if (hr.unconfirmedHostKey() != null) {
+                var hk = hr.unconfirmedHostKey();
+                Map<String, Object> hkm = new LinkedHashMap<>();
+                hkm.put("host", hk.host());
+                hkm.put("port", hk.port());
+                hkm.put("keyType", hk.keyType());
+                hkm.put("fingerprint", hk.fingerprint());
+                hkm.put("publicKey", hk.publicKey());
+                hm.put("hostKey", hkm);
+                unconfirmedKeys.add(hkm);
+            }
+            hostRows.add(hm);
+        }
+        out.put("hosts", hostRows);
+        out.put("hostKeys", unconfirmedKeys);
+        if (!unconfirmedKeys.isEmpty()) {
+            out.put("hostKey", unconfirmedKeys.get(0));
+        }
+        return out;
+    }
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/confirm-host-key-json")
+    @org.springframework.web.bind.annotation.ResponseBody
+    public Map<String, Object> confirmGuardHostKeyJson(@RequestParam String host, @RequestParam int port,
+                                                       @RequestParam String keyType, @RequestParam String fingerprint,
+                                                       @RequestParam String publicKey, Principal user) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        try {
+            knownHosts.confirm(host, port, keyType, fingerprint, publicKey, user == null ? "system" : user.getName());
+            out.put("ok", true);
+            out.put("message", "Ключ SSH хоста " + host + ":" + port + " подтверждён (" + fingerprint + ")");
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            out.put("ok", false);
+            out.put("error", e.getMessage());
+        }
+        return out;
+    }
+
     private static void putHostKeyPrompt(RedirectAttributes ra, ru.k6lab.server.ssh.SshExceptions.HostKeyUnconfirmed hk) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("host", hk.host());

@@ -540,8 +540,191 @@
         var gdSudo = document.getElementById('gd-sudo');
         var gdEnabled = document.getElementById('gd-enabled');
         var gdBlock = document.getElementById('gd-block');
+        var gdPromqlBtn = document.getElementById('gd-test-promql-btn');
+        var gdPromqlRes = document.getElementById('gd-promql-result');
+        var gdSshBtn = document.getElementById('gd-test-ssh-btn');
+        var gdSshRes = document.getElementById('gd-ssh-result');
+        var gdAddAllGens = document.getElementById('gd-add-all-gens');
+
+        function resetTestResults() {
+            if (gdPromqlRes) { gdPromqlRes.classList.add('d-none'); gdPromqlRes.innerHTML = ''; }
+            if (gdSshRes) { gdSshRes.classList.add('d-none'); gdSshRes.innerHTML = ''; }
+        }
+
+        function addHostsToField(hosts) {
+            if (!gdHost) { return; }
+            var existing = gdHost.value.split(/[\r\n,;\s]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+            var set = {};
+            existing.forEach(function (h) { set[h] = true; });
+            hosts.forEach(function (h) {
+                var clean = String(h || '').trim();
+                if (clean && !set[clean]) {
+                    existing.push(clean);
+                    set[clean] = true;
+                }
+            });
+            gdHost.value = existing.join('\n');
+            gdHost.focus();
+        }
+
+        guardModalEl.querySelectorAll('.gd-host-chip').forEach(function (btn) {
+            btn.addEventListener('click', function () { addHostsToField([btn.dataset.host]); });
+        });
+        if (gdAddAllGens) {
+            gdAddAllGens.addEventListener('click', function () {
+                var all = [];
+                guardModalEl.querySelectorAll('.gd-host-chip').forEach(function (b) { if (b.dataset.host) { all.push(b.dataset.host); } });
+                addHostsToField(all);
+            });
+        }
+
+        function postFormJson(url, params) {
+            var body = new URLSearchParams();
+            Object.keys(params).forEach(function (k) {
+                if (params[k] !== undefined && params[k] !== null) { body.append(k, String(params[k])); }
+            });
+            var headers = {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'};
+            if (csrfToken) { headers['X-CSRF-TOKEN'] = csrfToken; }
+            return fetch(url, {method: 'POST', headers: headers, body: body.toString()}).then(function (r) {
+                if (!r.ok) { throw new Error('HTTP ' + r.status); }
+                return r.json();
+            });
+        }
+
+        if (gdPromqlBtn && gdPromqlRes) {
+            gdPromqlBtn.addEventListener('click', function () {
+                var url = gdPromqlBtn.dataset.url;
+                var prev = gdPromqlBtn.innerHTML;
+                gdPromqlBtn.disabled = true;
+                gdPromqlBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Проверяем…';
+                gdPromqlRes.classList.remove('d-none');
+                gdPromqlRes.innerHTML = '<div class="small text-muted">Выполняется запрос к Prometheus…</div>';
+                postFormJson(url, {
+                    promql: gdPromql ? gdPromql.value : '',
+                    cmp: gdCmp ? gdCmp.value : 'GT',
+                    threshold: gdThr ? gdThr.value : '0',
+                    unit: gdUnit ? gdUnit.value : ''
+                }).then(function (data) {
+                    if (!data.ok) {
+                        gdPromqlRes.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small"><i class="bi bi-exclamation-triangle me-1"></i>' + esc(data.error || 'Ошибка проверки') + '</div>';
+                        return;
+                    }
+                    var cls = data.triggered ? 'alert-warning' : 'alert-success';
+                    var icon = data.triggered ? 'bi-exclamation-circle-fill' : 'bi-check-circle-fill';
+                    var html = '<div class="alert ' + cls + ' py-2 px-3 mb-0 small">' +
+                        '<div class="fw-semibold"><i class="bi ' + icon + ' me-1"></i>' + esc(data.message || '') + '</div>';
+                    if (Array.isArray(data.samples) && data.samples.length > 0) {
+                        html += '<div class="mt-2 pt-1 border-top"><div class="text-muted mb-1" style="font-size:.74rem">Серии Prometheus (показано ' + data.samples.length + '):</div>' +
+                            '<div class="d-flex flex-column gap-1 font-monospace" style="font-size:.75rem;max-height:140px;overflow:auto">';
+                        data.samples.forEach(function (sp) {
+                            var badge = sp.triggered
+                                ? '<span class="badge text-bg-warning ms-1">сработает</span>'
+                                : '<span class="badge text-bg-light border ms-1">норма</span>';
+                            html += '<div><b>' + esc(sp.formattedValue) + '</b> ' + (sp.series ? '<span class="text-muted">[' + esc(sp.series) + ']</span>' : '') + badge + '</div>';
+                        });
+                        html += '</div></div>';
+                    }
+                    html += '</div>';
+                    gdPromqlRes.innerHTML = html;
+                }).catch(function (err) {
+                    gdPromqlRes.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small">Ошибка сети: ' + esc(err.message) + '</div>';
+                }).finally(function () {
+                    gdPromqlBtn.disabled = false;
+                    gdPromqlBtn.innerHTML = prev;
+                });
+            });
+        }
+
+        function runSshTest() {
+            if (!gdSshBtn || !gdSshRes) { return; }
+            var url = gdSshBtn.dataset.url;
+            var confirmUrl = gdSshBtn.dataset.confirmUrl;
+            var prev = gdSshBtn.innerHTML;
+            gdSshBtn.disabled = true;
+            gdSshBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Выполняем SSH…';
+            gdSshRes.classList.remove('d-none');
+            gdSshRes.innerHTML = '<div class="small text-muted">Подключение и выполнение SSH-скрипта…</div>';
+            postFormJson(url, {
+                sshHost: gdHost ? gdHost.value : '',
+                sshPort: gdPort ? gdPort.value : '22',
+                sshCredentialId: gdCred ? gdCred.value : '',
+                useSudo: gdSudo && gdSudo.checked ? 'true' : 'false',
+                script: gdScript ? gdScript.value : '',
+                timeoutSec: gdTimeout ? gdTimeout.value : '120'
+            }).then(function (data) {
+                var cls = data.ok ? 'alert-success' : 'alert-danger';
+                var icon = data.ok ? 'bi-check-circle-fill' : 'bi-x-octagon-fill';
+                var html = '<div class="alert ' + cls + ' py-2 px-3 mb-2 small">' +
+                    '<i class="bi ' + icon + ' me-1"></i><b>' + esc(data.message || data.error || 'Готово') + '</b></div>';
+
+                if (Array.isArray(data.hosts) && data.hosts.length > 0) {
+                    html += '<div class="d-flex flex-column gap-2">';
+                    data.hosts.forEach(function (h, idx) {
+                        var hBadge = h.ok
+                            ? '<span class="badge text-bg-success">OK (exit=0)</span>'
+                            : (h.exitCode != null ? '<span class="badge text-bg-danger">exit=' + esc(h.exitCode) + '</span>' : '<span class="badge text-bg-danger">ошибка</span>');
+                        html += '<div class="border rounded p-2 bg-light-subtle small">' +
+                            '<div class="d-flex flex-wrap align-items-center gap-2">' +
+                                '<code class="fw-semibold">' + esc(h.label || h.host) + '</code>' +
+                                hBadge +
+                                '<span class="text-muted ms-auto">' + esc(h.durationMs) + ' мс</span>' +
+                            '</div>';
+                        if (h.hostKey) {
+                            html += '<div class="mt-2 p-2 rounded border border-warning bg-warning-subtle d-flex flex-wrap align-items-center gap-2">' +
+                                '<span class="me-auto"><b>Ключ хоста не подтверждён:</b> <code>' + esc(h.hostKey.keyType) + ' ' + esc(h.hostKey.fingerprint) + '</code></span>' +
+                                '<button type="button" class="btn btn-sm btn-warning py-0 px-2 fw-semibold gd-confirm-hk" data-hk-idx="' + idx + '">' +
+                                    '<i class="bi bi-key me-1"></i>Подтвердить ключ' +
+                                '</button></div>';
+                        } else if (h.error && h.exitCode == null) {
+                            html += '<div class="text-danger mt-1">' + esc(h.error) + '</div>';
+                        }
+                        var outTxt = '';
+                        if (h.stdout) { outTxt += (h.stderr ? '--- stdout ---\n' : '') + h.stdout; }
+                        if (h.stderr) { outTxt += (outTxt ? '\n' : '') + '--- stderr ---\n' + h.stderr; }
+                        if (outTxt) {
+                            html += '<pre class="mb-0 mt-2 p-2 rounded bg-dark text-light font-monospace" style="font-size:.73rem;max-height:160px;overflow:auto">' + esc(outTxt) + '</pre>';
+                        }
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                }
+                gdSshRes.innerHTML = html;
+
+                // 1-click подтверждение ключа хоста прямо внутри модалки без потери формы
+                gdSshRes.querySelectorAll('.gd-confirm-hk').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var h = data.hosts[Number(btn.dataset.hkIdx)];
+                        if (!h || !h.hostKey) { return; }
+                        btn.disabled = true;
+                        btn.textContent = 'Сохраняем…';
+                        postFormJson(confirmUrl, h.hostKey).then(function (r) {
+                            if (r.ok) {
+                                btn.className = 'btn btn-sm btn-success py-0 px-2';
+                                btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Ключ подтверждён — повторите прогон';
+                            } else {
+                                btn.disabled = false;
+                                btn.textContent = 'Ошибка: ' + (r.error || '');
+                            }
+                        }).catch(function () {
+                            btn.disabled = false;
+                            btn.textContent = 'Повторить подтверждение';
+                        });
+                    });
+                });
+            }).catch(function (err) {
+                gdSshRes.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small">Ошибка сети: ' + esc(err.message) + '</div>';
+            }).finally(function () {
+                gdSshBtn.disabled = false;
+                gdSshBtn.innerHTML = prev;
+            });
+        }
+
+        if (gdSshBtn && gdSshRes) {
+            gdSshBtn.addEventListener('click', runSshTest);
+        }
 
         function fillGuardForm(g) {
+            resetTestResults();
             if (!g) {
                 if (gdTitle) { gdTitle.innerHTML = '<i class="bi bi-shield-check me-2 text-primary"></i>Новая автопроверка (Prometheus → SSH)'; }
                 gdId.value = '';

@@ -221,6 +221,86 @@ class ScheduleGuardIT extends AbstractIT {
     }
 
     @Test
+    void testPromqlAndMultiServerSshDryRunAndPartialFailure() throws Exception {
+        SshConnector sshMock = mock(SshConnector.class);
+        ScheduleGuardService svc = new ScheduleGuardService(guardStore, prometheusClient, settings, sshMock, sshCredentials, auditService);
+
+        // 1. Тестовая проверка PromQL через HTTP JSON endpoint (до сохранения правила)
+        prom.respond((q, t) -> Map.of("srv1", 62.0, "srv2", 88.5));
+        String promJson = mvc.perform(post("/schedule/guards/test-promql").with(csrf())
+                        .param("promql", "disk_used_pct")
+                        .param("cmp", "GT")
+                        .param("threshold", "80")
+                        .param("unit", "%"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(promJson)
+                .contains("\"ok\":true")
+                .contains("\"triggered\":true")
+                .contains("88.50 %")
+                .contains("srv2");
+
+        // 2. Выполнение скрипта на списке серверов (переносы строк + запятые + свой порт 2222)
+        SshConnection c1 = mock(SshConnection.class);
+        SshConnection c2 = mock(SshConnection.class);
+        SshConnection c3 = mock(SshConnection.class);
+        when(sshMock.open(eq("10.0.0.10"), eq(22), any(), any(Duration.class))).thenReturn(c1);
+        when(sshMock.open(eq("10.0.0.11"), eq(2222), any(), any(Duration.class))).thenReturn(c2);
+        when(sshMock.open(eq("10.0.0.12"), eq(22), any(), any(Duration.class))).thenReturn(c3);
+        when(c1.exec(anyString(), any(Duration.class))).thenReturn(new SshConnection.ExecResult(0, "cleaned srv1", ""));
+        when(c2.exec(anyString(), any(Duration.class))).thenReturn(new SshConnection.ExecResult(1, "", "disk busy"));
+        when(c3.exec(anyString(), any(Duration.class))).thenReturn(new SshConnection.ExecResult(0, "cleaned srv3", ""));
+
+        var testRes = svc.testSsh("10.0.0.10\n10.0.0.11:2222, 10.0.0.12", 22, credId, false, "echo clean", 30, "admin");
+        assertThat(testRes.ok()).isFalse();
+        assertThat(testRes.hosts()).hasSize(3);
+        assertThat(testRes.hosts().get(0).ok()).isTrue();
+        assertThat(testRes.hosts().get(0).port()).isEqualTo(22);
+        assertThat(testRes.hosts().get(1).ok()).isFalse();
+        assertThat(testRes.hosts().get(1).port()).isEqualTo(2222);
+        assertThat(testRes.hosts().get(2).ok()).isTrue();
+        assertThat(testRes.stdout()).contains("10.0.0.10").contains("10.0.0.11:2222").contains("10.0.0.12");
+
+        // Все три сервера успешно -> ok=true
+        when(c2.exec(anyString(), any(Duration.class))).thenReturn(new SshConnection.ExecResult(0, "cleaned srv2", ""));
+        var okAll = svc.testSsh("10.0.0.10\n10.0.0.11:2222\n10.0.0.12", 22, credId, false, "echo clean", 30, "admin");
+        assertThat(okAll.ok()).isTrue();
+        assertThat(okAll.message()).contains("3/3");
+
+        // Сохранение правила со списком серверов через форму и отображение hostSummary на /schedule
+        mvc.perform(post("/schedule/guards").with(csrf())
+                        .param("name", "Очистка кластера")
+                        .param("enabled", "true")
+                        .param("promql", "disk_used_pct")
+                        .param("cmp", "GT")
+                        .param("threshold", "80")
+                        .param("unit", "%")
+                        .param("runWhen", "BOTH")
+                        .param("sshHost", "10.0.0.10\n10.0.0.11:2222, 10.0.0.12")
+                        .param("sshPort", "22")
+                        .param("sshCredentialId", String.valueOf(credId))
+                        .param("script", "echo clean"))
+                .andExpect(status().is3xxRedirection());
+
+        String html = mvc.perform(get("/schedule"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(html).contains("3 серв.: 10.0.0.10, 10.0.0.11:2222, 10.0.0.12");
+
+        // JSON подтверждение ключа хоста из модалки
+        String hkJson = mvc.perform(post("/schedule/guards/confirm-host-key-json").with(csrf())
+                        .param("host", "10.0.0.11")
+                        .param("port", "2222")
+                        .param("keyType", "ssh-ed25519")
+                        .param("fingerprint", "SHA256:multi123")
+                        .param("publicKey", "AAAAC3NzaMulti"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(hkJson).contains("\"ok\":true");
+        assertThat(knownHosts.find("10.0.0.11", 2222)).isPresent();
+    }
+
+    @Test
     @WithMockUser(roles = "ENGINEER")
     void nonAdminCannotModifyOrRunGuards() throws Exception {
         mvc.perform(post("/schedule/guards").with(csrf())
@@ -230,6 +310,12 @@ class ScheduleGuardIT extends AbstractIT {
                         .param("sshHost", "10.0.0.1")
                         .param("sshCredentialId", String.valueOf(credId))
                         .param("script", "echo hi"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/schedule/guards/test-promql").with(csrf())
+                        .param("promql", "up").param("threshold", "1"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/schedule/guards/test-ssh").with(csrf())
+                        .param("sshHost", "10.0.0.1").param("script", "echo hi"))
                 .andExpect(status().isForbidden());
     }
 }
