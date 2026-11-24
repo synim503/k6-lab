@@ -40,7 +40,7 @@ public class SecurityConfig {
                         .requestMatchers("/login", "/css/**", "/js/**", "/webjars/**", "/favicon.ico",
                                 "/actuator/health", "/actuator/health/**").permitAll()
                         .requestMatchers("/distributions/**", "/ssh-credentials/**", "/users/**", "/settings/**",
-                                "/audit/**").hasRole("ADMIN")
+                                "/audit/**", "/schedule/guards/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .formLogin(f -> f.loginPage("/login").defaultSuccessUrl("/", true).permitAll())
                 .logout(l -> l.logoutSuccessUrl("/login?logout"))

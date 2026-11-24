@@ -32,12 +32,18 @@ public class ScheduleController {
     private final ru.k6lab.server.load.LoadService load;
     private final ru.k6lab.server.load.RunPlanner planner;
     private final ru.k6lab.server.generator.GeneratorRepository generators;
+    private final ScheduleGuardService guardService;
+    private final ru.k6lab.server.ssh.SshCredentialService sshCredentials;
+    private final ru.k6lab.server.ssh.KnownHostService knownHosts;
 
     public ScheduleController(ScheduledRunService service, ScheduleTimelineService timeline, ScheduleImportService importer,
                               ru.k6lab.server.load.ProfileImportService profileImport, ru.k6lab.server.run.RunService runs,
                               ru.k6lab.server.script.ScriptService scripts, ru.k6lab.server.load.LoadProfileStore profileStore,
                               ru.k6lab.server.load.LoadService load, ru.k6lab.server.load.RunPlanner planner,
-                              ru.k6lab.server.generator.GeneratorRepository generators) {
+                              ru.k6lab.server.generator.GeneratorRepository generators,
+                              ScheduleGuardService guardService,
+                              ru.k6lab.server.ssh.SshCredentialService sshCredentials,
+                              ru.k6lab.server.ssh.KnownHostService knownHosts) {
         this.runs = runs;
         this.service = service;
         this.timeline = timeline;
@@ -48,6 +54,9 @@ public class ScheduleController {
         this.load = load;
         this.planner = planner;
         this.generators = generators;
+        this.guardService = guardService;
+        this.sshCredentials = sshCredentials;
+        this.knownHosts = knownHosts;
     }
 
     /** Общий импорт профилей разных скриптов: у каждого профиля в JSON указан script. Опционально сразу планирует последовательный запуск. */
@@ -137,17 +146,21 @@ public class ScheduleController {
 
     @PostMapping("/schedule/resume")
     public String resume(Principal user, RedirectAttributes ra) {
-        var res = service.resume(user == null ? "system" : user.getName());
-        String msg;
-        if (res.startedRunId() != null) {
-            msg = "Пауза снята: сразу запущен тест «" + res.startedName() + "» (запуск #" + res.startedRunId() + ")"
-                    + (res.moved() > 0 ? ", сдвинуто в очереди: " + res.moved() : "");
-        } else if (res.moved() > 0) {
-            msg = "Пауза снята: генераторы заняты, записей в очереди перенесено на ближайшее свободное время: " + res.moved();
-        } else {
-            msg = "Пауза снята";
+        try {
+            var res = service.resume(user == null ? "system" : user.getName());
+            String msg;
+            if (res.startedRunId() != null) {
+                msg = "Пауза снята: сразу запущен тест «" + res.startedName() + "» (запуск #" + res.startedRunId() + ")"
+                        + (res.moved() > 0 ? ", сдвинуто в очереди: " + res.moved() : "");
+            } else if (res.moved() > 0) {
+                msg = "Пауза снята: генераторы заняты, записей в очереди перенесено на ближайшее свободное время: " + res.moved();
+            } else {
+                msg = "Пауза снята";
+            }
+            ra.addFlashAttribute("info", msg);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            ra.addFlashAttribute("error", e.getMessage());
         }
-        ra.addFlashAttribute("info", msg);
         return "redirect:/schedule";
     }
 
@@ -211,7 +224,44 @@ public class ScheduleController {
         long cancelledCount = items.stream().filter(i -> i.status() == ScheduledRunStore.Status.CANCELLED).count();
 
         model.addAttribute("paused", service.paused());
+        model.addAttribute("pauseReason", service.pauseReason());
         model.addAttribute("activeRuns", active);
+        var guards = guardService.list();
+        var creds = sshCredentials.list();
+        Map<Long, String> credNames = new LinkedHashMap<>();
+        creds.forEach(c -> credNames.put(c.getId(), c.getName() + " (" + c.getUsername() + ")"));
+        model.addAttribute("guards", guards);
+        model.addAttribute("enabledGuardsCount", guards.stream().filter(ScheduleGuardStore.Guard::enabled).count());
+        model.addAttribute("sshCredentials", creds);
+        model.addAttribute("sshCredNames", credNames);
+        model.addAttribute("guardCmps", ScheduleGuardStore.Cmp.values());
+        model.addAttribute("guardWhens", ScheduleGuardStore.RunWhen.values());
+        try {
+            List<Map<String, Object>> gJson = new ArrayList<>();
+            for (var g : guards) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", g.id());
+                m.put("name", g.name());
+                m.put("enabled", g.enabled());
+                m.put("promql", g.promql());
+                m.put("cmp", g.cmp().name());
+                m.put("threshold", g.threshold());
+                m.put("unit", g.unit());
+                m.put("runWhen", g.runWhen().name());
+                m.put("sshHost", g.sshHost());
+                m.put("sshPort", g.sshPort());
+                m.put("sshCredentialId", g.sshCredentialId());
+                m.put("useSudo", g.useSudo());
+                m.put("script", g.script());
+                m.put("timeoutSec", g.timeoutSec());
+                m.put("cooldownSec", g.cooldownSec());
+                m.put("blockOnFail", g.blockOnFail());
+                gJson.add(m);
+            }
+            model.addAttribute("guardsJson", mapper.writeValueAsString(gJson));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            model.addAttribute("guardsJson", "[]");
+        }
         model.addAttribute("items", items);
         model.addAttribute("scripts", scripts.list());
         model.addAttribute("generators", gens);
@@ -491,5 +541,140 @@ public class ScheduleController {
             ra.addFlashAttribute("error", "Запуск уже начат или завершён: отменить нельзя");
         }
         return "redirect:/schedule";
+    }
+
+    // ------------------------------------------------------------------ автопроверки (Prometheus -> SSH)
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards")
+    public String saveGuard(@RequestParam(required = false) Long id,
+                            @RequestParam String name,
+                            @RequestParam(defaultValue = "false") boolean enabled,
+                            @RequestParam String promql,
+                            @RequestParam(defaultValue = "GT") String cmp,
+                            @RequestParam String threshold,
+                            @RequestParam(required = false) String unit,
+                            @RequestParam(defaultValue = "BOTH") String runWhen,
+                            @RequestParam String sshHost,
+                            @RequestParam(defaultValue = "22") int sshPort,
+                            @RequestParam Long sshCredentialId,
+                            @RequestParam(defaultValue = "false") boolean useSudo,
+                            @RequestParam String script,
+                            @RequestParam(defaultValue = "120") int timeoutSec,
+                            @RequestParam(defaultValue = "60") int cooldownSec,
+                            @RequestParam(defaultValue = "false") boolean blockOnFail,
+                            Principal user, RedirectAttributes ra) {
+        String by = user == null ? "system" : user.getName();
+        try {
+            double thr;
+            try {
+                thr = Double.parseDouble(threshold.trim().replace(',', '.'));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Порог срабатывания должен быть числом");
+            }
+            var in = new ScheduleGuardStore.GuardInput(
+                    name, enabled, promql, ScheduleGuardStore.Cmp.parse(cmp), thr,
+                    unit == null ? "" : unit, ScheduleGuardStore.RunWhen.parse(runWhen),
+                    sshHost, sshPort, sshCredentialId, useSudo, script, timeoutSec, cooldownSec, blockOnFail);
+            if (id == null) {
+                guardService.create(in, by);
+                ra.addFlashAttribute("info", "Автопроверка «" + name.strip() + "» добавлена");
+            } else {
+                guardService.update(id, in, by);
+                ra.addFlashAttribute("info", "Автопроверка «" + name.strip() + "» обновлена");
+            }
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule#guards";
+    }
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/{id}/toggle")
+    public String toggleGuard(@PathVariable Long id, @RequestParam boolean enabled, Principal user, RedirectAttributes ra) {
+        try {
+            guardService.setEnabled(id, enabled, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", enabled ? "Автопроверка включена" : "Автопроверка выключена");
+        } catch (IllegalArgumentException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule#guards";
+    }
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/{id}/delete")
+    public String deleteGuard(@PathVariable Long id, Principal user, RedirectAttributes ra) {
+        try {
+            guardService.delete(id, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", "Автопроверка удалена");
+        } catch (IllegalArgumentException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule#guards";
+    }
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/{id}/check")
+    public String checkGuard(@PathVariable Long id, @RequestParam(defaultValue = "false") boolean runSsh,
+                             Principal user, RedirectAttributes ra) {
+        try {
+            String by = user == null ? "system" : user.getName();
+            var out = guardService.checkAndRun(id, runSsh, false, true, "manual:" + by);
+            if (out.unconfirmedHostKey() != null) {
+                putHostKeyPrompt(ra, out.unconfirmedHostKey());
+                ra.addFlashAttribute("error", out.message());
+            } else if (out.failed()) {
+                ra.addFlashAttribute("error", "«" + out.guard().name() + "»: " + out.message());
+            } else {
+                ra.addFlashAttribute("info", "«" + out.guard().name() + "»: " + out.message());
+            }
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule#guards";
+    }
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/{id}/run-ssh")
+    public String runGuardSsh(@PathVariable Long id, Principal user, RedirectAttributes ra) {
+        try {
+            String by = user == null ? "system" : user.getName();
+            var out = guardService.checkAndRun(id, true, true, true, "manual_ssh:" + by);
+            if (out.unconfirmedHostKey() != null) {
+                putHostKeyPrompt(ra, out.unconfirmedHostKey());
+                ra.addFlashAttribute("error", out.message());
+            } else if (out.failed()) {
+                ra.addFlashAttribute("error", "«" + out.guard().name() + "»: " + out.message());
+            } else {
+                ra.addFlashAttribute("info", "«" + out.guard().name() + "»: " + out.message());
+            }
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule#guards";
+    }
+
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/schedule/guards/confirm-host-key")
+    public String confirmGuardHostKey(@RequestParam String host, @RequestParam int port, @RequestParam String keyType,
+                                      @RequestParam String fingerprint, @RequestParam String publicKey,
+                                      Principal user, RedirectAttributes ra) {
+        try {
+            knownHosts.confirm(host, port, keyType, fingerprint, publicKey, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", "Ключ SSH хоста " + host + ":" + port + " подтверждён (" + fingerprint + "). Теперь можно запустить проверку повторно.");
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            ra.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/schedule#guards";
+    }
+
+    private static void putHostKeyPrompt(RedirectAttributes ra, ru.k6lab.server.ssh.SshExceptions.HostKeyUnconfirmed hk) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("host", hk.host());
+        m.put("port", hk.port());
+        m.put("keyType", hk.keyType());
+        m.put("fingerprint", hk.fingerprint());
+        m.put("publicKey", hk.publicKey());
+        ra.addFlashAttribute("guardHostKey", m);
     }
 }

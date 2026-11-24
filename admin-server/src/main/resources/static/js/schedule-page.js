@@ -493,4 +493,116 @@
             });
         });
     });
+
+    // ==================== Schedule Guards (Prometheus -> SSH) ====================
+    var guardModalEl = document.getElementById('sch-guard-modal');
+    var guardsJsonEl = document.getElementById('sch-guards-json');
+    if (guardModalEl) {
+        var guardsList = [];
+        try { guardsList = JSON.parse((guardsJsonEl && guardsJsonEl.textContent) || '[]'); } catch (e) { guardsList = []; }
+        var GD_PRESETS = {
+            diskPct: {
+                name: 'Очистка диска / (> 80%)',
+                promql: '100 - (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} * 100)',
+                cmp: 'GT', threshold: '80', unit: '%'
+            },
+            diskUsedGb: {
+                name: 'Очистка диска / (> 50 ГБ)',
+                promql: '(node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) / 1073741824',
+                cmp: 'GT', threshold: '50', unit: 'ГБ'
+            },
+            diskFreeGb: {
+                name: 'Мало места на / (< 10 ГБ)',
+                promql: 'node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / 1073741824',
+                cmp: 'LT', threshold: '10', unit: 'ГБ'
+            },
+            ramPct: {
+                name: 'Очистка памяти RAM (> 85%)',
+                promql: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100',
+                cmp: 'GT', threshold: '85', unit: '%'
+            }
+        };
+
+        var gdTitle = document.getElementById('gd-modal-title');
+        var gdId = document.getElementById('gd-id');
+        var gdName = document.getElementById('gd-name');
+        var gdWhen = document.getElementById('gd-when');
+        var gdPromql = document.getElementById('gd-promql');
+        var gdCmp = document.getElementById('gd-cmp');
+        var gdThr = document.getElementById('gd-thr');
+        var gdUnit = document.getElementById('gd-unit');
+        var gdHost = document.getElementById('gd-host');
+        var gdPort = document.getElementById('gd-port');
+        var gdCred = document.getElementById('gd-cred');
+        var gdScript = document.getElementById('gd-script');
+        var gdTimeout = document.getElementById('gd-timeout');
+        var gdCooldown = document.getElementById('gd-cooldown');
+        var gdSudo = document.getElementById('gd-sudo');
+        var gdEnabled = document.getElementById('gd-enabled');
+        var gdBlock = document.getElementById('gd-block');
+
+        function fillGuardForm(g) {
+            if (!g) {
+                if (gdTitle) { gdTitle.innerHTML = '<i class="bi bi-shield-check me-2 text-primary"></i>Новая автопроверка (Prometheus → SSH)'; }
+                gdId.value = '';
+                gdName.value = '';
+                gdWhen.value = 'BOTH';
+                gdPromql.value = '';
+                gdCmp.value = 'GT';
+                gdThr.value = '80';
+                gdUnit.value = '%';
+                gdHost.value = '';
+                gdPort.value = '22';
+                if (gdCred && gdCred.options.length > 0 && !gdCred.options[0].disabled) { gdCred.selectedIndex = 0; }
+                gdScript.value = '';
+                gdTimeout.value = '120';
+                gdCooldown.value = '60';
+                gdSudo.checked = false;
+                gdEnabled.checked = true;
+                gdBlock.checked = false;
+                return;
+            }
+            if (gdTitle) { gdTitle.innerHTML = '<i class="bi bi-pencil-square me-2 text-primary"></i>Редактировать автопроверку'; }
+            gdId.value = String(g.id);
+            gdName.value = g.name || '';
+            gdWhen.value = g.runWhen || 'BOTH';
+            gdPromql.value = g.promql || '';
+            gdCmp.value = g.cmp || 'GT';
+            gdThr.value = g.threshold != null ? String(g.threshold) : '80';
+            gdUnit.value = g.unit || '';
+            gdHost.value = g.sshHost || '';
+            gdPort.value = g.sshPort != null ? String(g.sshPort) : '22';
+            if (gdCred && g.sshCredentialId != null) { gdCred.value = String(g.sshCredentialId); }
+            gdScript.value = g.script || '';
+            gdTimeout.value = g.timeoutSec != null ? String(g.timeoutSec) : '120';
+            gdCooldown.value = g.cooldownSec != null ? String(g.cooldownSec) : '60';
+            gdSudo.checked = !!g.useSudo;
+            gdEnabled.checked = g.enabled !== false;
+            gdBlock.checked = !!g.blockOnFail;
+        }
+
+        guardModalEl.addEventListener('show.bs.modal', function (ev) {
+            var trigger = ev.relatedTarget;
+            var editId = trigger && trigger.dataset && trigger.dataset.guardId ? Number(trigger.dataset.guardId) : null;
+            if (editId) {
+                var found = guardsList.find(function (x) { return x.id === editId; });
+                fillGuardForm(found || null);
+            } else {
+                fillGuardForm(null);
+            }
+        });
+
+        guardModalEl.querySelectorAll('[data-gd-preset]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var p = GD_PRESETS[btn.dataset.gdPreset];
+                if (!p) { return; }
+                if (!gdName.value.trim()) { gdName.value = p.name; }
+                gdPromql.value = p.promql;
+                gdCmp.value = p.cmp;
+                gdThr.value = p.threshold;
+                gdUnit.value = p.unit;
+                gdPromql.focus();
+            });
+        });
+    }
 })();

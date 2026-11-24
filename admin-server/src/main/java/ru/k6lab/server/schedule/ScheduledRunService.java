@@ -54,9 +54,12 @@ public class ScheduledRunService {
     private final LoadService load;
     private final ScheduleTimelineService timeline;
     private final SettingsService settings;
+    private final ScheduleGuardService guards;
 
     /** Ключ настройки: значение «1» - планировщик на паузе. */
     public static final String PAUSED_KEY = "schedule.paused";
+    /** Причина автоматической паузы (например, сработала блокирующая автопроверка). */
+    public static final String PAUSE_REASON_KEY = "schedule.pause_reason";
 
     /** Защита от гонки между фоновым tick() и снятием паузы resume(). */
     private final Object schedulerLock = new Object();
@@ -74,8 +77,9 @@ public class ScheduledRunService {
 
     public ScheduledRunService(ScheduledRunStore store, RunService runs, RunPlanner planner, ScriptService scripts,
                                GeneratorRepository generators, SecretService secrets, AuditService audit, LoadService load,
-                               ScheduleTimelineService timeline, SettingsService settings) {
+                               ScheduleTimelineService timeline, SettingsService settings, ScheduleGuardService guards) {
         this.settings = settings;
+        this.guards = guards;
         this.load = load;
         this.timeline = timeline;
         this.store = store;
@@ -585,6 +589,10 @@ public class ScheduledRunService {
             if (!canStartNow(target)) {
                 throw new IllegalStateException("Нужные генераторы сейчас заняты активным запуском или недоступны — дождитесь окончания текущего теста или поставьте запись в начало очереди");
             }
+            ScheduleGuardService.BeforeStartResult guardRes = guards.runBeforeStartGuards(target.id());
+            if (guardRes.blocked()) {
+                throw new IllegalStateException("Запуск остановлен автопроверкой: " + guardRes.reason());
+            }
             Instant now = Instant.now();
             store.reschedule(target.id(), now);
             if (!store.claim(target.id())) {
@@ -690,11 +698,33 @@ public class ScheduledRunService {
         return "1".equals(settings.get(PAUSED_KEY, ""));
     }
 
+    public String pauseReason() {
+        String r = settings.get(PAUSE_REASON_KEY, "");
+        return r == null || r.isBlank() ? null : r;
+    }
+
     public void pause(String user) {
+        pause(user, null);
+    }
+
+    public void pause(String user, String reason) {
         synchronized (schedulerLock) {
-            if (!paused()) {
+            boolean wasPaused = paused();
+            if (!wasPaused) {
                 settings.set(PAUSED_KEY, "1");
-                audit.record("schedule.pause", "schedule", 0L, Map.of("by", String.valueOf(user)));
+            }
+            if (reason != null && !reason.isBlank()) {
+                settings.set(PAUSE_REASON_KEY, reason);
+            } else if (!wasPaused) {
+                settings.delete(PAUSE_REASON_KEY);
+            }
+            if (!wasPaused) {
+                Map<String, Object> d = new LinkedHashMap<>();
+                d.put("by", String.valueOf(user));
+                if (reason != null && !reason.isBlank()) {
+                    d.put("reason", reason);
+                }
+                audit.record("schedule.pause", "schedule", 0L, d);
             }
         }
     }
@@ -716,6 +746,7 @@ public class ScheduledRunService {
                     .toList();
             if (pending.isEmpty()) {
                 settings.delete(PAUSED_KEY);
+                settings.delete(PAUSE_REASON_KEY);
                 audit.record("schedule.resume", "schedule", 0L, Map.of("by", String.valueOf(user), "moved", 0));
                 return new ResumeResult(null, null, null, 0);
             }
@@ -729,6 +760,11 @@ public class ScheduledRunService {
 
             boolean startedFirst = false;
             if (canStartNow(first)) {
+                ScheduleGuardService.BeforeStartResult guardRes = guards.runBeforeStartGuards(first.id());
+                if (guardRes.blocked()) {
+                    settings.set(PAUSE_REASON_KEY, guardRes.reason());
+                    throw new IllegalStateException("Не удалось снять с паузы — автопроверка заблокировала старт: " + guardRes.reason());
+                }
                 store.reschedule(first.id(), now);
                 if (store.claim(first.id())) {
                     ScheduledRunStore.Item fresh = store.find(first.id()).orElse(first);
@@ -784,6 +820,7 @@ public class ScheduledRunService {
 
             // снимаем паузу после перекладки очереди, чтобы фоновый tick() не успел пометить просроченные записи как FAILED
             settings.delete(PAUSED_KEY);
+            settings.delete(PAUSE_REASON_KEY);
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("by", String.valueOf(user));
             details.put("moved", moved);
@@ -839,6 +876,13 @@ public class ScheduledRunService {
             }
             shiftQueue();
             for (ScheduledRunStore.Item item : store.due(Instant.now())) {
+                ScheduleGuardService.BeforeStartResult guardRes = guards.runBeforeStartGuards(item.id());
+                if (guardRes.blocked()) {
+                    log.warn("Расписание #{}: старт заблокирован автопроверкой ({}); планировщик поставлен на паузу",
+                            item.id(), guardRes.reason());
+                    pause("schedule-guard", guardRes.reason());
+                    return;
+                }
                 if (store.claim(item.id())) {
                     startOne(item);
                 }

@@ -22,13 +22,16 @@ public class SshCredentialService {
 
     private final SshCredentialRepository repo;
     private final GeneratorRepository generators;
+    private final ru.k6lab.server.schedule.ScheduleGuardStore guards;
     private final SecretCipher cipher;
     private final AuditService audit;
 
-    public SshCredentialService(SshCredentialRepository repo, GeneratorRepository generators, SecretCipher cipher,
+    public SshCredentialService(SshCredentialRepository repo, GeneratorRepository generators,
+                                ru.k6lab.server.schedule.ScheduleGuardStore guards, SecretCipher cipher,
                                 AuditService audit) {
         this.repo = repo;
         this.generators = generators;
+        this.guards = guards;
         this.cipher = cipher;
         this.audit = audit;
     }
@@ -121,6 +124,9 @@ public class SshCredentialService {
         }
         if (repo.existsByJumpCredentialId(id)) {
             throw new IllegalStateException("Учётка используется как jump-хост другой учётки");
+        }
+        if (guards.usesCredential(id)) {
+            throw new IllegalStateException("Учётка используется автопроверками планировщика");
         }
         repo.delete(c);
         audit.record("ssh_credential.delete", "ssh_credential", id, Map.of("name", c.getName()));
