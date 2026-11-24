@@ -1946,7 +1946,12 @@
             if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
                 if (document.activeElement && document.activeElement.closest('#config-editor')) { return; }
                 e.preventDefault();
-                form.requestSubmit ? form.requestSubmit() : form.submit();
+                var primarySave = document.getElementById('ld-primary-save');
+                if (form.requestSubmit) {
+                    primarySave ? form.requestSubmit(primarySave) : form.requestSubmit();
+                } else {
+                    if (primarySave) { primarySave.click(); } else { form.submit(); }
+                }
             }
         });
         window.addEventListener('beforeunload', function (e) {
@@ -1983,13 +1988,18 @@
             if (!confirm('Удалить профиль «' + opt.textContent + '»?')) { e.preventDefault(); return; }
             document.getElementById('profile-id').value = pick.value;
         });
-        document.getElementById('profile-save').addEventListener('click', function (e) {
+        var onProfileSaveClick = function (e) {
             var name = document.getElementById('profile-name');
             if (!name.value.trim()) { e.preventDefault(); name.focus(); name.classList.add('is-invalid'); return; }
             name.classList.remove('is-invalid');
             if (envTablePane && !envTablePane.classList.contains('d-none')) { syncEnvToTextarea(); }
+            syncBaseWarmupHidden();
+            submitting = true;
             body.querySelectorAll('.op-row').forEach(sync);
-        });
+        };
+        document.getElementById('profile-save').addEventListener('click', onProfileSaveClick);
+        var bottomProfSave = document.querySelector('#ld-primary-save[data-save-profile="true"]');
+        if (bottomProfSave) { bottomProfSave.addEventListener('click', onProfileSaveClick); }
     }
 
     // ==================== Profile Manager Cards Gallery ====================

@@ -280,6 +280,17 @@ public class RunService {
         return runs.search(scriptId, status, PageRequest.of(0, Math.max(1, Math.min(limit, 500))));
     }
 
+    /** Постраничный список запусков (для пагинации запусков на странице скрипта). */
+    public org.springframework.data.domain.Page<Run> searchPage(Long scriptId, RunStatus status, int page, int size) {
+        int safeSize = Math.max(5, Math.min(size, 100));
+        int safePage = Math.max(0, page);
+        var res = runs.searchPage(scriptId, status, PageRequest.of(safePage, safeSize));
+        if (res.getTotalPages() > 0 && safePage >= res.getTotalPages()) {
+            res = runs.searchPage(scriptId, status, PageRequest.of(res.getTotalPages() - 1, safeSize));
+        }
+        return res;
+    }
+
     /** Run, занимающие генераторы (для восстановления после рестарта сервера). */
     public List<Run> activeRuns() {
         return runs.findByStatusIn(List.of(RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.STOPPING));

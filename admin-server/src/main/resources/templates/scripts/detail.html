@@ -37,9 +37,9 @@
                 <div class="v" th:text="${script.generatorCount}"></div>
                 <div class="s">подставляется при запуске</div></div>
             <div class="fact"><div class="k">Последний запуск</div>
-                <div class="v" th:if="${history.isEmpty()}">ещё не было</div>
-                <div class="v" th:unless="${history.isEmpty()}"><a th:href="@{/runs/{id}(id=${history[0].id})}" th:text="'#' + ${history[0].id}"></a></div>
-                <div class="s" th:unless="${history.isEmpty()}" th:text="${fmt.runStatus(history[0].status.name())} + ' · ' + ${#temporals.format(history[0].queuedAt, 'dd.MM.yyyy HH:mm')}"></div></div>
+                <div class="v" th:if="${latestRun == null}">ещё не было</div>
+                <div class="v" th:unless="${latestRun == null}"><a th:href="@{/runs/{id}(id=${latestRun.id})}" th:text="'#' + ${latestRun.id}"></a></div>
+                <div class="s" th:unless="${latestRun == null}" th:text="${fmt.runStatus(latestRun.status.name())} + ' · ' + ${#temporals.format(latestRun.queuedAt, 'dd.MM.yyyy HH:mm')}"></div></div>
         </div>
 
         <div class="sect-title mt-0"><h5>Нагрузка</h5>
@@ -70,46 +70,103 @@
                     <td class="num" th:text="${#numbers.formatDecimal(o.maxErrorPct, 1, 2)}"></td></tr></tbody></table></div>
         </div>
 
-        <div class="sect-title"><h5>Запуски</h5><span class="hint">последние запуски этого скрипта</span></div>
-        <div class="card"><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
-            <thead><tr><th>№</th><th>Статус</th><th>Поставлен</th><th>Длительность</th><th>Итог</th><th class="text-end">В очередь</th></tr></thead>
-            <tbody>
-            <tr th:if="${history.isEmpty()}"><td colspan="6"><div class="empty-state"><i class="bi bi-inbox"></i>Запусков ещё не было</div></td></tr>
-            <tr th:each="r : ${history}" class="run-row" th:attr="data-href=@{/runs/{id}(id=${r.id})}">
-                <td><a th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id}"></a></td>
-                <td><span class="badge" th:classappend="${r.status.name() == 'FINISHED'} ? 'text-bg-success' : (${r.status.name() == 'FAILED' or r.status.name() == 'ABORTED'} ? 'text-bg-danger' : 'text-bg-primary')" th:text="${fmt.runStatus(r.status.name())}"></span></td>
-                <td class="text-muted small text-nowrap" th:text="${#temporals.format(r.queuedAt, 'dd.MM.yyyy HH:mm')}"></td>
-                <td class="text-nowrap small" th:text="${r.startedAt != null and r.finishedAt != null} ? ${T(java.time.Duration).between(r.startedAt, r.finishedAt).toMinutes()} + ' мин' : '—'"></td>
-                <td class="small" th:text="${r.conclusion} ?: '—'"></td>
-                <td class="text-end text-nowrap">
-                    <div class="btn-group btn-group-sm">
-                        <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="d-inline m-0">
-                            <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Добавить прогон в конец очереди">
-                                <i class="bi bi-arrow-repeat"></i>
-                            </button>
-                        </form>
-                        <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split py-0 px-1" data-bs-toggle="dropdown" aria-expanded="false" title="Позиция в очереди">
-                            <span class="visually-hidden">Позиция</span>
-                        </button>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            <li>
-                                <form th:action="@{/runs/{id}/requeue(id=${r.id},position='front')}" method="post" class="m-0">
-                                    <button type="submit" class="dropdown-item small">
-                                        <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
-                                    </button>
-                                </form>
-                            </li>
-                            <li>
-                                <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="m-0">
-                                    <button type="submit" class="dropdown-item small">
-                                        <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
-                                    </button>
-                                </form>
-                            </li>
-                        </ul>
+        <div class="sect-title flex-wrap gap-2" id="runs">
+            <h5 class="mb-0">Запуски <span class="badge text-bg-light border ms-1" th:if="${runsPage.totalElements > 0}" th:text="${runsPage.totalElements}"></span></h5>
+            <span class="hint" th:if="${runsPage.totalElements == 0}">запуски этого скрипта</span>
+            <span class="hint" th:if="${runsPage.totalElements > 0}"
+                  th:with="from=${runsPage.number * runsPage.size + 1}, to=${runsPage.number * runsPage.size + runsPage.numberOfElements}"
+                  th:text="'показано ' + ${from} + '–' + ${to} + ' из ' + ${runsPage.totalElements}"></span>
+            <form th:action="@{/scripts/{id}(id=${script.id})} + '#runs'" method="get" class="d-flex flex-wrap align-items-center gap-2 ms-auto">
+                <input type="hidden" name="page" value="0">
+                <select class="form-select form-select-sm" style="width:auto" name="status" aria-label="Фильтр по статусу" onchange="this.form.submit()">
+                    <option value="" th:selected="${runStatus == null}">Все статусы</option>
+                    <option th:each="st : ${runStatuses}" th:value="${st.name()}" th:text="${fmt.runStatus(st.name())}" th:selected="${runStatus == st}"></option>
+                </select>
+                <select class="form-select form-select-sm" style="width:auto" name="size" aria-label="Запусков на странице" onchange="this.form.submit()">
+                    <option th:each="sz : ${pageSizes}" th:value="${sz}" th:text="${sz} + ' на стр.'" th:selected="${runsPage.size == sz}"></option>
+                </select>
+            </form>
+        </div>
+        <div class="card">
+            <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+                <thead><tr><th>№</th><th>Профиль</th><th>Статус</th><th>Поставлен</th><th>Длительность</th><th>Итог</th><th class="text-end">В очередь</th></tr></thead>
+                <tbody>
+                <tr th:if="${history.isEmpty()}"><td colspan="7"><div class="empty-state"><i class="bi bi-inbox"></i>
+                    <span th:text="${runStatus != null} ? 'Нет запусков с выбранным статусом' : 'Запусков ещё не было'">Запусков ещё не было</span>
+                    <div class="mt-2" th:if="${runStatus != null}">
+                        <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id},size=${runsPage.size})} + '#runs'">Сбросить фильтр</a>
                     </div>
-                </td>
-            </tr></tbody></table></div></div>
+                </div></td></tr>
+                <tr th:each="r : ${history}" class="run-row" th:attr="data-href=@{/runs/{id}(id=${r.id})}">
+                    <td class="text-nowrap"><a class="fw-semibold" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id}"></a></td>
+                    <td class="small">
+                        <span class="badge text-bg-light border text-wrap text-start"
+                              th:if="${r.request != null and r.request.get('loadProfileName') != null}"
+                              th:text="${r.request.get('loadProfileName')}"></span>
+                        <span class="text-muted" th:unless="${r.request != null and r.request.get('loadProfileName') != null}">—</span>
+                    </td>
+                    <td class="text-nowrap"><span class="badge" th:classappend="${r.status.name() == 'FINISHED'} ? 'text-bg-success' : (${r.status.name() == 'FAILED' or r.status.name() == 'ABORTED'} ? 'text-bg-danger' : 'text-bg-primary')" th:text="${fmt.runStatus(r.status.name())}"></span></td>
+                    <td class="text-muted small text-nowrap" th:text="${#temporals.format(r.queuedAt, 'dd.MM.yyyy HH:mm')}"></td>
+                    <td class="text-nowrap small" th:text="${r.startedAt != null and r.finishedAt != null} ? ${T(java.time.Duration).between(r.startedAt, r.finishedAt).toMinutes()} + ' мин' : '—'"></td>
+                    <td class="small" th:text="${r.conclusion} ?: '—'"></td>
+                    <td class="text-end text-nowrap">
+                        <div class="btn-group btn-group-sm">
+                            <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="d-inline m-0">
+                                <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Добавить прогон в конец очереди">
+                                    <i class="bi bi-arrow-repeat"></i>
+                                </button>
+                            </form>
+                            <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split py-0 px-1" data-bs-toggle="dropdown" aria-expanded="false" title="Позиция в очереди">
+                                <span class="visually-hidden">Позиция</span>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='front')}" method="post" class="m-0">
+                                        <button type="submit" class="dropdown-item small">
+                                            <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
+                                        </button>
+                                    </form>
+                                </li>
+                                <li>
+                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="m-0">
+                                        <button type="submit" class="dropdown-item small">
+                                            <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
+                                        </button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </div>
+                    </td>
+                </tr></tbody></table></div>
+            <div class="card-footer bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2"
+                 th:if="${runsPage.totalPages > 1}">
+                <span class="small text-muted"
+                      th:text="'Страница ' + (${runsPage.number} + 1) + ' из ' + ${runsPage.totalPages} + ' · всего запусков: ' + ${runsPage.totalElements}"></span>
+                <nav aria-label="Пагинация запусков скрипта">
+                    <ul class="pagination pagination-sm mb-0">
+                        <li class="page-item" th:classappend="${runsPage.first} ? 'disabled'">
+                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=0,size=${runsPage.size},status=${runStatus})} + '#runs'" title="Первая страница" aria-label="Первая">«</a>
+                        </li>
+                        <li class="page-item" th:classappend="${!runsPage.hasPrevious()} ? 'disabled'">
+                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.number > 0 ? runsPage.number - 1 : 0},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Предыдущая страница" aria-label="Назад">‹</a>
+                        </li>
+                        <li class="page-item" th:each="p : ${pageNumbers}"
+                            th:classappend="${p == -1} ? 'disabled' : (${p == runsPage.number} ? 'active' : '')">
+                            <span class="page-link" th:if="${p == -1}">…</span>
+                            <a class="page-link" th:if="${p != -1}"
+                               th:href="@{/scripts/{id}(id=${script.id},page=${p},size=${runsPage.size},status=${runStatus})} + '#runs'"
+                               th:text="${p + 1}"></a>
+                        </li>
+                        <li class="page-item" th:classappend="${!runsPage.hasNext()} ? 'disabled'">
+                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.number + 1},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Следующая страница" aria-label="Вперёд">›</a>
+                        </li>
+                        <li class="page-item" th:classappend="${runsPage.last} ? 'disabled'">
+                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.totalPages - 1},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Последняя страница" aria-label="Последняя">»</a>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
     </div>
 
     <!-- ============ Версии ============ -->
@@ -214,8 +271,8 @@
                 });
             }
             function fromHash() { show(location.hash === '#versions' ? 'versions' : 'overview'); }
-            if (links.overview) links.overview.addEventListener('click', function (e) { e.preventDefault(); history.replaceState(null, '', location.pathname); show('overview'); });
-            if (links.versions) links.versions.addEventListener('click', function (e) { e.preventDefault(); history.replaceState(null, '', '#versions'); show('versions'); });
+            if (links.overview) links.overview.addEventListener('click', function (e) { e.preventDefault(); history.replaceState(null, '', location.pathname + location.search); show('overview'); });
+            if (links.versions) links.versions.addEventListener('click', function (e) { e.preventDefault(); history.replaceState(null, '', location.pathname + location.search + '#versions'); show('versions'); });
             window.addEventListener('hashchange', fromHash);
             fromHash();
 

@@ -42,6 +42,8 @@ public class LoadForm {
      * и применяются ко всем профилям (40 профилей наследуют общие параметры из одного места).
      */
     @JsonIgnore
+    private boolean baseConfigSubmitted;
+    @JsonIgnore
     private boolean baseProfileActive;
     @JsonIgnore
     private boolean baseOverrideEnv = true;

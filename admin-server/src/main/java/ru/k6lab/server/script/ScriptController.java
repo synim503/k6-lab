@@ -114,7 +114,11 @@ public class ScriptController {
     // ------------------------------------------------------------------ скрипт и версии
 
     @GetMapping("/{id}")
-    public String detail(@PathVariable Long id, Model model) {
+    public String detail(@PathVariable Long id,
+                         @RequestParam(defaultValue = "0") int page,
+                         @RequestParam(defaultValue = "20") int size,
+                         @RequestParam(required = false) ru.k6lab.core.runstate.RunStatus status,
+                         Model model) {
         Script s = service.get(id);
         model.addAttribute("script", s);
         var versionList = service.versionsOf(id);
@@ -129,9 +133,50 @@ public class ScriptController {
         model.addAttribute("loadDefined", ops.stream().anyMatch(LoadOperation::isEnabled));
         model.addAttribute("profiles", profiles.list(id));
         model.addAttribute("running", runningScriptIds().contains(id));
-        model.addAttribute("history", runs.search(id, null, 20));
+
+        int normalizedSize = switch (size) {
+            case 10, 20, 50, 100 -> size;
+            default -> Math.max(5, Math.min(size, 100));
+        };
+        var runsPage = runs.searchPage(id, status, page, normalizedSize);
+        var latestList = runs.search(id, null, 1);
+        model.addAttribute("runsPage", runsPage);
+        model.addAttribute("history", runsPage.getContent());
+        model.addAttribute("latestRun", latestList.isEmpty() ? null : latestList.get(0));
+        model.addAttribute("runStatus", status);
+        model.addAttribute("runStatuses", ru.k6lab.core.runstate.RunStatus.values());
+        model.addAttribute("pageSizes", List.of(10, 20, 50, 100));
+        model.addAttribute("pageNumbers", buildPageWindow(runsPage.getNumber(), runsPage.getTotalPages()));
         model.addAttribute("fmt", new ru.k6lab.server.result.ReportFormat());
         return "scripts/detail";
+    }
+
+    /** Компактное окно номеров страниц (0-based; -1 обозначает пропуск «…»). */
+    private static List<Integer> buildPageWindow(int current, int total) {
+        if (total <= 1) {
+            return List.of();
+        }
+        List<Integer> out = new java.util.ArrayList<>();
+        if (total <= 9) {
+            for (int i = 0; i < total; i++) {
+                out.add(i);
+            }
+            return out;
+        }
+        out.add(0);
+        int start = Math.max(1, current - 2);
+        int end = Math.min(total - 2, current + 2);
+        if (start > 1) {
+            out.add(-1);
+        }
+        for (int i = start; i <= end; i++) {
+            out.add(i);
+        }
+        if (end < total - 2) {
+            out.add(-1);
+        }
+        out.add(total - 1);
+        return out;
     }
 
     /** Скрипты, у которых сейчас есть выполняющийся или ожидающий запуск. */

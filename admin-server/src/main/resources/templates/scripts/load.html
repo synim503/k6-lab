@@ -68,6 +68,7 @@
         <div class="card mb-3 border-primary-subtle bg-light-subtle" id="ld-base-profile-box" th:if="${!profiles.isEmpty()}">
             <div class="card-body py-2 px-3">
                 <th:block th:if="${loadedProfileId == null}">
+                    <input type="hidden" name="baseConfigSubmitted" value="true">
                     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
                         <div class="d-flex flex-wrap align-items-center gap-2">
                             <span class="badge text-bg-primary"><i class="bi bi-layers-half me-1"></i>Базовый профиль скрипта</span>
@@ -589,10 +590,28 @@
 
         <!-- Липкая панель сохранения -->
         <div class="sticky-actions">
-            <button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить нагрузку</button>
-            <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
-            <span class="dirty-flag"><i class="bi bi-circle-fill" style="font-size:.5rem"></i>Есть несохранённые изменения</span>
-            <span class="cb-kbd-hint d-none d-md-inline"><kbd>Ctrl</kbd>+<kbd>S</kbd> — сохранить нагрузку</span>
+            <th:block th:if="${loadedProfileId != null}">
+                <button type="submit" class="btn btn-primary" id="ld-primary-save" formnovalidate
+                        th:formaction="@{/scripts/{id}/load/profile(id=${script.id})}"
+                        data-save-profile="true">
+                    <i class="bi bi-save me-1"></i>Сохранить профиль «<span th:text="${loadedProfile}"></span>»
+                </button>
+                <button type="submit" class="btn btn-outline-secondary"
+                        title="Скопировать параметры открытого профиля в базовую нагрузку скрипта">
+                    <i class="bi bi-check-lg me-1"></i>Записать в базовую нагрузку
+                </button>
+                <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
+                <span class="dirty-flag"><i class="bi bi-circle-fill" style="font-size:.5rem"></i>Есть несохранённые изменения</span>
+                <span class="cb-kbd-hint d-none d-md-inline"><kbd>Ctrl</kbd>+<kbd>S</kbd> — сохранить профиль</span>
+            </th:block>
+            <th:block th:if="${loadedProfileId == null}">
+                <button type="submit" class="btn btn-primary" id="ld-primary-save">
+                    <i class="bi bi-check-lg me-1"></i><span th:text="${!profiles.isEmpty()} ? 'Сохранить базовую нагрузку' : 'Сохранить нагрузку'">Сохранить нагрузку</span>
+                </button>
+                <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
+                <span class="dirty-flag"><i class="bi bi-circle-fill" style="font-size:.5rem"></i>Есть несохранённые изменения</span>
+                <span class="cb-kbd-hint d-none d-md-inline"><kbd>Ctrl</kbd>+<kbd>S</kbd> — сохранить нагрузку</span>
+            </th:block>
         </div>
     </form>
 

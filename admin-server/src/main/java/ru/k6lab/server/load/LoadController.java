@@ -87,7 +87,7 @@ public class LoadController {
                     model.addAttribute("formDirty", true);
                     model.addAttribute("info", "Открыт профиль «" + p.get().name() + "»"
                             + (f.isBaseProfileActive() ? " (общие параметры применены из базового профиля скрипта)" : "")
-                            + ". В нагрузку скрипта он попадёт после «Сохранить нагрузку».");
+                            + ". Изменения сохраняются в этот профиль кнопкой «Сохранить профиль» внизу или вверху страницы.");
                 } catch (IllegalArgumentException e) {
                     model.addAttribute("error", "Профиль «" + p.get().name() + "» не открывается: " + e.getMessage());
                 }
@@ -118,6 +118,7 @@ public class LoadController {
             if (name.isEmpty() || name.length() > 120) {
                 throw new IllegalArgumentException("Название профиля: от 1 до 120 символов");
             }
+            java.util.Map<String, String> parsedEnv = LoadForm.parseKv(f.getEnvText());
             f.getOps().removeIf(LoadForm.OpForm::blank);
             f.getOps().forEach(LoadForm.OpForm::parseScenario); // ошибка в JSON параметров сценария - сразу понятным сообщением
             if (f.getOps().stream().noneMatch(LoadForm.OpForm::isEnabled)) {
@@ -126,10 +127,19 @@ public class LoadController {
             LoadForm toStore = LoadJson.fromJson(LoadJson.toJson(f));
             var saved = profiles.save(id, name, LoadJson.toJson(toStore), user == null ? "system" : user.getName());
             savedProfileId = saved.id();
-            model.addAttribute("info", (saved.updated() ? "Профиль «" + name + "» обновлён" : "Профиль «" + name + "» сохранён"));
+            var script = scripts.get(id);
+            load.readBaseConfigIntoForm(script, f);
+            String msg = saved.updated() ? "Профиль «" + name + "» обновлён" : "Профиль «" + name + "» сохранён";
+            if (f.isBaseProfileActive() && f.isBaseOverrideEnv() && script.getEnv() != null && !script.getEnv().isEmpty()) {
+                List<String> overriddenKeys = parsedEnv.keySet().stream().filter(script.getEnv()::containsKey).toList();
+                if (!overriddenKeys.isEmpty()) {
+                    msg += " (переменные " + String.join(", ", overriddenKeys)
+                            + " также заданы в базовом профиле — при запуске базовые значения приоритетнее)";
+                }
+            }
+            model.addAttribute("info", msg);
             model.addAttribute("loadedProfile", name);
             model.addAttribute("loadedProfileId", savedProfileId);
-            model.addAttribute("formDirty", true);
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
         }

@@ -36,6 +36,8 @@ class LoadProfileIT extends AbstractIT {
     @Autowired
     LoadProfileStore profiles;
     @Autowired
+    ru.k6lab.server.run.RunRepository runRepo;
+    @Autowired
     MockMvc mvc;
 
     private static final String SCRIPT = """
@@ -140,5 +142,90 @@ class LoadProfileIT extends AbstractIT {
         mvc.perform(post("/scripts/" + s.getId() + "/load/profile/" + copyId + "/rename").with(csrf()).param("name", "Ночной прогон"))
                 .andExpect(status().is3xxRedirection());
         assertThat(profiles.find(s.getId(), copyId)).get().extracting(LoadProfileStore.Profile::name).isEqualTo("Ночной прогон");
+    }
+
+    @Test
+    void bottomSaveButtonTargetsOpenedProfileAndPreservesProfileVariablesWithBaseOverrides() throws Exception {
+        Script s = script();
+        mvc.perform(saveProfile(s, "Стрим-10", 30, "BATCH=10\nSTREAMS=5")).andExpect(status().isOk());
+        long pid = profiles.list(s.getId()).get(0).id();
+
+        // Включаем базовый профиль с общей переменной STAND=prod
+        LoadForm baseForm = load.toForm(s.getId());
+        baseForm.setBaseConfigSubmitted(true);
+        baseForm.setBaseProfileActive(true);
+        baseForm.setBaseOverrideEnv(true);
+        baseForm.setEnvText("STAND=prod");
+        load.save(s.getId(), baseForm);
+
+        // Открываем профиль: нижняя основная кнопка сохранения должна вести на /load/profile,
+        // а переменные должны объединять базовые (STAND=prod) и собственные переменные профиля (BATCH=10, STREAMS=5)
+        String html = mvc.perform(get("/scripts/" + s.getId() + "/load").param("profile", String.valueOf(pid)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(html)
+                .contains("id=\"ld-primary-save\"")
+                .contains("formaction=\"/scripts/" + s.getId() + "/load/profile\"")
+                .contains("Сохранить профиль")
+                .contains("STAND=prod")
+                .contains("BATCH=10")
+                .contains("STREAMS=5");
+
+        // Сохраняем обновлённую переменную профиля через POST /load/profile и проверяем, что она сохранилась
+        mvc.perform(saveProfile(s, "Стрим-10", 35, "BATCH=20\nSTREAMS=8\nCUSTOM_FLAG=yes")).andExpect(status().isOk());
+        var built = load.fromProfile(s.getId(), pid);
+        assertThat(built.env())
+                .containsEntry("STAND", "prod")
+                .containsEntry("BATCH", "20")
+                .containsEntry("STREAMS", "8")
+                .containsEntry("CUSTOM_FLAG", "yes");
+    }
+
+    @Test
+    void scriptDetailPaginatesRunsAndFiltersByStatus() throws Exception {
+        Script s = script();
+        long verId = scripts.latest(s.getId()).orElseThrow().getId();
+        java.util.List<Long> createdIds = new java.util.ArrayList<>();
+        for (int i = 1; i <= 12; i++) {
+            ru.k6lab.server.run.Run r = new ru.k6lab.server.run.Run();
+            r.setScriptId(s.getId());
+            r.setScriptVersionId(verId);
+            r.setScriptName(s.getName());
+            r.setStatus(i % 4 == 0 ? ru.k6lab.core.runstate.RunStatus.FAILED : ru.k6lab.core.runstate.RunStatus.FINISHED);
+            r.setQueuedAt(java.time.Instant.now().minusSeconds((13 - i) * 60L));
+            r.setRequest(java.util.Map.of("loadProfileName", "Профиль #" + i));
+            createdIds.add(runRepo.save(r).getId());
+        }
+        long oldestId = createdIds.get(0);
+        long newestId = createdIds.get(createdIds.size() - 1);
+
+        // Страница 0 (size=10): показаны 10 последних, есть пагинация «Страница 1 из 2»
+        String page0 = mvc.perform(get("/scripts/" + s.getId()).param("page", "0").param("size", "10"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(page0)
+                .contains("показано 1–10 из 12")
+                .contains("Страница 1 из 2")
+                .contains("#" + newestId)
+                .contains("Профиль #12")
+                .doesNotContain("/runs/" + oldestId + "\"");
+
+        // Страница 1 (size=10): показаны 2 старых запуска (включая oldestId), но карточка «Последний запуск» всё ещё показывает newestId
+        String page1 = mvc.perform(get("/scripts/" + s.getId()).param("page", "1").param("size", "10"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(page1)
+                .contains("показано 11–12 из 12")
+                .contains("Страница 2 из 2")
+                .contains("#" + oldestId)
+                .contains("#" + newestId);
+
+        // Фильтр по статусу FAILED: 3 запуска из 12
+        String failedOnly = mvc.perform(get("/scripts/" + s.getId()).param("status", "FAILED").param("size", "10"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(failedOnly)
+                .contains("показано 1–3 из 3")
+                .contains("Профиль #12");
     }
 }

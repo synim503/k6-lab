@@ -20,4 +20,10 @@ public interface RunRepository extends JpaRepository<Run, Long> {
     @Query("select r from Run r where (:scriptId is null or r.scriptId = :scriptId) "
             + "and (:status is null or r.status = :status) order by r.id desc")
     List<Run> search(Long scriptId, RunStatus status, org.springframework.data.domain.Pageable page);
+
+    @Query(value = "select r from Run r where (:scriptId is null or r.scriptId = :scriptId) "
+            + "and (:status is null or r.status = :status) order by r.id desc",
+            countQuery = "select count(r) from Run r where (:scriptId is null or r.scriptId = :scriptId) "
+            + "and (:status is null or r.status = :status)")
+    org.springframework.data.domain.Page<Run> searchPage(Long scriptId, RunStatus status, org.springframework.data.domain.Pageable page);
 }

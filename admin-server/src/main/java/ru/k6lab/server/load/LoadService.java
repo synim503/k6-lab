@@ -275,13 +275,15 @@ public class LoadService {
         Map<String, Object> sc = script.getSuccessCriteria() == null
                 ? new java.util.LinkedHashMap<>()
                 : new java.util.LinkedHashMap<>(script.getSuccessCriteria());
-        sc.put("baseProfileActive", f.isBaseProfileActive());
-        sc.put("baseOverrideEnv", f.isBaseOverrideEnv());
-        sc.put("baseOverrideStop", f.isBaseOverrideStop());
-        sc.put("baseOverrideSla", f.isBaseOverrideSla());
-        sc.put("baseOverrideWarmup", f.isBaseOverrideWarmup());
-        sc.put("baseOverrideData", f.isBaseOverrideData());
-        sc.put("baseOverrideGenerators", f.isBaseOverrideGenerators());
+        if (f.isBaseConfigSubmitted() || f.isBaseProfileActive() || !sc.containsKey("baseProfileActive")) {
+            sc.put("baseProfileActive", f.isBaseProfileActive());
+            sc.put("baseOverrideEnv", f.isBaseOverrideEnv());
+            sc.put("baseOverrideStop", f.isBaseOverrideStop());
+            sc.put("baseOverrideSla", f.isBaseOverrideSla());
+            sc.put("baseOverrideWarmup", f.isBaseOverrideWarmup());
+            sc.put("baseOverrideData", f.isBaseOverrideData());
+            sc.put("baseOverrideGenerators", f.isBaseOverrideGenerators());
+        }
         String warmDur = f.getBaseWarmupDuration() == null ? "" : f.getBaseWarmupDuration().strip();
         if (warmDur.isEmpty()) {
             warmDur = extractWarmupDurationFromOps(f.getOps());
@@ -383,8 +385,10 @@ public class LoadService {
         if (profileForm.isBaseOverrideGenerators()) {
             profileForm.setGeneratorCount(script.getGeneratorCount());
         }
-        if (profileForm.isBaseOverrideEnv()) {
-            profileForm.setEnvText(LoadForm.formatKv(script.getEnv()));
+        if (profileForm.isBaseOverrideEnv() && script.getEnv() != null && !script.getEnv().isEmpty()) {
+            Map<String, String> mergedEnv = new java.util.LinkedHashMap<>(LoadForm.parseKv(profileForm.getEnvText()));
+            mergedEnv.putAll(script.getEnv()); // базовые переменные всегда приоритетнее, а уникальные переменные профиля сохраняются
+            profileForm.setEnvText(LoadForm.formatKv(mergedEnv));
         }
         if (profileForm.isBaseOverrideStop()) {
             profileForm.setStop(LoadForm.StopForm.of(script.getStopCriteria()));
