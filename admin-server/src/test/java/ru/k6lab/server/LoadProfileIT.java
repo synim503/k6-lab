@@ -36,6 +36,8 @@ class LoadProfileIT extends AbstractIT {
     @Autowired
     LoadProfileStore profiles;
     @Autowired
+    ru.k6lab.server.load.RunPlanner planner;
+    @Autowired
     ru.k6lab.server.run.RunRepository runRepo;
     @Autowired
     MockMvc mvc;
@@ -227,5 +229,117 @@ class LoadProfileIT extends AbstractIT {
         assertThat(failedOnly)
                 .contains("показано 1–3 из 3")
                 .contains("Профиль #12");
+    }
+
+    @Test
+    void disabledOperationInHtmlFormIsNotSavedInBaseOrProfile() throws Exception {
+        Script s = script();
+        String sc = "{\"rate\":10,\"timeUnit\":\"1s\",\"duration\":\"3m\",\"preAllocatedVUs\":2,\"maxVUs\":10}";
+
+        // 0. Проверяем реальный HTML формы /load — должны быть hidden-маркеры _ops[i].enabled
+        String loadHtml = mvc.perform(get("/scripts/" + s.getId() + "/load"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(loadHtml)
+                .contains("name=\"_ops[0].enabled\"")
+                .contains("name=\"ops[0].enabled\"")
+                .contains("name=\"_ops[1].enabled\"")
+                .contains("name=\"ops[1].enabled\"");
+
+        // 1. Выключаем ops[1], оставляем ops[0] (база)
+        mvc.perform(post("/scripts/" + s.getId() + "/load").with(csrf())
+                        .param("_ops[0].enabled", "on").param("ops[0].enabled", "true")
+                        .param("ops[0].execFn", "work").param("ops[0].name", "work")
+                        .param("ops[0].executor", "constant-arrival-rate").param("ops[0].scenarioJson", sc)
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("_ops[1].enabled", "on")
+                        .param("ops[1].execFn", "other").param("ops[1].name", "other")
+                        .param("ops[1].executor", "constant-arrival-rate").param("ops[1].scenarioJson", sc)
+                        .param("ops[1].slaPercentile", "95").param("ops[1].slaThresholdMs", "800").param("ops[1].maxErrorPct", "1"))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(load.activeOperations(s.getId()))
+                .extracting(ru.k6lab.server.load.LoadOperation::getName)
+                .containsExactly("work");
+        var basePlan1 = planner.plan(s.getId(), 1);
+        assertThat(basePlan1.config().path("scenarios").has("work")).isTrue();
+        assertThat(basePlan1.config().path("scenarios").has("other")).isFalse();
+
+        // 2. Выключаем ops[0], оставляем ops[1] (база)
+        mvc.perform(post("/scripts/" + s.getId() + "/load").with(csrf())
+                        .param("_ops[0].enabled", "on")
+                        .param("ops[0].execFn", "work").param("ops[0].name", "work")
+                        .param("ops[0].executor", "constant-arrival-rate").param("ops[0].scenarioJson", sc)
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("_ops[1].enabled", "on").param("ops[1].enabled", "true")
+                        .param("ops[1].execFn", "other").param("ops[1].name", "other")
+                        .param("ops[1].executor", "constant-arrival-rate").param("ops[1].scenarioJson", sc)
+                        .param("ops[1].slaPercentile", "95").param("ops[1].slaThresholdMs", "800").param("ops[1].maxErrorPct", "1"))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(load.activeOperations(s.getId()))
+                .extracting(ru.k6lab.server.load.LoadOperation::getName)
+                .containsExactly("other");
+        var basePlan2 = planner.plan(s.getId(), 1);
+        assertThat(basePlan2.config().path("scenarios").has("other")).isTrue();
+        assertThat(basePlan2.config().path("scenarios").has("work")).isFalse();
+
+        // 3. Сохраняем профиль с выключенным ops[0] (work) и включённым ops[1] (other)
+        mvc.perform(post("/scripts/" + s.getId() + "/load/profile").with(csrf())
+                        .param("profileName", "ТолькоOther")
+                        .param("_ops[0].enabled", "on")
+                        .param("ops[0].execFn", "work").param("ops[0].name", "work")
+                        .param("ops[0].executor", "constant-arrival-rate").param("ops[0].scenarioJson", sc)
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("_ops[1].enabled", "on").param("ops[1].enabled", "true")
+                        .param("ops[1].execFn", "other").param("ops[1].name", "other")
+                        .param("ops[1].executor", "constant-arrival-rate").param("ops[1].scenarioJson", sc)
+                        .param("ops[1].slaPercentile", "95").param("ops[1].slaThresholdMs", "800").param("ops[1].maxErrorPct", "1"))
+                .andExpect(status().isOk());
+
+        long pid = profiles.list(s.getId()).get(0).id();
+        var built = load.fromProfile(s.getId(), pid);
+        assertThat(built.ops())
+                .extracting(ru.k6lab.server.load.LoadOperation::getName)
+                .containsExactly("other");
+        var profPlan = planner.plan(s.getId(), 1, built);
+        assertThat(profPlan.config().path("scenarios").has("other")).isTrue();
+        assertThat(profPlan.config().path("scenarios").has("work")).isFalse();
+
+        // 4. После syncBaseToAllProfiles (применение базы ко всем профилям) выключенный work НЕ должен включиться!
+        load.syncBaseToAllProfiles(s.getId(), "admin");
+        var builtAfterSync = load.fromProfile(s.getId(), pid);
+        assertThat(builtAfterSync.ops())
+                .extracting(ru.k6lab.server.load.LoadOperation::getName)
+                .containsExactly("other");
+
+        // 5. На странице открытого профиля кнопка «Запустить профиль» в шапке ведёт именно на этот профиль (?profile=pid),
+        // чтобы пользователь не запустил случайно базовую нагрузку с ещё включёнными операциями
+        String profLoadHtml = mvc.perform(get("/scripts/" + s.getId() + "/load").param("profile", String.valueOf(pid)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(profLoadHtml)
+                .contains("/scripts/" + s.getId() + "/run?profile=" + pid)
+                .contains("Запустить профиль");
+
+        // 6. Снятие галочки stepSla у кастомной метрики Prometheus сохраняет false (благодаря скрытому маркеру _stop.customChecks[0].stepSla)
+        mvc.perform(post("/scripts/" + s.getId() + "/load").with(csrf())
+                        .param("_ops[0].enabled", "on").param("ops[0].enabled", "true")
+                        .param("ops[0].execFn", "work").param("ops[0].name", "work")
+                        .param("ops[0].executor", "constant-arrival-rate").param("ops[0].scenarioJson", sc)
+                        .param("ops[0].slaPercentile", "95").param("ops[0].slaThresholdMs", "800").param("ops[0].maxErrorPct", "1")
+                        .param("stop.customChecks[0].name", "CPU")
+                        .param("stop.customChecks[0].promql", "up")
+                        .param("stop.customChecks[0].cmp", "LTE")
+                        .param("stop.customChecks[0].threshold", "80")
+                        .param("stop.customChecks[0].unit", "%")
+                        .param("_stop.customChecks[0].stepSla", "on")
+                        .param("stop.customChecks[0].autoStop", "true"))
+                .andExpect(status().is3xxRedirection());
+
+        var checks = ru.k6lab.server.load.LoadCriteria.customChecks(scripts.get(s.getId()).getStopCriteria());
+        assertThat(checks).hasSize(1);
+        assertThat(checks.get(0).stepSla()).isFalse();
+        assertThat(checks.get(0).autoStop()).isTrue();
     }
 }

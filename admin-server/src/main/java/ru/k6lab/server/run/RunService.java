@@ -78,8 +78,22 @@ public class RunService {
         }
         com.fasterxml.jackson.databind.node.ObjectNode copy = config.deepCopy();
         pct.forEach((op, p) -> {
-            if (p != null && copy.path("scenarios").path(op) instanceof com.fasterxml.jackson.databind.node.ObjectNode sc) {
-                ru.k6lab.core.k6config.ScenarioScaler.scale(sc, p / 100.0);
+            if (p != null && copy.path("scenarios") instanceof com.fasterxml.jackson.databind.node.ObjectNode scenarios
+                    && scenarios.path(op) instanceof com.fasterxml.jackson.databind.node.ObjectNode sc) {
+                if (p <= 0) {
+                    scenarios.remove(op);
+                    if (copy.path("thresholds") instanceof com.fasterxml.jackson.databind.node.ObjectNode thr) {
+                        List<String> drop = new ArrayList<>();
+                        thr.fieldNames().forEachRemaining(k -> {
+                            if (k.contains("scenario:" + op + "}") || k.contains("scenario:" + op + ",")) {
+                                drop.add(k);
+                            }
+                        });
+                        drop.forEach(thr::remove);
+                    }
+                } else {
+                    ru.k6lab.core.k6config.ScenarioScaler.scale(sc, p / 100.0);
+                }
             }
         });
         return copy;
@@ -191,7 +205,11 @@ public class RunService {
                 }
             }
         }
-        run.setK6Config(ov != null && ov.scalesLoad() ? scaledConfig(plan.config(), ov.intensityPct()) : plan.config());
+        JsonNode effectiveConfig = ov != null && ov.scalesLoad() ? scaledConfig(plan.config(), ov.intensityPct()) : plan.config();
+        if (effectiveConfig != null && effectiveConfig.path("scenarios").isEmpty()) {
+            throw new IllegalArgumentException("Все операции имеют нулевую интенсивность — нагрузки не будет");
+        }
+        run.setK6Config(effectiveConfig);
         run.setScriptVersionId(plan.version().getId());
         run.setSnapshot(MAPPER.convertValue(buildSnapshot(plan, ov, built), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
         }));
@@ -210,7 +228,7 @@ public class RunService {
             // цель интенсивности в итогах - с учётом процента запуска по расписанию
             double f = ov == null || ov.intensityPct() == null || ov.intensityPct().get(o.getName()) == null ? 1 : ov.intensityPct().get(o.getName()) / 100.0;
             ops.add(new RunSnapshot.OpInfo(o.getName(), o.getExecFn(), o.getRatePerSec() * f, o.getExpectedDurationSec(),
-                    o.getSlaPercentile(), o.getSlaThresholdMs(), o.getMaxErrorPct(), o.getFailureSource().name(), o.isEnabled(),
+                    o.getSlaPercentile(), o.getSlaThresholdMs(), o.getMaxErrorPct(), o.getFailureSource().name(), o.isEnabled() && f > 0,
                     ru.k6lab.core.k6config.K6ConfigGenerator.warmupRatePerSec(o.toSpec()) * f));
         }
         List<RunSnapshot.StepInfo> steps = plan.steps().stream()

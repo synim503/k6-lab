@@ -1737,6 +1737,7 @@
             var c = row.querySelector('.ld-cc-cmp'); if (c) { c.name = p + '.cmp'; }
             var t = row.querySelector('.ld-cc-thr'); if (t) { t.name = p + '.threshold'; }
             var u = row.querySelector('.ld-cc-unit'); if (u) { u.name = p + '.unit'; }
+            var sh = row.querySelector('.ld-cc-sla-h'); if (sh) { sh.name = '_' + p + '.stepSla'; }
             var s = row.querySelector('.ld-cc-sla'); if (s) { s.name = p + '.stepSla'; }
             var a = row.querySelector('.ld-cc-stop'); if (a) { a.name = p + '.autoStop'; }
         });
@@ -1768,6 +1769,7 @@
                 '</div>' +
                 '<div class="col-md-3 d-flex align-items-center justify-content-end gap-2">' +
                     '<div class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">' +
+                        '<input type="hidden" class="ld-cc-sla-h" name="_stop.customChecks[' + idx + '].stepSla" value="on">' +
                         '<input class="form-check-input ld-cc-sla" type="checkbox" value="true" name="stop.customChecks[' + idx + '].stepSla"' + (p.stepSla !== false ? ' checked' : '') + '>' +
                         '<label class="form-check-label small">SLA отчёта</label>' +
                     '</div>' +

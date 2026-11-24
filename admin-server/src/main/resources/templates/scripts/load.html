@@ -531,6 +531,7 @@
                                 </div>
                                 <div class="col-md-3 d-flex align-items-center justify-content-end gap-2">
                                     <div class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">
+                                        <input type="hidden" class="ld-cc-sla-h" th:name="|_stop.customChecks[${st.index}].stepSla|" value="on">
                                         <input class="form-check-input ld-cc-sla" type="checkbox" value="true"
                                                th:name="|stop.customChecks[${st.index}].stepSla|" th:checked="${cc.stepSla}">
                                         <label class="form-check-label small">SLA отчёта</label>
@@ -577,7 +578,10 @@
                                 </select>
                             </td>
                             <td><input class="form-check-input" type="checkbox" value="true" th:name="|dataFiles[${st.index}].hasHeader|" th:checked="${d.hasHeader}" aria-label="Есть заголовок"></td>
-                            <td><input class="form-check-input" type="checkbox" value="true" th:name="|dataFiles[${st.index}].consumed|" th:checked="${d.consumed}" aria-label="Строки расходуются"></td>
+                            <td>
+                                <input type="hidden" th:name="|_dataFiles[${st.index}].consumed|" value="on">
+                                <input class="form-check-input" type="checkbox" value="true" th:name="|dataFiles[${st.index}].consumed|" th:checked="${d.consumed}" aria-label="Строки расходуются">
+                            </td>
                         </tr>
                         </tbody>
                     </table>

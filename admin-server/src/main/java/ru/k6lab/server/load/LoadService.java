@@ -116,7 +116,7 @@ public class LoadService {
             of.setFailureSource(o.getFailureSource());
             of.setExecutor(o.getExecutor());
             of.setScenario(o.getScenario());
-            of.setEnabled(true);
+            of.setEnabled(o.isEnabled());
             f.getOps().add(of);
         }
         completeWithScriptFunctions(scriptId, f);
