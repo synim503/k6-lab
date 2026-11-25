@@ -301,6 +301,49 @@ class ScheduleGuardIT extends AbstractIT {
     }
 
     @Test
+    void testSshPreservesPartialOutputOnTimeoutAndRunsHostsInParallel() {
+        SshConnector sshMock = mock(SshConnector.class);
+        ScheduleGuardService svc = new ScheduleGuardService(guardStore, prometheusClient, settings, sshMock, sshCredentials, auditService);
+
+        SshConnection c1 = mock(SshConnection.class);
+        SshConnection c2 = mock(SshConnection.class);
+        SshConnection c3 = mock(SshConnection.class);
+        when(sshMock.open(eq("10.0.0.21"), eq(22), any(), any(Duration.class))).thenReturn(c1);
+        when(sshMock.open(eq("10.0.0.22"), eq(22), any(), any(Duration.class))).thenReturn(c2);
+        when(sshMock.open(eq("10.0.0.23"), eq(22), any(), any(Duration.class))).thenReturn(c3);
+
+        when(c1.exec(anyString(), any(Duration.class))).thenAnswer(inv -> {
+            Thread.sleep(300);
+            return new SshConnection.ExecResult(0, "ok-1", "");
+        });
+        when(c2.exec(anyString(), any(Duration.class))).thenAnswer(inv -> {
+            Thread.sleep(300);
+            throw new SshExceptions.CommandTimeout("Таймаут (10 с) выполнения команды",
+                    "step 1 MySudoPass456", "waiting on lock");
+        });
+        when(c3.exec(anyString(), any(Duration.class))).thenAnswer(inv -> {
+            Thread.sleep(300);
+            return new SshConnection.ExecResult(0, "ok-3", "");
+        });
+
+        long started = System.currentTimeMillis();
+        var res = svc.testSsh("10.0.0.21\n10.0.0.22\n10.0.0.23", 22, credId, false, "echo run", 10, "admin");
+        long elapsed = System.currentTimeMillis() - started;
+
+        // 3 хоста по 300 мс параллельно должны уложиться быстрее, чем последовательные 900 мс
+        assertThat(elapsed).isLessThan(850L);
+        assertThat(res.ok()).isFalse();
+        assertThat(res.hosts()).hasSize(3);
+        assertThat(res.hosts().get(0).host()).isEqualTo("10.0.0.21");
+        assertThat(res.hosts().get(1).host()).isEqualTo("10.0.0.22");
+        assertThat(res.hosts().get(1).ok()).isFalse();
+        assertThat(res.hosts().get(1).error()).contains("Таймаут (10 с)");
+        assertThat(res.hosts().get(1).stdout()).contains("step 1").doesNotContain("MySudoPass456");
+        assertThat(res.hosts().get(1).stderr()).contains("waiting on lock");
+        assertThat(res.hosts().get(2).host()).isEqualTo("10.0.0.23");
+    }
+
+    @Test
     @WithMockUser(roles = "ENGINEER")
     void nonAdminCannotModifyOrRunGuards() throws Exception {
         mvc.perform(post("/schedule/guards").with(csrf())

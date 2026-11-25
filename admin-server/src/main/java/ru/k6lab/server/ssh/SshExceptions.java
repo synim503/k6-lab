@@ -17,6 +17,26 @@ public final class SshExceptions {
         }
     }
 
+    /** Превышен таймаут выполнения SSH-команды; сохраняет частичный stdout/stderr, успевший прийти до таймаута. */
+    public static class CommandTimeout extends SshFailure {
+        private final String stdout;
+        private final String stderr;
+
+        public CommandTimeout(String message, String stdout, String stderr) {
+            super(message);
+            this.stdout = stdout == null ? "" : stdout;
+            this.stderr = stderr == null ? "" : stderr;
+        }
+
+        public String stdout() {
+            return stdout;
+        }
+
+        public String stderr() {
+            return stderr;
+        }
+    }
+
     /** Ключ хоста ещё не подтверждён пользователем: нужно показать fingerprint и запросить подтверждение. */
     public static class HostKeyUnconfirmed extends SshFailure {
         private final String host;

@@ -3,6 +3,7 @@ package ru.k6lab.server.ssh;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.core.CoreModuleProperties;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
@@ -52,7 +53,7 @@ public class SshConnector {
                 int jumpPort = credential.jumpPort() == null ? 22 : credential.jumpPort();
                 ClientSession jump = connectAndAuth(credential.jumpHost(), jumpPort, credential.jumpHost(), jumpPort,
                         credential.jump(), timeout, closers);
-                closers.add(() -> jump.close(false).await(3000L));
+                closers.add(() -> jump.close(true).await(1500L));
                 SshdSocketAddress bound = jump.startLocalPortForwarding(
                         new SshdSocketAddress("127.0.0.1", 0), new SshdSocketAddress(host, port));
                 closers.add(() -> jump.stopLocalPortForwarding(bound));
@@ -75,6 +76,10 @@ public class SshConnector {
             throws Exception {
         HostKeyVerifier verifier = new HostKeyVerifier(identityHost, identityPort);
         SshClient client = SshClient.setUpDefaultClient();
+        CoreModuleProperties.IO_CONNECT_TIMEOUT.set(client, timeout);
+        CoreModuleProperties.AUTH_TIMEOUT.set(client, timeout);
+        CoreModuleProperties.IDLE_TIMEOUT.set(client, Duration.ofMinutes(35));
+        CoreModuleProperties.HEARTBEAT_INTERVAL.set(client, Duration.ofSeconds(20));
         client.setServerKeyVerifier(verifier);
         // По умолчанию MINA пробует ключи из ~/.ssh пользователя ОС, под которым работает админка: это и утечка чужих
         // идентичностей на целевые хосты, и исчерпание MaxAuthTries до проверки пароля. Используем только учётку из БД.
@@ -83,11 +88,17 @@ public class SshConnector {
                 org.apache.sshd.client.auth.pubkey.UserAuthPublicKeyFactory.INSTANCE,
                 org.apache.sshd.client.auth.password.UserAuthPasswordFactory.INSTANCE));
         client.start();
-        closers.add(client::stop);
+        closers.add(() -> {
+            try {
+                client.close(true).await(2000L);
+            } finally {
+                client.stop();
+            }
+        });
         try {
             ClientSession session = client.connect(cred.username(), connectHost, connectPort)
                     .verify(timeout).getClientSession();
-            closers.add(() -> session.close(false).await(3000L));
+            closers.add(() -> session.close(true).await(1500L));
             if (cred.authType() == SshCredential.AuthType.KEY) {
                 for (KeyPair kp : loadKeys(cred)) {
                     session.addPublicKeyIdentity(kp);

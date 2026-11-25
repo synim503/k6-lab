@@ -546,7 +546,20 @@
         var gdSshRes = document.getElementById('gd-ssh-result');
         var gdAddAllGens = document.getElementById('gd-add-all-gens');
 
+        var sshAbortCtrl = null;
+        var sshTimerId = null;
+        var sshRunSeq = 0;
+
+        function cancelInFlightSsh() {
+            if (sshTimerId) { clearInterval(sshTimerId); sshTimerId = null; }
+            if (sshAbortCtrl) {
+                try { sshAbortCtrl.abort(); } catch (e) {}
+                sshAbortCtrl = null;
+            }
+        }
+
         function resetTestResults() {
+            cancelInFlightSsh();
             if (gdPromqlRes) { gdPromqlRes.classList.add('d-none'); gdPromqlRes.innerHTML = ''; }
             if (gdSshRes) { gdSshRes.classList.add('d-none'); gdSshRes.innerHTML = ''; }
         }
@@ -578,15 +591,29 @@
             });
         }
 
-        function postFormJson(url, params) {
+        function postFormJson(url, params, signal) {
             var body = new URLSearchParams();
             Object.keys(params).forEach(function (k) {
                 if (params[k] !== undefined && params[k] !== null) { body.append(k, String(params[k])); }
             });
-            var headers = {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'};
+            var headers = {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'Accept': 'application/json'
+            };
             if (csrfToken) { headers['X-CSRF-TOKEN'] = csrfToken; }
-            return fetch(url, {method: 'POST', headers: headers, body: body.toString()}).then(function (r) {
-                if (!r.ok) { throw new Error('HTTP ' + r.status); }
+            var opts = {method: 'POST', credentials: 'same-origin', headers: headers, body: body.toString()};
+            if (signal) { opts.signal = signal; }
+            return fetch(url, opts).then(function (r) {
+                if (!r.ok) {
+                    if (r.status === 504 || r.status === 502) {
+                        throw new Error('HTTP ' + r.status + ' (прокси оборвал ожидание ответа — уменьшите таймаут скрипта или проверьте, не зависает ли команда на сервере)');
+                    }
+                    throw new Error('HTTP ' + r.status);
+                }
+                var ct = (r.headers.get('content-type') || '').toLowerCase();
+                if (ct.indexOf('application/json') < 0) {
+                    throw new Error('Сессия истекла или сервер вернул не JSON — обновите страницу');
+                }
                 return r.json();
             });
         }
@@ -635,23 +662,62 @@
             });
         }
 
+        var gdSshBtnDefaultHtml = gdSshBtn ? gdSshBtn.innerHTML : '';
+
         function runSshTest() {
             if (!gdSshBtn || !gdSshRes) { return; }
+            cancelInFlightSsh();
+            var seq = ++sshRunSeq;
             var url = gdSshBtn.dataset.url;
             var confirmUrl = gdSshBtn.dataset.confirmUrl;
-            var prev = gdSshBtn.innerHTML;
+            var timeoutSec = Math.max(10, Math.min(1800, parseInt(gdTimeout ? gdTimeout.value : '120', 10) || 120));
+            var hostCount = (gdHost ? gdHost.value : '').split(/[\r\n,;\s]+/).filter(Boolean).length || 1;
+            var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            sshAbortCtrl = ctrl;
+            var abortedByUser = false;
+            var abortedByTimeout = false;
+            var startedAt = Date.now();
+
             gdSshBtn.disabled = true;
-            gdSshBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Выполняем SSH…';
+            gdSshBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Выполняем SSH… <span id="gd-ssh-sec">0</span> с';
             gdSshRes.classList.remove('d-none');
-            gdSshRes.innerHTML = '<div class="small text-muted">Подключение и выполнение SSH-скрипта…</div>';
+            gdSshRes.innerHTML = '<div class="d-flex flex-wrap align-items-center gap-2 small text-muted border rounded px-2 py-2 bg-light-subtle">' +
+                '<span class="spinner-border spinner-border-sm text-warning"></span>' +
+                '<span>Выполняем SSH-скрипт (серверов: ' + hostCount + ', таймаут ' + timeoutSec + ' с)… прошло <b id="gd-ssh-sec-box">0</b> с</span>' +
+                '<button type="button" class="btn btn-sm btn-outline-danger py-0 px-2 ms-auto" id="gd-ssh-cancel-btn">Отменить</button>' +
+                '</div>';
+
+            var cancelBtn = document.getElementById('gd-ssh-cancel-btn');
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', function () {
+                    abortedByUser = true;
+                    cancelInFlightSsh();
+                });
+            }
+
+            var clientDeadlineMs = (timeoutSec + 30) * 1000;
+            sshTimerId = setInterval(function () {
+                var elapsedMs = Date.now() - startedAt;
+                var sec = Math.floor(elapsedMs / 1000);
+                var s1 = document.getElementById('gd-ssh-sec');
+                var s2 = document.getElementById('gd-ssh-sec-box');
+                if (s1) { s1.textContent = String(sec); }
+                if (s2) { s2.textContent = String(sec); }
+                if (ctrl && elapsedMs >= clientDeadlineMs) {
+                    abortedByTimeout = true;
+                    cancelInFlightSsh();
+                }
+            }, 1000);
+
             postFormJson(url, {
                 sshHost: gdHost ? gdHost.value : '',
                 sshPort: gdPort ? gdPort.value : '22',
                 sshCredentialId: gdCred ? gdCred.value : '',
                 useSudo: gdSudo && gdSudo.checked ? 'true' : 'false',
                 script: gdScript ? gdScript.value : '',
-                timeoutSec: gdTimeout ? gdTimeout.value : '120'
-            }).then(function (data) {
+                timeoutSec: String(timeoutSec)
+            }, ctrl ? ctrl.signal : null).then(function (data) {
+                if (seq !== sshRunSeq) { return; }
                 var cls = data.ok ? 'alert-success' : 'alert-danger';
                 var icon = data.ok ? 'bi-check-circle-fill' : 'bi-x-octagon-fill';
                 var html = '<div class="alert ' + cls + ' py-2 px-3 mb-2 small">' +
@@ -712,16 +778,36 @@
                     });
                 });
             }).catch(function (err) {
-                gdSshRes.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small">Ошибка сети: ' + esc(err.message) + '</div>';
+                if (seq !== sshRunSeq) { return; }
+                if (abortedByUser) {
+                    gdSshRes.innerHTML = '<div class="alert alert-secondary py-2 px-3 mb-0 small">' +
+                        '<i class="bi bi-slash-circle me-1"></i>Ожидание отменено в браузере. Если команда ещё идёт на сервере, она завершится по таймауту (' + timeoutSec + ' с).</div>';
+                } else if (abortedByTimeout) {
+                    gdSshRes.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small">' +
+                        '<i class="bi bi-hourglass-bottom me-1"></i>Превышено время ожидания ответа от сервера (' + Math.round(clientDeadlineMs / 1000) + ' с). Уменьшите таймаут скрипта и проверьте, не зависает ли команда.</div>';
+                } else {
+                    gdSshRes.innerHTML = '<div class="alert alert-danger py-2 px-3 mb-0 small">Ошибка сети: ' + esc(err && err.message ? err.message : String(err)) + '</div>';
+                }
             }).finally(function () {
+                if (seq !== sshRunSeq) { return; }
+                if (sshTimerId) { clearInterval(sshTimerId); sshTimerId = null; }
+                sshAbortCtrl = null;
                 gdSshBtn.disabled = false;
-                gdSshBtn.innerHTML = prev;
+                gdSshBtn.innerHTML = gdSshBtnDefaultHtml;
             });
         }
 
         if (gdSshBtn && gdSshRes) {
             gdSshBtn.addEventListener('click', runSshTest);
         }
+        guardModalEl.addEventListener('hide.bs.modal', function () {
+            sshRunSeq++;
+            cancelInFlightSsh();
+            if (gdSshBtn) {
+                gdSshBtn.disabled = false;
+                gdSshBtn.innerHTML = gdSshBtnDefaultHtml;
+            }
+        });
 
         function fillGuardForm(g) {
             resetTestResults();

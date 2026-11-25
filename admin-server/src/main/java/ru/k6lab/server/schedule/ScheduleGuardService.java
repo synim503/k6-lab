@@ -458,9 +458,13 @@ public class ScheduleGuardService {
             return new SshTestResult(false, null, 0, "", "", null, "SSH-учётка недоступна: " + e.getMessage(), null, List.of());
         }
         SecretMasker masker = maskerFor(cred);
+        log.info("Тестовый прогон SSH-скрипта (пользователь {}, хостов: {}, sudo={}, timeout={} с)",
+                user, targets.size(), useSudo, tSec);
         long totalStart = System.currentTimeMillis();
         List<HostExecResult> results = executeOnTargets(targets, cred, masker, useSudo, script, Duration.ofSeconds(tSec));
         long totalElapsed = System.currentTimeMillis() - totalStart;
+        log.info("Тестовый прогон SSH-скрипта завершён за {} мс (успешно {}/{})",
+                totalElapsed, results.stream().filter(HostExecResult::ok).count(), results.size());
 
         int okCount = (int) results.stream().filter(HostExecResult::ok).count();
         boolean allOk = okCount == results.size();
@@ -494,28 +498,69 @@ public class ScheduleGuardService {
 
     private List<HostExecResult> executeOnTargets(List<SshTarget> targets, ResolvedCredential cred, SecretMasker masker,
                                                   boolean useSudo, String script, Duration timeout) {
-        List<HostExecResult> out = new ArrayList<>(targets.size());
-        for (SshTarget t : targets) {
-            long started = System.currentTimeMillis();
-            try (SshConnection conn = ssh.open(t.host(), t.port(), cred, SSH_CONNECT_TIMEOUT)) {
-                SshConnection.ExecResult res = useSudo
-                        ? conn.sudo(script, timeout)
-                        : conn.exec("sh -c " + SshConnection.quote(script), timeout);
-                long elapsed = System.currentTimeMillis() - started;
-                String stdout = truncateOutput(res.stdout() == null ? "" : masker.mask(res.stdout()).strip());
-                String stderr = truncateOutput(res.stderr() == null ? "" : masker.mask(res.stderr()).strip());
-                String err = res.ok() ? null : "код выхода " + res.exitCode();
-                out.add(new HostExecResult(t.host(), t.port(), res.ok(), res.exitCode(), elapsed, stdout, stderr, err, null));
-            } catch (SshExceptions.HostKeyUnconfirmed e) {
-                long elapsed = System.currentTimeMillis() - started;
-                out.add(new HostExecResult(t.host(), t.port(), false, null, elapsed, "", "", masker.mask(e.getMessage()), e));
-            } catch (RuntimeException e) {
-                long elapsed = System.currentTimeMillis() - started;
-                String msg = masker.mask(e.getMessage() == null ? e.toString() : e.getMessage());
-                out.add(new HostExecResult(t.host(), t.port(), false, null, elapsed, "", "", msg, null));
+        if (targets.size() <= 1) {
+            List<HostExecResult> out = new ArrayList<>(targets.size());
+            for (SshTarget t : targets) {
+                out.add(executeOnTarget(t, cred, masker, useSudo, script, timeout));
             }
+            return out;
         }
-        return out;
+        int poolSize = Math.min(targets.size(), 8);
+        ExecutorService pool = Executors.newFixedThreadPool(poolSize, r -> {
+            Thread th = new Thread(r, "schedule-guard-ssh");
+            th.setDaemon(true);
+            return th;
+        });
+        try {
+            List<java.util.concurrent.Future<HostExecResult>> futures = new ArrayList<>(targets.size());
+            for (SshTarget t : targets) {
+                futures.add(pool.submit(() -> executeOnTarget(t, cred, masker, useSudo, script, timeout)));
+            }
+            List<HostExecResult> out = new ArrayList<>(targets.size());
+            for (int i = 0; i < targets.size(); i++) {
+                SshTarget t = targets.get(i);
+                try {
+                    out.add(futures.get(i).get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    out.add(new HostExecResult(t.host(), t.port(), false, null, 0, "", "", "Выполнение прервано", null));
+                } catch (java.util.concurrent.ExecutionException e) {
+                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                    String msg = masker.mask(cause.getMessage() == null ? cause.toString() : cause.getMessage());
+                    out.add(new HostExecResult(t.host(), t.port(), false, null, 0, "", "", msg, null));
+                }
+            }
+            return out;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private HostExecResult executeOnTarget(SshTarget t, ResolvedCredential cred, SecretMasker masker,
+                                           boolean useSudo, String script, Duration timeout) {
+        long started = System.currentTimeMillis();
+        try (SshConnection conn = ssh.open(t.host(), t.port(), cred, SSH_CONNECT_TIMEOUT)) {
+            SshConnection.ExecResult res = useSudo
+                    ? conn.sudo(script, timeout)
+                    : conn.exec("sh -c " + SshConnection.quote(script), timeout);
+            long elapsed = System.currentTimeMillis() - started;
+            String stdout = truncateOutput(res.stdout() == null ? "" : masker.mask(res.stdout()).strip());
+            String stderr = truncateOutput(res.stderr() == null ? "" : masker.mask(res.stderr()).strip());
+            String err = res.ok() ? null : "код выхода " + res.exitCode();
+            return new HostExecResult(t.host(), t.port(), res.ok(), res.exitCode(), elapsed, stdout, stderr, err, null);
+        } catch (SshExceptions.HostKeyUnconfirmed e) {
+            long elapsed = System.currentTimeMillis() - started;
+            return new HostExecResult(t.host(), t.port(), false, null, elapsed, "", "", masker.mask(e.getMessage()), e);
+        } catch (SshExceptions.CommandTimeout e) {
+            long elapsed = System.currentTimeMillis() - started;
+            String stdout = truncateOutput(masker.mask(e.stdout()).strip());
+            String stderr = truncateOutput(masker.mask(e.stderr()).strip());
+            return new HostExecResult(t.host(), t.port(), false, null, elapsed, stdout, stderr, masker.mask(e.getMessage()), null);
+        } catch (RuntimeException e) {
+            long elapsed = System.currentTimeMillis() - started;
+            String msg = masker.mask(e.getMessage() == null ? e.toString() : e.getMessage());
+            return new HostExecResult(t.host(), t.port(), false, null, elapsed, "", "", msg, null);
+        }
     }
 
     private static String formatMultiHostOutput(List<HostExecResult> results) {
