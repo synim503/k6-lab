@@ -22,6 +22,8 @@ import java.util.Map;
 @Controller
 public class ScheduleController {
 
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON_MAPPER = new com.fasterxml.jackson.databind.ObjectMapper();
+
     private final ScheduledRunService service;
     private final ScheduleTimelineService timeline;
     private final ScheduleImportService importer;
@@ -185,9 +187,10 @@ public class ScheduleController {
         Map<Long, String> genSummaryById = new LinkedHashMap<>();
         Map<Long, String> envTextById = new LinkedHashMap<>();
         Map<Long, String> pctJsonById = new LinkedHashMap<>();
-        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        Map<String, Integer> durCache = new java.util.HashMap<>();
         for (var it : items) {
-            int durSec = service.durationSecOf(it);
+            String dKey = it.scriptId() + ":" + it.profileId() + ":" + it.generatorIds().size() + ":" + it.generatorCount();
+            int durSec = durCache.computeIfAbsent(dKey, k -> service.durationSecOf(it));
             durationMinById.put(it.id(), Math.max(1, (int) Math.round(durSec / 60.0)));
             if (it.generatorIds().isEmpty()) {
                 int cnt = it.generatorCount() == null ? 1 : it.generatorCount();
@@ -206,7 +209,7 @@ public class ScheduleController {
                 envTextById.put(it.id(), "");
             }
             try {
-                pctJsonById.put(it.id(), it.intensity().isEmpty() ? "" : mapper.writeValueAsString(it.intensity()));
+                pctJsonById.put(it.id(), it.intensity().isEmpty() ? "" : JSON_MAPPER.writeValueAsString(it.intensity()));
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                 pctJsonById.put(it.id(), "");
             }
@@ -215,9 +218,10 @@ public class ScheduleController {
         int totalQueueMin = pending.stream()
                 .mapToInt(it -> durationMinById.getOrDefault(it.id(), 5))
                 .sum() + Math.max(0, pending.size() - 1) * 5;
-        Instant queueFinishAt = pending.isEmpty() ? null
-                : pending.get(pending.size() - 1).runAt()
-                .plusSeconds((long) durationMinById.getOrDefault(pending.get(pending.size() - 1).id(), 5) * 60L);
+        Instant queueFinishAt = pending.stream()
+                .map(it -> it.runAt().plusSeconds((long) durationMinById.getOrDefault(it.id(), 5) * 60L))
+                .max(Instant::compareTo)
+                .orElse(null);
 
         long startedCount = items.stream().filter(i -> i.status() == ScheduledRunStore.Status.STARTED || i.status() == ScheduledRunStore.Status.STARTING).count();
         long failedCount = items.stream().filter(i -> i.status() == ScheduledRunStore.Status.FAILED).count();
@@ -258,7 +262,7 @@ public class ScheduleController {
                 m.put("blockOnFail", g.blockOnFail());
                 gJson.add(m);
             }
-            model.addAttribute("guardsJson", mapper.writeValueAsString(gJson));
+            model.addAttribute("guardsJson", JSON_MAPPER.writeValueAsString(gJson));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             model.addAttribute("guardsJson", "[]");
         }

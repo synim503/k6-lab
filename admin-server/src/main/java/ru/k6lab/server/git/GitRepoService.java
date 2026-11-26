@@ -117,7 +117,17 @@ public class GitRepoService {
     public void delete(Long id) {
         GitRepo r = get(id);
         repo.delete(r);
-        git.evictCache(id);
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            git.evictCache(id);
+                        }
+                    });
+        } else {
+            git.evictCache(id);
+        }
         audit.record("git_repo.delete", "git_repo", id, Map.of("name", r.getName()));
     }
 

@@ -11,7 +11,7 @@
         <h3><span class="icon-tile"><i class="bi bi-activity"></i></span>Запуск #<span th:text="${run.id}"></span></h3>
         <div class="d-flex flex-wrap align-items-center gap-2" th:if="${run.scriptId != null}">
             <div class="btn-group btn-group-sm">
-                <form th:action="@{/runs/{id}/requeue(id=${run.id},position='back')}" method="post" class="d-inline m-0">
+                <form th:action="@{/runs/{id}/requeue(id=${run.id},position='back')}" method="post" class="d-inline m-0" data-ajax="toast">
                     <button type="submit" class="btn btn-sm btn-outline-primary" title="Повторно добавить этот прогон в конец очереди расписания">
                         <i class="bi bi-arrow-repeat me-1"></i>Снова в очередь
                     </button>
@@ -21,14 +21,14 @@
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end">
                     <li>
-                        <form th:action="@{/runs/{id}/requeue(id=${run.id},position='front')}" method="post" class="m-0">
+                        <form th:action="@{/runs/{id}/requeue(id=${run.id},position='front')}" method="post" class="m-0" data-ajax="toast">
                             <button type="submit" class="dropdown-item small">
                                 <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
                             </button>
                         </form>
                     </li>
                     <li>
-                        <form th:action="@{/runs/{id}/requeue(id=${run.id},position='back')}" method="post" class="m-0">
+                        <form th:action="@{/runs/{id}/requeue(id=${run.id},position='back')}" method="post" class="m-0" data-ajax="toast">
                             <button type="submit" class="dropdown-item small">
                                 <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
                             </button>
@@ -93,7 +93,9 @@
             <div class="row g-3" id="system-charts"></div>
         </div>
         <div class="tab-pane fade" id="tab-results">
-            <div id="results-box" class="k6-htmx-target" th:attr="hx-get=@{/runs/{id}/results(id=${run.id})}" hx-trigger="load, refresh" hx-swap="innerHTML">
+            <div id="results-box" class="k6-htmx-target"
+                 th:attr="hx-get=@{/runs/{id}/results(id=${run.id})},hx-trigger=${run.status.terminal} ? 'load, refresh' : 'refresh'"
+                 hx-swap="innerHTML">
                 <div class="text-muted small py-3"><span class="spinner-border spinner-border-sm me-2"></span>Загрузка…</div></div>
         </div>
         <div class="tab-pane fade" id="tab-logs">
@@ -186,13 +188,24 @@
                     }
                     if (h === 'results' && window.htmx) {
                         var box = document.getElementById('results-box');
-                        if (box && box.dataset.needsRefresh === '1') {
+                        var liveRoot = document.getElementById('run-live');
+                        var isFinal = liveRoot && liveRoot.dataset.final === 'true';
+                        if (box && (!isFinal || box.dataset.needsRefresh === '1')) {
                             delete box.dataset.needsRefresh;
                             htmx.trigger(box, 'refresh');
                         }
                     }
                 });
             });
+            setInterval(function () {
+                var pane = document.getElementById('tab-results');
+                var box = document.getElementById('results-box');
+                var liveRoot = document.getElementById('run-live');
+                if (!pane || !pane.classList.contains('active') || !box || !window.htmx) { return; }
+                if (liveRoot && liveRoot.dataset.final === 'true') { return; }
+                if (document.querySelector('.modal.show') || (window.k6IsSelecting && window.k6IsSelecting())) { return; }
+                htmx.trigger(box, 'refresh');
+            }, 15000);
             window.addEventListener('hashchange', openByHash);
             openByHash();
         })();

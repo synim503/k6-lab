@@ -48,10 +48,22 @@ public class StepResultService {
     public static final int SETTLE_SEC = 20;
     /** Минимальная длина окна, при которой ступень вообще оценивается. */
     public static final int MIN_WINDOW_SEC = 10;
+    /** Интервал проверок автостопа по реальному времени и шаг сетки оценки кастомных метрик (секунд). */
+    public static final long CHECK_INTERVAL_SEC = 15L;
     /** Метрики приходят в Prometheus через remote write с задержкой: перед расчётом ждём. */
     static final long WAIT_BEFORE_COMPUTE_SEC = 5;
     /** Дольше этого не ждём, пока Prometheus получит последние сэмплы run. */
     static final long MAX_WAIT_FOR_METRICS_SEC = 90;
+    /** Кеш предварительных итогов во время теста, чтобы частые обновления вкладки не перегружали Prometheus. */
+    static final long PREVIEW_CACHE_TTL_MS = 10_000;
+
+    private record PreviewEntry(ResultData data, long createdMs) {
+    }
+
+    /** Максимум записей в previewCache (защита от утечки, если тест никогда не вызвал RunFinished). */
+    private static final int MAX_PREVIEW_CACHE = 100;
+
+    private final java.util.concurrent.ConcurrentHashMap<Long, PreviewEntry> previewCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final RunService runService;
     private final PrometheusClient prom;
@@ -62,7 +74,7 @@ public class StepResultService {
     private final ru.k6lab.server.script.ScriptService scripts;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
-    private final ExecutorService worker = Executors.newFixedThreadPool(2, r -> {
+    private final java.util.concurrent.ScheduledExecutorService worker = Executors.newScheduledThreadPool(2, r -> {
         Thread t = new Thread(r, "step-results");
         t.setDaemon(true);
         return t;
@@ -91,53 +103,46 @@ public class StepResultService {
     @EventListener
     public void onFinished(RunOrchestrator.RunFinished ev) {
         long runId = ev.runId();
-        worker.submit(() -> {
-            try {
-                TimeUnit.SECONDS.sleep(WAIT_BEFORE_COMPUTE_SEC);
-                awaitMetrics(runId);
-                MDC.put("run_id", String.valueOf(runId));
-                compute(runId);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } catch (RuntimeException e) {
-                log.error("Run {}: не удалось рассчитать итоги", runId, e);
-            } finally {
-                MDC.remove("run_id");
-            }
-        });
+        previewCache.remove(runId);
+        long deadline = System.currentTimeMillis() + (WAIT_BEFORE_COMPUTE_SEC + MAX_WAIT_FOR_METRICS_SEC) * 1000L;
+        worker.schedule(() -> pollAndCompute(runId, deadline, 0), WAIT_BEFORE_COMPUTE_SEC, TimeUnit.SECONDS);
     }
 
     /**
-     * Ждёт, пока Prometheus получит сэмплы до конца теста: задержка remote write бывает больше фиксированной паузы,
-     * и тогда хвост окна ступени пуст, а интенсивность выходит заниженной. Не дольше {@link #MAX_WAIT_FOR_METRICS_SEC}.
+     * Неблокирующе ждёт доставки последних сэмплов в Prometheus (перепланирует себя каждые 3 с без sleep в пуле)
+     * и по готовности/дедлайну рассчитывает и сохраняет итоги. Транзиентные IOException не обрывают ожидание досрочно.
      */
-    private void awaitMetrics(long runId) throws InterruptedException {
-        SettingsService.Prometheus p = settings.prometheus();
-        if (!p.configured()) {
-            return;
-        }
-        Run run = runService.get(runId);
-        Instant finished = run.getFinishedAt();
-        if (finished == null) {
-            return;
-        }
-        long deadline = System.currentTimeMillis() + MAX_WAIT_FOR_METRICS_SEC * 1000;
-        int empty = 0;
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                List<PrometheusClient.Sample> s = prom.query(p, PromQueries.lastSampleTime(names.names(), runId), Instant.now());
-                // последний сэмпл не раньше конца теста (минус интервал отправки k6) - данные дошли
-                if (!s.isEmpty() && Double.isFinite(s.get(0).value()) && s.get(0).value() >= finished.getEpochSecond() - settings.pushIntervalSec()) {
-                    return;
+    private void pollAndCompute(long runId, long deadlineMs, int emptyCount) {
+        MDC.put("run_id", String.valueOf(runId));
+        try {
+            SettingsService.Prometheus p = settings.prometheus();
+            if (p.configured() && System.currentTimeMillis() < deadlineMs) {
+                Run run = runService.get(runId);
+                Instant finished = run.getFinishedAt();
+                if (finished != null) {
+                    try {
+                        List<PrometheusClient.Sample> s = prom.query(p, PromQueries.lastSampleTime(names.names(), runId), Instant.now());
+                        boolean ready = !s.isEmpty() && Double.isFinite(s.get(0).value())
+                                && s.get(0).value() >= finished.getEpochSecond() - settings.pushIntervalSec();
+                        int nextEmpty = s.isEmpty() ? emptyCount + 1 : 0;
+                        if (!ready && nextEmpty < 10 && System.currentTimeMillis() + 3000L < deadlineMs) {
+                            worker.schedule(() -> pollAndCompute(runId, deadlineMs, nextEmpty), 3, TimeUnit.SECONDS);
+                            return;
+                        }
+                    } catch (IOException e) {
+                        log.debug("Run {}: ожидание метрик в Prometheus ({}), повторим через 3 с", runId, e.getMessage());
+                        if (System.currentTimeMillis() + 3000L < deadlineMs) {
+                            worker.schedule(() -> pollAndCompute(runId, deadlineMs, emptyCount), 3, TimeUnit.SECONDS);
+                            return;
+                        }
+                    }
                 }
-                // данных по run нет совсем (метрики не доходят): итоги покажут это сами, ждать 90 с незачем
-                if (s.isEmpty() && ++empty >= 10) {
-                    return;
-                }
-            } catch (IOException | RuntimeException e) {
-                return;
             }
-            TimeUnit.SECONDS.sleep(3);
+            compute(runId);
+        } catch (RuntimeException e) {
+            log.error("Run {}: не удалось рассчитать итоги", runId, e);
+        } finally {
+            MDC.remove("run_id");
         }
     }
 
@@ -166,7 +171,7 @@ public class StepResultService {
         Optional<ResultData> opt = load(runId);
         if (opt.isPresent()) {
             ResultData d = opt.get();
-            if (!needsCustomChecksRecompute(d, expected, vars)) {
+            if (d.prometheusOk() && !needsCustomChecksRecompute(d, expected, vars)) {
                 return d;
             }
         }
@@ -175,13 +180,15 @@ public class StepResultService {
 
     private static boolean needsCustomChecksRecompute(ResultData d, List<StepAnalysis.CustomCheck> expected, Map<String, String> vars) {
         if (expected.isEmpty()) {
-            return false;
+            // если ранее были сохранённые кастомные проверки, а теперь их удалили — пересчитываем
+            return d.steps() != null && d.steps().stream().anyMatch(s -> s.customChecks() != null && !s.customChecks().isEmpty());
         }
         if (d.steps() == null || d.steps().isEmpty()) {
             return true;
         }
         List<String> expSig = expected.stream()
-                .map(c -> CustomChartService.title(c.name(), vars) + "|" + c.promql() + "|" + c.normalizedCmp() + "|" + c.threshold())
+                .map(c -> CustomChartService.title(c.name(), vars) + "|" + c.promql() + "|" + c.normalizedCmp() + "|"
+                        + c.threshold() + "|" + (c.unit() == null ? "" : c.unit()) + "|" + c.stepSla() + "|" + c.autoStop())
                 .toList();
         for (ResultData.StepRow s : d.steps()) {
             List<ResultData.CustomMetricRow> actual = s.customChecks();
@@ -190,7 +197,8 @@ public class StepResultService {
             }
             for (int i = 0; i < actual.size(); i++) {
                 ResultData.CustomMetricRow a = actual.get(i);
-                String actSig = a.name() + "|" + a.promql() + "|" + a.cmp() + "|" + a.threshold();
+                String actSig = a.name() + "|" + a.promql() + "|" + a.cmp() + "|" + a.threshold()
+                        + "|" + (a.unit() == null ? "" : a.unit()) + "|" + a.stepSla() + "|" + a.autoStop();
                 if (!expSig.get(i).equals(actSig)) {
                     return true;
                 }
@@ -218,7 +226,8 @@ public class StepResultService {
                         merged.put(cc.name(), cc);
                     }
                 }
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException e) {
+                log.debug("Не удалось загрузить кастомные проверки скрипта {}: {}", run.getScriptId(), e.toString());
             }
         }
         return List.copyOf(merged.values());
@@ -245,8 +254,35 @@ public class StepResultService {
         return vars;
     }
 
+    /**
+     * Предварительные итоги по уже пройденным и текущей ступеням во время активного запуска (без сохранения в run_result).
+     * Результат кешируется на 10 с (при {@code force = true} пересчитывается сразу).
+     */
+    public ResultData preview(long runId, boolean force) {
+        long nowMs = System.currentTimeMillis();
+        if (!force) {
+            PreviewEntry cached = previewCache.get(runId);
+            if (cached != null && nowMs - cached.createdMs() < PREVIEW_CACHE_TTL_MS) {
+                return cached.data();
+            }
+        }
+        Run run = runService.get(runId);
+        RunSnapshot snap = runService.snapshot(run);
+        ResultData data = build(run, snap);
+        long storedAt = System.currentTimeMillis();
+        if (previewCache.size() >= MAX_PREVIEW_CACHE) {
+            previewCache.entrySet().removeIf(e -> storedAt - e.getValue().createdMs() >= PREVIEW_CACHE_TTL_MS);
+            if (previewCache.size() >= MAX_PREVIEW_CACHE) {
+                previewCache.clear();
+            }
+        }
+        previewCache.put(runId, new PreviewEntry(data, storedAt));
+        return data;
+    }
+
     /** Пересчёт итогов (кнопка «Пересчитать» и автоматически после завершения). */
     public ResultData compute(long runId) {
+        previewCache.remove(runId);
         Run run = runService.get(runId);
         RunSnapshot snap = runService.snapshot(run);
         ResultData data = build(run, snap);
@@ -273,6 +309,9 @@ public class StepResultService {
             return new ResultData(List.of(), false, "Prometheus недоступен: " + e.getMessage(), now, genRows);
         }
         StepAnalysis.SuccessCriteria criteria = LoadCriteria.success(snap.successCriteria());
+        var stopCfg = LoadCriteria.stop(snap.stopCriteria());
+        int stopConsecutive = Math.max(1, stopCfg.consecutive());
+        long stopWindowSec = Math.max(15L, stopCfg.windowSec());
         List<StepAnalysis.CustomCheck> customRules = getEffectiveCustomChecks(run, snap);
         Map<String, String> vars = varsForRun(run, snap);
         Map<String, StepAnalysis.OpSla> sla = new HashMap<>();
@@ -285,17 +324,20 @@ public class StepResultService {
         List<ResultData.StepRow> rows = new ArrayList<>();
         List<StepAnalysis.StepVerdict> verdicts = new ArrayList<>();
         Map<Integer, Double> levels = new HashMap<>();
-        Instant finished = run.getFinishedAt() == null ? now : run.getFinishedAt();
+        boolean terminal = run.getStatus().isTerminal();
+        long lagTrim = run.getInitSec() == null ? 0 : settings.pushIntervalSec();
+        Instant finished = run.getFinishedAt() != null ? run.getFinishedAt() : now.minusSeconds(lagTrim);
         String error = null;
         List<RunStep> runSteps = effectiveSteps(run, snap);
         for (RunStep step : runSteps) {
             levels.put(step.getStepNo(), step.getLevelPct());
             int holdSec = (int) Duration.between(step.getHoldStartAt(), step.getHoldEndAt()).getSeconds();
             Instant winStart = step.getHoldStartAt().plusSeconds(Math.min(SETTLE_SEC, holdSec / 4));
-            Instant winEnd = step.getHoldEndAt().isAfter(finished) ? finished : step.getHoldEndAt();
+            boolean stepCompleted = !step.getHoldEndAt().isAfter(finished);
+            Instant winEnd = stepCompleted ? step.getHoldEndAt() : finished;
             // шкала привязана к первой точке метрик, а она появляется позже реального начала нагрузки (до интервала отправки k6): на столько же
             // позже реального конца оказался бы конец окна. Хвост без нагрузки занижал бы среднюю интенсивность, поэтому окно короче на интервал
-            long trim = run.getInitSec() == null ? 0 : settings.pushIntervalSec();
+            long trim = stepCompleted ? lagTrim : 0;
             if (Duration.between(winStart, winEnd).getSeconds() - trim >= 2L * MIN_WINDOW_SEC) {
                 winEnd = winEnd.minusSeconds(trim);
             }
@@ -308,9 +350,17 @@ public class StepResultService {
                                 cr.threshold(), cr.unit(), cr.stepSla(), cr.autoStop(),
                                 null, "", true, true))
                         .toList();
+                String pendingReason;
+                if (terminal) {
+                    pendingReason = "ступень не была выполнена (тест завершён раньше)";
+                } else if (!now.isBefore(step.getRampStartAt()) && now.isBefore(step.getHoldEndAt())) {
+                    pendingReason = "ступень выполняется — идёт разгон / стабилизация (данные появятся через несколько секунд)";
+                } else {
+                    pendingReason = "ожидает очереди (тест ещё выполняется)";
+                }
                 rows.add(new ResultData.StepRow(step.getStepNo(), label, step.getLevelPct(), "NOT_RUN", step.getHoldStartAt(),
                         step.getHoldEndAt(), winStart, winEnd, true, null, false,
-                        List.of("ступень не была выполнена (тест завершён раньше)"), List.of(), notRunCustom));
+                        List.of(pendingReason), List.of(), notRunCustom));
                 continue;
             }
             try {
@@ -318,7 +368,8 @@ public class StepResultService {
                 Double cpuMax = cpuMax(gens, winStart, winEnd);
                 boolean overloaded = cpuMax != null && cpuMax > criteria.maxCpuPct();
                 List<StepAnalysis.OpMetrics> metrics = opMetrics(snap, n, run, step.getLevelPct(), winSec, winEnd, p);
-                List<StepAnalysis.CustomCheckResult> evaluatedCustom = evaluateCustomChecks(customRules, run.getId(), winStart, winEnd, winSec, vars, p);
+                List<StepAnalysis.CustomCheckResult> evaluatedCustom = evaluateCustomChecks(
+                        customRules, run.getId(), winStart, winEnd, winSec, vars, p, stopConsecutive, stopWindowSec);
                 StepAnalysis.StepVerdict v = StepAnalysis.analyze(step.getStepNo(), reliable, overloaded, metrics, sla, criteria, evaluatedCustom);
                 verdicts.add(v);
                 List<ResultData.OpRow> ops = new ArrayList<>();
@@ -430,18 +481,19 @@ public class StepResultService {
     }
 
     private Double cpuMax(List<RunGenerator> gens, Instant from, Instant to) {
-        Double max = null;
-        for (RunGenerator g : gens) {
-            if (g.getGeneratorId() == null) {
-                continue;
-            }
-            Double v = jdbc.queryForObject("select max(cpu) from generator_metrics where generator_id = ? and ts between ? and ?",
-                    Double.class, g.getGeneratorId(), Timestamp.from(from), Timestamp.from(to));
-            if (v != null && (max == null || v > max)) {
-                max = v;
-            }
+        List<Long> ids = gens.stream().map(RunGenerator::getGeneratorId).filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return null;
         }
-        return max;
+        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        Object[] args = new Object[ids.size() + 2];
+        for (int i = 0; i < ids.size(); i++) {
+            args[i] = ids.get(i);
+        }
+        args[ids.size()] = Timestamp.from(from);
+        args[ids.size() + 1] = Timestamp.from(to);
+        return jdbc.queryForObject("select max(cpu) from generator_metrics where generator_id in (" + placeholders
+                + ") and ts between ? and ?", Double.class, args);
     }
 
     private List<ResultData.GenRow> genRows(Run run, List<RunGenerator> gens) {
@@ -479,87 +531,243 @@ public class StepResultService {
         return m;
     }
 
+    /** Результат анализа серий кастомной метрики на окне ступени с защитой от одиночных всплесков. */
+    record RangeEval(Double value, String worstSeries, boolean violated) {
+    }
+
     /**
-     * Вычисляет кастомные правила Prometheus на окне ступени [winStart..winEnd].
-     * Для верхних порогов (LTE / LT) берётся максимальное (наихудшее) значение за окно ступени;
-     * для нижних порогов (GTE / GT) — минимальное значение за окно ступени.
+     * Оценивает серии временного ряда на окне ступени с учётом параметра {@code consecutive}:
+     * ступень считается нарушенной, только если хотя бы одна серия нарушала порог непрерывно не меньше
+     * {@code (consecutive - 1) * CHECK_INTERVAL_SEC} секунд (или на всех 100% точек короткого окна).
+     * Разовые короткие всплески игнорируются, чтобы оценка ступени согласовывалась с автостопом.
      */
-    public List<StepAnalysis.CustomCheckResult> evaluateCustomChecks(List<StepAnalysis.CustomCheck> rules, long runId,
-                                                                     Instant winStart, Instant winEnd, long winSec,
-                                                                     Map<String, String> vars, SettingsService.Prometheus p) {
+    static RangeEval evaluateSeriesSustained(List<PrometheusClient.Series> seriesList,
+                                             StepAnalysis.CustomCheck rule,
+                                             int consecutive,
+                                             int stepSec) {
+        boolean upperBound = "LTE".equals(rule.normalizedCmp()) || "LT".equals(rule.normalizedCmp());
+        int reqConsecutive = Math.max(1, consecutive);
+        double minSustainedSec = (reqConsecutive - 1) * (double) CHECK_INTERVAL_SEC;
+        double maxGapSec = Math.max(30.0, 2.5 * Math.max(1, stepSec));
+
+        Double worstSustainedVal = null;
+        String worstSustainedLabel = "";
+        Double worstPassingVal = null;
+        String worstPassingLabel = "";
+
+        for (PrometheusClient.Series sr : seriesList) {
+            String label = formatSampleLabels(sr.labels());
+            int totalFinite = 0;
+            int totalViolating = 0;
+            Double seriesWorstAll = null;
+            Double seriesWorstSustained = null;
+
+            boolean inRun = false;
+            double runStartTs = 0.0;
+            double runPrevTs = 0.0;
+            int runCount = 0;
+            Double runWorst = null;
+
+            for (PrometheusClient.Point pt : sr.points()) {
+                double val = pt.value();
+                if (!Double.isFinite(val)) {
+                    continue;
+                }
+                totalFinite++;
+                if (seriesWorstAll == null || (upperBound ? val > seriesWorstAll : val < seriesWorstAll)) {
+                    seriesWorstAll = val;
+                }
+                if (rule.passes(val)) {
+                    if (inRun) {
+                        double span = Math.max(0.0, runPrevTs - runStartTs);
+                        if (reqConsecutive <= 1 || (runCount >= 2 && span + 1e-6 >= minSustainedSec)) {
+                            if (seriesWorstSustained == null || (upperBound ? runWorst > seriesWorstSustained : runWorst < seriesWorstSustained)) {
+                                seriesWorstSustained = runWorst;
+                            }
+                        }
+                        inRun = false;
+                    }
+                    if (worstPassingVal == null || (upperBound ? val > worstPassingVal : val < worstPassingVal)) {
+                        worstPassingVal = val;
+                        worstPassingLabel = label;
+                    }
+                } else {
+                    totalViolating++;
+                    if (inRun && (pt.ts() - runPrevTs) > maxGapSec) {
+                        double span = Math.max(0.0, runPrevTs - runStartTs);
+                        if (reqConsecutive <= 1 || (runCount >= 2 && span + 1e-6 >= minSustainedSec)) {
+                            if (seriesWorstSustained == null || (upperBound ? runWorst > seriesWorstSustained : runWorst < seriesWorstSustained)) {
+                                seriesWorstSustained = runWorst;
+                            }
+                        }
+                        inRun = false;
+                    }
+                    if (!inRun) {
+                        inRun = true;
+                        runStartTs = pt.ts();
+                        runPrevTs = pt.ts();
+                        runCount = 1;
+                        runWorst = val;
+                    } else {
+                        runPrevTs = pt.ts();
+                        runCount++;
+                        if (upperBound ? val > runWorst : val < runWorst) {
+                            runWorst = val;
+                        }
+                    }
+                }
+            }
+            if (inRun) {
+                double span = Math.max(0.0, runPrevTs - runStartTs);
+                if (reqConsecutive <= 1 || (runCount >= 2 && span + 1e-6 >= minSustainedSec)) {
+                    if (seriesWorstSustained == null || (upperBound ? runWorst > seriesWorstSustained : runWorst < seriesWorstSustained)) {
+                        seriesWorstSustained = runWorst;
+                    }
+                }
+            }
+            if (seriesWorstSustained == null && totalFinite > 0 && totalViolating == totalFinite) {
+                seriesWorstSustained = seriesWorstAll;
+            }
+            if (seriesWorstSustained != null) {
+                if (worstSustainedVal == null || (upperBound ? seriesWorstSustained > worstSustainedVal : seriesWorstSustained < worstSustainedVal)) {
+                    worstSustainedVal = seriesWorstSustained;
+                    worstSustainedLabel = label;
+                }
+            }
+        }
+        if (worstSustainedVal != null) {
+            return new RangeEval(worstSustainedVal, worstSustainedLabel, true);
+        }
+        if (worstPassingVal != null) {
+            return new RangeEval(worstPassingVal, worstPassingLabel, false);
+        }
+        return new RangeEval(null, "", false);
+    }
+
+    /**
+     * Живая (мгновенная) оценка кастомных правил Prometheus в момент {@code at} для live-мониторинга и автостопа:
+     * возвращает текущее наихудшее значение среди серий (без максимума за прошлые 60 с), чтобы одиночный
+     * всплеск не держал проверку нарушенной несколько тиков подряд.
+     */
+    public List<StepAnalysis.CustomCheckResult> evaluateCustomChecksLive(List<StepAnalysis.CustomCheck> rules, long runId,
+                                                                         Instant at, long windowSec,
+                                                                         Map<String, String> vars, SettingsService.Prometheus p) {
         if (rules == null || rules.isEmpty()) {
             return List.of();
         }
         List<StepAnalysis.CustomCheckResult> out = new ArrayList<>(rules.size());
         for (StepAnalysis.CustomCheck rule : rules) {
-            String q = CustomChartService.expand(rule.promql(), runId, Math.max(15, winSec), vars);
+            String q = CustomChartService.expand(rule.promql(), runId, Math.max(15, windowSec), vars);
             String renderedName = CustomChartService.title(rule.name(), vars);
             StepAnalysis.CustomCheck effectiveRule = new StepAnalysis.CustomCheck(
                     renderedName, rule.promql(), rule.normalizedCmp(), rule.threshold(), rule.unit(), rule.stepSla(), rule.autoStop());
             boolean upperBound = "LTE".equals(effectiveRule.normalizedCmp()) || "LT".equals(effectiveRule.normalizedCmp());
-            boolean usesRangeWindow = rule.promql() != null
-                    && (rule.promql().contains("{range}") || rule.promql().contains("$__range") || rule.promql().contains("${__range"));
-            boolean canRange = winStart != null && winEnd != null && winEnd.isAfter(winStart);
             Double worstVal = null;
             String worstLabel = "";
             String queryError = null;
             try {
-                if (!usesRangeWindow && canRange) {
-                    // мгновенные метрики (gauge, без {range}): сканируем всё окно ступени, чтобы не пропустить пики/провалы в середине ступени
-                    int push = Math.max(5, settings.pushIntervalSec());
-                    long rangeWin = Math.max(30, 3L * push);
-                    int step = (int) Math.max(push, Math.max(1, winSec / 60));
-                    String qRange = CustomChartService.expand(rule.promql(), runId, rangeWin, vars);
-                    for (PrometheusClient.Series sr : prom.rangeSeries(p, qRange, winStart, winEnd, step)) {
-                        for (PrometheusClient.Point pt : sr.points()) {
-                            if (!Double.isFinite(pt.value())) {
-                                continue;
-                            }
-                            if (worstVal == null || (upperBound ? pt.value() > worstVal : pt.value() < worstVal)) {
-                                worstVal = pt.value();
-                                worstLabel = formatSampleLabels(sr.labels());
-                            }
-                        }
+                List<PrometheusClient.Sample> samples = prom.query(p, q, at);
+                for (PrometheusClient.Sample s : samples) {
+                    if (!Double.isFinite(s.value())) {
+                        continue;
                     }
-                }
-                if (worstVal == null) {
-                    List<PrometheusClient.Sample> samples = prom.query(p, q, winEnd);
-                    for (PrometheusClient.Sample s : samples) {
-                        if (!Double.isFinite(s.value())) {
-                            continue;
-                        }
-                        if (worstVal == null || (upperBound ? s.value() > worstVal : s.value() < worstVal)) {
-                            worstVal = s.value();
-                            worstLabel = formatSampleLabels(s.labels());
-                        }
-                    }
-                }
-                if (worstVal == null && usesRangeWindow && canRange) {
-                    int push = Math.max(5, settings.pushIntervalSec());
-                    long rangeWin = Math.max(30, 3L * push);
-                    int step = (int) Math.max(push, Math.max(1, winSec / 60));
-                    String qRange = CustomChartService.expand(rule.promql(), runId, rangeWin, vars);
-                    for (PrometheusClient.Series sr : prom.rangeSeries(p, qRange, winStart, winEnd, step)) {
-                        for (PrometheusClient.Point pt : sr.points()) {
-                            if (!Double.isFinite(pt.value())) {
-                                continue;
-                            }
-                            if (worstVal == null || (upperBound ? pt.value() > worstVal : pt.value() < worstVal)) {
-                                worstVal = pt.value();
-                                worstLabel = formatSampleLabels(sr.labels());
-                            }
-                        }
+                    if (worstVal == null || (upperBound ? s.value() > worstVal : s.value() < worstVal)) {
+                        worstVal = s.value();
+                        worstLabel = formatSampleLabels(s.labels());
                     }
                 }
             } catch (IOException | RuntimeException e) {
                 queryError = e.getMessage() == null ? e.toString() : e.getMessage();
-                log.warn("Run {}: ошибка запроса кастомной метрики «{}» ({}): {}", runId, rule.name(), q, queryError);
+                log.warn("Run {}: ошибка live-запроса кастомной метрики «{}» ({}): {}", runId, rule.name(), q, queryError);
             }
             if (worstVal == null) {
                 String errDesc = queryError != null ? "ошибка PromQL" : "";
                 out.add(new StepAnalysis.CustomCheckResult(effectiveRule, null, errDesc, true, true));
             } else {
                 out.add(new StepAnalysis.CustomCheckResult(effectiveRule, worstVal, worstLabel, effectiveRule.passes(worstVal), false));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Вычисляет кастомные правила Prometheus на окне ступени [winStart..winEnd] с защитой от одиночных всплесков.
+     * Все правила (как с {@code {range}}, так и мгновенные) оцениваются единообразно по сетке {@code query_range}
+     * с шагом {@link #CHECK_INTERVAL_SEC} и тем же окном {@code stopWindowSec}, что и live-автостоп.
+     */
+    public List<StepAnalysis.CustomCheckResult> evaluateCustomChecks(List<StepAnalysis.CustomCheck> rules, long runId,
+                                                                     Instant winStart, Instant winEnd, long winSec,
+                                                                     Map<String, String> vars, SettingsService.Prometheus p) {
+        var def = ru.k6lab.core.analysis.StopCriteriaEvaluator.Config.defaults(false);
+        return evaluateCustomChecks(rules, runId, winStart, winEnd, winSec, vars, p, def.consecutive(), def.windowSec());
+    }
+
+    public List<StepAnalysis.CustomCheckResult> evaluateCustomChecks(List<StepAnalysis.CustomCheck> rules, long runId,
+                                                                     Instant winStart, Instant winEnd, long winSec,
+                                                                     Map<String, String> vars, SettingsService.Prometheus p,
+                                                                     int consecutive) {
+        var def = ru.k6lab.core.analysis.StopCriteriaEvaluator.Config.defaults(false);
+        return evaluateCustomChecks(rules, runId, winStart, winEnd, winSec, vars, p, consecutive, def.windowSec());
+    }
+
+    public List<StepAnalysis.CustomCheckResult> evaluateCustomChecks(List<StepAnalysis.CustomCheck> rules, long runId,
+                                                                     Instant winStart, Instant winEnd, long winSec,
+                                                                     Map<String, String> vars, SettingsService.Prometheus p,
+                                                                     int consecutive, long stopWindowSec) {
+        if (rules == null || rules.isEmpty()) {
+            return List.of();
+        }
+        long evalWindow = Math.max(15L, Math.min(Math.max(15L, stopWindowSec), Math.max(15L, winSec)));
+        boolean canRange = winStart != null && winEnd != null && winEnd.isAfter(winStart);
+        int step = (int) Math.max(CHECK_INTERVAL_SEC, Math.max(1L, winSec / 500L));
+
+        List<StepAnalysis.CustomCheckResult> out = new ArrayList<>(rules.size());
+        for (StepAnalysis.CustomCheck rule : rules) {
+            String q = CustomChartService.expand(rule.promql(), runId, evalWindow, vars);
+            String renderedName = CustomChartService.title(rule.name(), vars);
+            StepAnalysis.CustomCheck effectiveRule = new StepAnalysis.CustomCheck(
+                    renderedName, rule.promql(), rule.normalizedCmp(), rule.threshold(), rule.unit(), rule.stepSla(), rule.autoStop());
+            boolean upperBound = "LTE".equals(effectiveRule.normalizedCmp()) || "LT".equals(effectiveRule.normalizedCmp());
+            Double resultVal = null;
+            String resultLabel = "";
+            boolean resultOk = true;
+            String queryError = null;
+            try {
+                if (canRange) {
+                    // Единый алгоритм для всех кастомных метрик (с {range} и без): сканируем окно ступени по сетке 15 с
+                    // с тем же окном {range} = evalWindow, что и live-автостоп, требуя устойчивого нарушения >= (consecutive-1)*15 с.
+                    RangeEval ev = evaluateSeriesSustained(prom.rangeSeries(p, q, winStart, winEnd, step), effectiveRule, consecutive, step);
+                    if (ev.value() != null) {
+                        resultVal = ev.value();
+                        resultLabel = ev.worstSeries();
+                        resultOk = !ev.violated();
+                    }
+                }
+                if (resultVal == null) {
+                    // Запасной instant-запрос на конец окна, если range-запрос не вернул конечных точек
+                    List<PrometheusClient.Sample> samples = prom.query(p, q, winEnd);
+                    for (PrometheusClient.Sample s : samples) {
+                        if (!Double.isFinite(s.value())) {
+                            continue;
+                        }
+                        if (resultVal == null || (upperBound ? s.value() > resultVal : s.value() < resultVal)) {
+                            resultVal = s.value();
+                            resultLabel = formatSampleLabels(s.labels());
+                        }
+                    }
+                    if (resultVal != null) {
+                        resultOk = effectiveRule.passes(resultVal);
+                    }
+                }
+            } catch (IOException | RuntimeException e) {
+                queryError = e.getMessage() == null ? e.toString() : e.getMessage();
+                log.warn("Run {}: ошибка запроса кастомной метрики «{}» ({}): {}", runId, rule.name(), q, queryError);
+            }
+            if (resultVal == null) {
+                String errDesc = queryError != null ? "ошибка PromQL" : "";
+                out.add(new StepAnalysis.CustomCheckResult(effectiveRule, null, errDesc, true, true));
+            } else {
+                out.add(new StepAnalysis.CustomCheckResult(effectiveRule, resultVal, resultLabel, resultOk, false));
             }
         }
         return out;

@@ -12,7 +12,8 @@
 
     <div class="card mb-3"><div class="card-body">
         <h6 class="fw-semibold mb-3">Новый пользователь</h6>
-        <form class="row g-3 align-items-end" th:action="@{/users}" method="post" autocomplete="off">
+        <form class="row g-3 align-items-end" th:action="@{/users}" method="post" autocomplete="off"
+              data-ajax="#users-table-card" data-ajax-reset="true">
             <div class="col-md-3"><label class="form-label" for="u-login">Логин</label><input class="form-control" id="u-login" name="username" required></div>
             <div class="col-md-3"><label class="form-label" for="u-pass">Пароль</label>
                 <input class="form-control" id="u-pass" type="password" name="password" minlength="8" placeholder="от 8 символов" required autocomplete="new-password"></div>
@@ -22,7 +23,7 @@
         </form>
     </div></div>
 
-    <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+    <div class="card" id="users-table-card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
         <thead><tr><th>Логин</th><th>Роль и доступ</th><th>Новый пароль</th><th></th></tr></thead>
         <tbody>
         <tr th:each="u : ${users}" th:classappend="${!u.enabled} ? 'opacity-75'">
@@ -30,17 +31,17 @@
                 <span class="badge text-bg-primary ms-1" th:if="${#authentication != null and #authentication.name == u.username}">вы</span>
                 <span class="badge text-bg-secondary ms-1" th:if="${!u.enabled}">отключён</span></td>
             <td>
-                <form class="d-flex gap-3 align-items-center flex-wrap" th:action="@{/users/{id}(id=${u.id})}" method="post">
+                <form class="d-flex gap-3 align-items-center flex-wrap" th:action="@{/users/{id}(id=${u.id})}" method="post" data-ajax="#users-table-card">
                     <select class="form-select form-select-sm w-auto" name="role" aria-label="Роль">
                         <option th:each="r : ${roles}" th:value="${r}" th:text="${r.name() == 'ADMIN'} ? 'Администратор' : 'Пользователь'" th:selected="${r == u.role}"></option></select>
                     <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" name="enabled" value="true" th:checked="${u.enabled}" th:id="'en' + ${u.id}">
                         <label class="form-check-label small" th:for="'en' + ${u.id}">активен</label></div>
                     <button class="btn btn-sm btn-outline-primary">Сохранить</button>
                 </form></td>
-            <td><form class="d-flex gap-2" th:action="@{/users/{id}/password(id=${u.id})}" method="post" autocomplete="off">
+            <td><form class="d-flex gap-2" th:action="@{/users/{id}/password(id=${u.id})}" method="post" autocomplete="off" data-ajax="toast" data-ajax-reset="true">
                 <input class="form-control form-control-sm" style="max-width:200px" type="password" name="password" minlength="8" required placeholder="от 8 символов" aria-label="Новый пароль" autocomplete="new-password">
                 <button class="btn btn-sm btn-outline-secondary">Сменить</button></form></td>
-            <td class="text-end"><form th:action="@{/users/{id}/delete(id=${u.id})}" method="post" data-confirm="Удалить пользователя?">
+            <td class="text-end"><form th:action="@{/users/{id}/delete(id=${u.id})}" method="post" data-ajax="#users-table-card" data-confirm="Удалить пользователя?">
                 <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form></td>
         </tr></tbody></table></div></div>
 </th:block>

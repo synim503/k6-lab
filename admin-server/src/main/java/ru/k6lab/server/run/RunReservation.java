@@ -80,7 +80,13 @@ public class RunReservation {
             rg.setSegmentStart(plan.start(i).toString());
             rg.setSegmentEnd(plan.end(i).toString());
             rg.setStatus(RunGenerator.Status.RESERVED);
-            rg.setK6ApiPort(BASE_API_PORT + g.getActiveRuns());
+            java.util.Set<Integer> usedPorts = new java.util.HashSet<>(runGenerators.activePortsByGeneratorId(
+                    g.getId(), List.of(RunGenerator.Status.EXITED, RunGenerator.Status.FAILED, RunGenerator.Status.LOST)));
+            int apiPort = BASE_API_PORT;
+            while (usedPorts.contains(apiPort)) {
+                apiPort++;
+            }
+            rg.setK6ApiPort(apiPort);
             g.setActiveRuns(g.getActiveRuns() + 1);
             out.add(runGenerators.save(rg));
             Map<String, Object> gi = new LinkedHashMap<>();

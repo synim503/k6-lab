@@ -153,32 +153,44 @@ public class DeployService {
         return d;
     }
 
+    private final java.util.concurrent.ConcurrentHashMap<Long, Object> genOpLocks = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private Object lockForGen(Long generatorId) {
+        return genOpLocks.computeIfAbsent(generatorId, k -> new Object());
+    }
+
     public Deployment startUpdate(Long generatorId, Long agentArtifactId, Long k6ArtifactId) {
-        Generator g = idle(generatorId, "обновить");
-        audit.record("generator.update", "generator", generatorId, null);
-        Deployment d = newDeployment(g.getId(), g.getHost(), Deployment.Operation.UPDATE);
-        d.getParams().put("agentArtifactId", agentArtifactId);
-        d.getParams().put("k6ArtifactId", k6ArtifactId);
-        d = store.create(d);
-        submit(d.getId());
-        return d;
+        synchronized (lockForGen(generatorId)) {
+            Generator g = idle(generatorId, "обновить");
+            audit.record("generator.update", "generator", generatorId, null);
+            Deployment d = newDeployment(g.getId(), g.getHost(), Deployment.Operation.UPDATE);
+            d.getParams().put("agentArtifactId", agentArtifactId);
+            d.getParams().put("k6ArtifactId", k6ArtifactId);
+            d = store.create(d);
+            submit(d.getId());
+            return d;
+        }
     }
 
     public Deployment startRestart(Long generatorId) {
-        Generator g = idle(generatorId, "перезапустить");
-        audit.record("generator.restart", "generator", generatorId, null);
-        Deployment d = store.create(newDeployment(g.getId(), g.getHost(), Deployment.Operation.RESTART));
-        submit(d.getId());
-        return d;
+        synchronized (lockForGen(generatorId)) {
+            Generator g = idle(generatorId, "перезапустить");
+            audit.record("generator.restart", "generator", generatorId, null);
+            Deployment d = store.create(newDeployment(g.getId(), g.getHost(), Deployment.Operation.RESTART));
+            submit(d.getId());
+            return d;
+        }
     }
 
     public Deployment startUninstall(Long generatorId) {
-        Generator g = idle(generatorId, "удалить");
-        audit.record("generator.uninstall", "generator", generatorId, Map.of("name", g.getName()));
-        store.updateGenerator(generatorId, x -> x.setStatus(Generator.Status.REMOVING));
-        Deployment d = store.create(newDeployment(g.getId(), g.getHost(), Deployment.Operation.UNINSTALL));
-        submit(d.getId());
-        return d;
+        synchronized (lockForGen(generatorId)) {
+            Generator g = idle(generatorId, "удалить");
+            audit.record("generator.uninstall", "generator", generatorId, Map.of("name", g.getName()));
+            store.updateGenerator(generatorId, x -> x.setStatus(Generator.Status.REMOVING));
+            Deployment d = store.create(newDeployment(g.getId(), g.getHost(), Deployment.Operation.UNINSTALL));
+            submit(d.getId());
+            return d;
+        }
     }
 
     /**
@@ -194,13 +206,15 @@ public class DeployService {
      *                 false - жёсткий редеплой: всегда системный сервис systemd в /opt/k6-agent
      */
     public Deployment startRedeploy(Long generatorId, boolean keepMode) {
-        Generator g = idle(generatorId, "переустановить");
-        audit.record("generator.redeploy", "generator", generatorId, Map.of("name", g.getName(), "keepMode", keepMode));
-        Deployment d = newDeployment(g.getId(), g.getHost(), Deployment.Operation.REDEPLOY);
-        d.getParams().put("keepMode", keepMode);
-        d = store.create(d);
-        submit(d.getId());
-        return d;
+        synchronized (lockForGen(generatorId)) {
+            Generator g = idle(generatorId, "переустановить");
+            audit.record("generator.redeploy", "generator", generatorId, Map.of("name", g.getName(), "keepMode", keepMode));
+            Deployment d = newDeployment(g.getId(), g.getHost(), Deployment.Operation.REDEPLOY);
+            d.getParams().put("keepMode", keepMode);
+            d = store.create(d);
+            submit(d.getId());
+            return d;
+        }
     }
 
     /** Подтверждение fingerprint пользователем -> запись в known_host и повторный запуск операции. */

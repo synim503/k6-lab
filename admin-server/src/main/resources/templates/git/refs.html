@@ -10,7 +10,7 @@
             <p class="mb-2">Ключ SSH-хоста <strong th:text="${hostKey.host() + ':' + hostKey.port()}"></strong> не подтверждён.
                 Тип: <code th:text="${hostKey.keyType()}"></code>, fingerprint: <code th:text="${hostKey.fingerprint()}"></code>
                 <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1 k6-copy-btn" th:attr="data-copy=${hostKey.fingerprint()}" title="Копировать fingerprint" aria-label="Копировать fingerprint"><i class="bi bi-clipboard"></i></button></p>
-            <form sec:authorize="hasRole('ADMIN')" th:action="@{/git-repos/confirm-host-key}" method="post">
+            <form sec:authorize="hasRole('ADMIN')" th:action="@{/git-repos/confirm-host-key}" method="post" data-ajax="#refs-box">
                 <input type="hidden" name="host" th:value="${hostKey.host()}"><input type="hidden" name="port" th:value="${hostKey.port()}">
                 <input type="hidden" name="keyType" th:value="${hostKey.keyType()}"><input type="hidden" name="fingerprint" th:value="${hostKey.fingerprint()}">
                 <input type="hidden" name="publicKey" th:value="${hostKey.publicKey()}"><input type="hidden" name="repoId" th:value="${repo.id}">

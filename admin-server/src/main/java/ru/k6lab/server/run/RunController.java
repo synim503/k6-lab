@@ -106,11 +106,31 @@ public class RunController {
 
     @GetMapping(value = "/{id}/stream/status", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamStatus(@PathVariable Long id) {
+        if (!orchestrator.isActive(id)) {
+            try {
+                var st = runService.get(id).getStatus();
+                if (st.isTerminal()) {
+                    return broadcaster.snapshotDone(st.name());
+                }
+            } catch (IllegalArgumentException ignored) {
+                return broadcaster.snapshotDone(null);
+            }
+        }
         return broadcaster.subscribeStatus(id);
     }
 
     @GetMapping(value = "/{id}/stream/metrics", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamMetrics(@PathVariable Long id) {
+        if (!orchestrator.isActive(id)) {
+            try {
+                var st = runService.get(id).getStatus();
+                if (st.isTerminal()) {
+                    return broadcaster.snapshotDone(st.name());
+                }
+            } catch (IllegalArgumentException ignored) {
+                return broadcaster.snapshotDone(null);
+            }
+        }
         return broadcaster.subscribeMetrics(id);
     }
 
@@ -125,7 +145,8 @@ public class RunController {
         } catch (IllegalArgumentException e) {
             // запуска в БД нет: отдаётся то, что есть в памяти (возможно, ничего)
         }
-        return "[" + String.join(",", live) + "]";
+        List<String> clean = live.stream().filter(s -> s != null && !s.isBlank()).toList();
+        return "[" + String.join(",", clean) + "]";
     }
 
     @GetMapping("/{id}/log.txt")

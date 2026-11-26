@@ -37,83 +37,17 @@
     updateTimes();
     setInterval(updateTimes, 30000);
 
-    // ==================== Table Filtering & Search ====================
-    var tbody = document.getElementById('sch-tbody');
-    var searchEl = document.getElementById('sch-search');
-    var filterBtns = document.querySelectorAll('[data-sch-filter]');
+    // ==================== Table Filtering, Search, Bulk & Drag-and-Drop (re-bindable after AJAX swap) ====================
+    var SCH_AJAX_SEL = '#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards';
     var activeFilter = 'all';
+    var savedSearch = '';
+    var dragRow = null;
 
-    function applyFilter() {
-        if (!tbody) { return; }
-        var q = searchEl ? searchEl.value.trim().toLowerCase() : '';
-        var shown = 0;
-        tbody.querySelectorAll('tr.sch-row').forEach(function (tr) {
-            var st = tr.dataset.status || '';
-            var matchSt = activeFilter === 'all'
-                || (activeFilter === 'pending' && st === 'PENDING')
-                || (activeFilter === 'started' && (st === 'STARTED' || st === 'STARTING'))
-                || (activeFilter === 'other' && (st === 'FAILED' || st === 'CANCELLED'));
-            var matchQ = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
-            var ok = matchSt && matchQ;
-            tr.style.display = ok ? '' : 'none';
-            if (ok) { shown++; }
-        });
-        var emptyRow = document.getElementById('sch-filter-empty');
-        if (emptyRow) { emptyRow.classList.toggle('d-none', shown > 0); }
-        syncBulkBar();
-    }
-
-    if (searchEl) { searchEl.addEventListener('input', applyFilter); }
-    function setActiveFilter(mode) {
-        activeFilter = mode;
-        filterBtns.forEach(function (b) { b.classList.toggle('active', b.dataset.schFilter === mode); });
-        document.querySelectorAll('.sch-kpi[data-kpi-filter]').forEach(function (k) {
-            k.classList.toggle('is-active', k.dataset.kpiFilter === mode);
-        });
-        applyFilter();
-        syncBulkBar();
-    }
-    filterBtns.forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            setActiveFilter(btn.dataset.schFilter);
-        });
-    });
-    function onKpiActivate(el, ev) {
-        if (ev.target.closest('a')) { return; }
-        ev.stopPropagation();
-        var target = el.dataset.kpiFilter;
-        setActiveFilter(activeFilter === target ? 'all' : target);
-        var card = document.getElementById('sch-table-card');
-        if (card) { card.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
-    }
-    document.querySelectorAll('[data-kpi-filter]').forEach(function (el) {
-        el.addEventListener('click', function (ev) { onKpiActivate(el, ev); });
-        el.addEventListener('keydown', function (ev) {
-            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onKpiActivate(el, ev); }
-        });
-    });
-
-    // Сохранение раскрытого состояния блока автопроверок
-    var guardsDet = document.getElementById('sch-guards-details');
-    if (guardsDet) {
-        if (guardsDet.dataset.forceOpen !== 'true') {
-            try { guardsDet.open = localStorage.getItem('k6lab.sch.guardsOpen') === '1'; } catch (e) {}
-        }
-        guardsDet.addEventListener('toggle', function () {
-            try { localStorage.setItem('k6lab.sch.guardsOpen', guardsDet.open ? '1' : '0'); } catch (e) {}
-        });
-    }
-
-    // ==================== Bulk Selection & Drag-and-Drop Queue Reorder ====================
-    var selectAllCb = document.getElementById('sch-select-all');
-    var bulkBar = document.getElementById('sch-bulk-bar');
-    var bulkCountEl = document.getElementById('sch-bulk-count');
-    var bulkClearBtn = document.getElementById('sch-bulk-clear');
-    var tableCard = document.getElementById('sch-table-card');
-    var csrfMeta = document.querySelector('meta[name="_csrf"]');
-    var csrfToken = csrfMeta ? csrfMeta.content : '';
+    function getTbody() { return document.getElementById('sch-tbody'); }
+    function getSearchEl() { return document.getElementById('sch-search'); }
 
     function visibleRowCheckboxes() {
+        var tbody = getTbody();
         if (!tbody) { return []; }
         var out = [];
         tbody.querySelectorAll('tr.sch-row').forEach(function (tr) {
@@ -126,6 +60,7 @@
     }
 
     function allCheckedIds() {
+        var tbody = getTbody();
         if (!tbody) { return []; }
         var ids = [];
         tbody.querySelectorAll('.sch-row-check:checked').forEach(function (cb) {
@@ -135,7 +70,11 @@
     }
 
     function syncBulkBar() {
+        var tbody = getTbody();
         if (!tbody) { return; }
+        var selectAllCb = document.getElementById('sch-select-all');
+        var bulkBar = document.getElementById('sch-bulk-bar');
+        var bulkCountEl = document.getElementById('sch-bulk-count');
         var checked = allCheckedIds();
         var pendingChecked = 0;
         tbody.querySelectorAll('.sch-row-check:checked').forEach(function (cb) {
@@ -179,88 +118,193 @@
         }
     }
 
-    if (selectAllCb) {
-        selectAllCb.addEventListener('change', function () {
-            visibleRowCheckboxes().forEach(function (cb) { cb.checked = selectAllCb.checked; });
-            syncBulkBar();
+    function applyFilter() {
+        var tbody = getTbody();
+        if (!tbody) { return; }
+        var searchEl = getSearchEl();
+        savedSearch = searchEl ? searchEl.value : savedSearch;
+        var q = savedSearch.trim().toLowerCase();
+        var shown = 0;
+        tbody.querySelectorAll('tr.sch-row').forEach(function (tr) {
+            var st = tr.dataset.status || '';
+            var matchSt = activeFilter === 'all'
+                || (activeFilter === 'pending' && st === 'PENDING')
+                || (activeFilter === 'started' && (st === 'STARTED' || st === 'STARTING'))
+                || (activeFilter === 'other' && (st === 'FAILED' || st === 'CANCELLED'));
+            var matchQ = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
+            var ok = matchSt && matchQ;
+            tr.style.display = ok ? '' : 'none';
+            if (ok) { shown++; }
         });
-    }
-    if (tbody) {
-        tbody.addEventListener('change', function (ev) {
-            if (ev.target.classList.contains('sch-row-check')) {
-                syncBulkBar();
-            }
-        });
-    }
-    if (bulkClearBtn && tbody) {
-        bulkClearBtn.addEventListener('click', function () {
-            tbody.querySelectorAll('.sch-row-check:checked').forEach(function (cb) { cb.checked = false; });
-            syncBulkBar();
-        });
+        var emptyRow = document.getElementById('sch-filter-empty');
+        if (emptyRow) { emptyRow.classList.toggle('d-none', shown > 0); }
+        syncBulkBar();
     }
 
-    // Drag & Drop перестановка ожидающих строк
-    var dragRow = null;
-    if (tbody && tableCard && tableCard.dataset.reorderUrl) {
-        tbody.addEventListener('dragstart', function (ev) {
-            var tr = ev.target.closest('tr.sch-row[draggable="true"]');
-            if (!tr) { return; }
-            dragRow = tr;
-            tr.classList.add('opacity-50');
-            ev.dataTransfer.effectAllowed = 'move';
-            try { ev.dataTransfer.setData('text/plain', tr.dataset.scheduleId); } catch (e) {}
+    function setActiveFilter(mode) {
+        activeFilter = mode;
+        document.querySelectorAll('[data-sch-filter]').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.schFilter === mode);
         });
-        tbody.addEventListener('dragend', function () {
-            dragRow = null;
-            tbody.querySelectorAll('tr.sch-row').forEach(function (r) {
-                r.classList.remove('opacity-50', 'sch-drag-top', 'sch-drag-bottom');
-            });
+        document.querySelectorAll('.sch-kpi[data-kpi-filter]').forEach(function (k) {
+            k.classList.toggle('is-active', k.dataset.kpiFilter === mode);
         });
-        tbody.addEventListener('dragover', function (ev) {
-            if (!dragRow) { return; }
-            var tr = ev.target.closest('tr.sch-row[draggable="true"]');
-            if (!tr || tr === dragRow) { return; }
-            ev.preventDefault();
-            ev.dataTransfer.dropEffect = 'move';
-            var rect = tr.getBoundingClientRect();
-            var topHalf = (ev.clientY - rect.top) < rect.height / 2;
-            tbody.querySelectorAll('tr.sch-row').forEach(function (r) {
-                if (r !== tr) { r.classList.remove('sch-drag-top', 'sch-drag-bottom'); }
-            });
-            tr.classList.toggle('sch-drag-top', topHalf);
-            tr.classList.toggle('sch-drag-bottom', !topHalf);
-        });
-        tbody.addEventListener('drop', function (ev) {
-            if (!dragRow) { return; }
-            var tr = ev.target.closest('tr.sch-row[draggable="true"]');
-            if (!tr || tr === dragRow) { return; }
-            ev.preventDefault();
-            var before = tr.classList.contains('sch-drag-top');
-            if (before) {
-                tbody.insertBefore(dragRow, tr);
-            } else {
-                tbody.insertBefore(dragRow, tr.nextSibling);
-            }
-            var orderedIds = [];
-            tbody.querySelectorAll('tr.sch-row[data-pending="true"]').forEach(function (r) {
-                orderedIds.push(Number(r.dataset.scheduleId));
-            });
-            var headers = {'Content-Type': 'application/json', 'Accept': 'application/json'};
-            if (csrfToken) { headers['X-CSRF-TOKEN'] = csrfToken; }
-            fetch(tableCard.dataset.reorderUrl, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: headers,
-                body: JSON.stringify({ids: orderedIds})
-            }).then(function (r) {
-                if (!r.ok) { throw new Error('HTTP ' + r.status); }
-                location.reload();
-            }).catch(function () {
-                if (window.k6Toast) { window.k6Toast('Не удалось сохранить новый порядок очереди', 'err'); }
-                setTimeout(function () { location.reload(); }, 1200);
-            });
-        });
+        applyFilter();
     }
+
+    function onKpiActivate(el, ev) {
+        if (ev.target.closest('a')) { return; }
+        ev.stopPropagation();
+        var target = el.dataset.kpiFilter;
+        setActiveFilter(activeFilter === target ? 'all' : target);
+        var card = document.getElementById('sch-table-card');
+        if (card) { card.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
+    }
+
+    var csrfMeta = document.querySelector('meta[name="_csrf"]');
+    var csrfToken = csrfMeta ? csrfMeta.content : '';
+    function currentCsrf() {
+        var m = document.querySelector('meta[name="_csrf"]');
+        return (m && m.content) || csrfToken;
+    }
+
+    function bindScheduleDom() {
+        var searchEl = getSearchEl();
+        if (searchEl && searchEl.dataset.schBound !== '1') {
+            searchEl.dataset.schBound = '1';
+            if (savedSearch) { searchEl.value = savedSearch; }
+            searchEl.addEventListener('input', applyFilter);
+        }
+        document.querySelectorAll('[data-sch-filter]').forEach(function (btn) {
+            if (btn.dataset.schBound === '1') { return; }
+            btn.dataset.schBound = '1';
+            btn.addEventListener('click', function () {
+                setActiveFilter(btn.dataset.schFilter);
+            });
+        });
+        document.querySelectorAll('[data-kpi-filter]').forEach(function (el) {
+            if (el.dataset.schBound === '1') { return; }
+            el.dataset.schBound = '1';
+            el.addEventListener('click', function (ev) { onKpiActivate(el, ev); });
+            el.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onKpiActivate(el, ev); }
+            });
+        });
+
+        var guardsDet = document.getElementById('sch-guards-details');
+        if (guardsDet && guardsDet.dataset.schBound !== '1') {
+            guardsDet.dataset.schBound = '1';
+            if (guardsDet.dataset.forceOpen !== 'true') {
+                try { guardsDet.open = localStorage.getItem('k6lab.sch.guardsOpen') === '1'; } catch (e) {}
+            }
+            guardsDet.addEventListener('toggle', function () {
+                try { localStorage.setItem('k6lab.sch.guardsOpen', guardsDet.open ? '1' : '0'); } catch (e) {}
+            });
+        }
+
+        var selectAllCb = document.getElementById('sch-select-all');
+        if (selectAllCb && selectAllCb.dataset.schBound !== '1') {
+            selectAllCb.dataset.schBound = '1';
+            selectAllCb.addEventListener('change', function () {
+                visibleRowCheckboxes().forEach(function (cb) { cb.checked = selectAllCb.checked; });
+                syncBulkBar();
+            });
+        }
+
+        var tbody = getTbody();
+        var tableCard = document.getElementById('sch-table-card');
+        if (tbody && tbody.dataset.schBound !== '1') {
+            tbody.dataset.schBound = '1';
+            tbody.addEventListener('change', function (ev) {
+                if (ev.target.classList.contains('sch-row-check')) { syncBulkBar(); }
+            });
+            if (tableCard && tableCard.dataset.reorderUrl) {
+                tbody.addEventListener('dragstart', function (ev) {
+                    var tr = ev.target.closest('tr.sch-row[draggable="true"]');
+                    if (!tr) { return; }
+                    dragRow = tr;
+                    tr.classList.add('opacity-50');
+                    ev.dataTransfer.effectAllowed = 'move';
+                    try { ev.dataTransfer.setData('text/plain', tr.dataset.scheduleId); } catch (e) {}
+                });
+                tbody.addEventListener('dragend', function () {
+                    dragRow = null;
+                    tbody.querySelectorAll('tr.sch-row').forEach(function (r) {
+                        r.classList.remove('opacity-50', 'sch-drag-top', 'sch-drag-bottom');
+                    });
+                });
+                tbody.addEventListener('dragover', function (ev) {
+                    if (!dragRow) { return; }
+                    var tr = ev.target.closest('tr.sch-row[draggable="true"]');
+                    if (!tr || tr === dragRow) { return; }
+                    ev.preventDefault();
+                    ev.dataTransfer.dropEffect = 'move';
+                    var rect = tr.getBoundingClientRect();
+                    var topHalf = (ev.clientY - rect.top) < rect.height / 2;
+                    tbody.querySelectorAll('tr.sch-row').forEach(function (r) {
+                        if (r !== tr) { r.classList.remove('sch-drag-top', 'sch-drag-bottom'); }
+                    });
+                    tr.classList.toggle('sch-drag-top', topHalf);
+                    tr.classList.toggle('sch-drag-bottom', !topHalf);
+                });
+                tbody.addEventListener('drop', function (ev) {
+                    if (!dragRow) { return; }
+                    var tr = ev.target.closest('tr.sch-row[draggable="true"]');
+                    if (!tr || tr === dragRow) { return; }
+                    ev.preventDefault();
+                    var before = tr.classList.contains('sch-drag-top');
+                    if (before) {
+                        tbody.insertBefore(dragRow, tr);
+                    } else {
+                        tbody.insertBefore(dragRow, tr.nextSibling);
+                    }
+                    var orderedIds = [];
+                    tbody.querySelectorAll('tr.sch-row[data-pending="true"]').forEach(function (r) {
+                        orderedIds.push(Number(r.dataset.scheduleId));
+                    });
+                    var headers = {'Content-Type': 'application/json', 'Accept': 'application/json'};
+                    var tok = currentCsrf();
+                    if (tok) { headers['X-CSRF-TOKEN'] = tok; }
+                    fetch(tableCard.dataset.reorderUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: headers,
+                        body: JSON.stringify({ids: orderedIds})
+                    }).then(function (r) {
+                        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+                        if (window.k6Toast) { window.k6Toast('Порядок очереди обновлён', 'ok'); }
+                        if (window.k6AjaxRefresh) {
+                            return window.k6AjaxRefresh(SCH_AJAX_SEL);
+                        }
+                        location.reload();
+                    }).catch(function () {
+                        if (window.k6Toast) { window.k6Toast('Не удалось сохранить новый порядок очереди', 'err'); }
+                        if (window.k6AjaxRefresh) { window.k6AjaxRefresh(SCH_AJAX_SEL); }
+                    });
+                });
+            }
+        }
+
+        var bulkClearBtn = document.getElementById('sch-bulk-clear');
+        if (bulkClearBtn && bulkClearBtn.dataset.schBound !== '1') {
+            bulkClearBtn.dataset.schBound = '1';
+            bulkClearBtn.addEventListener('click', function () {
+                var tb = getTbody();
+                if (tb) { tb.querySelectorAll('.sch-row-check:checked').forEach(function (cb) { cb.checked = false; }); }
+                syncBulkBar();
+            });
+        }
+
+        updateTimes();
+        setActiveFilter(activeFilter);
+    }
+
+    bindScheduleDom();
+    document.addEventListener('k6:swapped', function () {
+        if (!document.getElementById('sch-queue-wrap')) { return; }
+        bindScheduleDom();
+        document.dispatchEvent(new Event('k6:timeline-reload'));
+    });
 
     // ==================== Dropzones for Import Modals ====================
     function wireDropzone(dzId, fileId, lblId, modalId) {
@@ -603,10 +647,11 @@
 
     // ==================== Schedule Guards (Prometheus -> SSH) ====================
     var guardModalEl = document.getElementById('sch-guard-modal');
-    var guardsJsonEl = document.getElementById('sch-guards-json');
     if (guardModalEl) {
-        var guardsList = [];
-        try { guardsList = JSON.parse((guardsJsonEl && guardsJsonEl.textContent) || '[]'); } catch (e) { guardsList = []; }
+        function readGuardsList() {
+            var el = document.getElementById('sch-guards-json');
+            try { return JSON.parse((el && el.textContent) || '[]'); } catch (e) { return []; }
+        }
         var GD_PRESETS = {
             diskPct: {
                 name: 'Очистка диска / (> 80%)',
@@ -707,7 +752,8 @@
                 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
                 'Accept': 'application/json'
             };
-            if (csrfToken) { headers['X-CSRF-TOKEN'] = csrfToken; }
+            var tok = currentCsrf();
+            if (tok) { headers['X-CSRF-TOKEN'] = tok; }
             var opts = {method: 'POST', credentials: 'same-origin', headers: headers, body: body.toString()};
             if (signal) { opts.signal = signal; }
             return fetch(url, opts).then(function (r) {
@@ -961,7 +1007,7 @@
             var trigger = ev.relatedTarget;
             var editId = trigger && trigger.dataset && trigger.dataset.guardId ? Number(trigger.dataset.guardId) : null;
             if (editId) {
-                var found = guardsList.find(function (x) { return x.id === editId; });
+                var found = readGuardsList().find(function (x) { return x.id === editId; });
                 fillGuardForm(found || null);
             } else {
                 fillGuardForm(null);

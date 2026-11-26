@@ -126,8 +126,9 @@ public class RunHistoryService {
             Instant start = run.getPlannedStartAt() != null ? run.getPlannedStartAt() : run.getStartedAt();
             Instant end = run.getFinishedAt() != null ? run.getFinishedAt() : Instant.now();
             if (start != null && end != null && end.isAfter(start)) {
-                long winSec = Math.max(15, end.getEpochSecond() - start.getEpochSecond());
-                monitor.evaluateAndPutCustomChecks(last, run, snap, start, end, winSec, false, p);
+                long stopWin = Math.max(15L, ru.k6lab.server.load.LoadCriteria.stop(snap.stopCriteria()).windowSec());
+                long winSec = Math.max(15L, Math.min(stopWin, end.getEpochSecond() - start.getEpochSecond()));
+                monitor.evaluateAndPutCustomChecks(last, run, snap, end.minusSeconds(winSec), end, winSec, false, p);
                 List<String> copy = new ArrayList<>(points);
                 copy.set(copy.size() - 1, last.toString());
                 return copy;

@@ -103,10 +103,13 @@
                     by[s].n++;
                 });
                 if (st.status && !by[st.status]) { st.status = ''; }
+                var esc = window.K6 && window.K6.escapeHtml ? window.K6.escapeHtml
+                    : function (v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
                 var html = '<button type="button" class="chip-btn' + (st.status ? '' : ' on') + '" data-status="">Все <b>' + all.length + '</b></button>';
                 order.forEach(function (s) {
-                    html += '<button type="button" class="chip-btn' + (st.status === s ? ' on' : '') + '" data-status="' + s.replace(/"/g, '&quot;') + '">'
-                        + '<span class="badge ' + by[s].badge + '">' + s + '</span> <b>' + by[s].n + '</b></button>';
+                    var badgeCls = String(by[s].badge || '').replace(/[^a-zA-Z0-9 _-]/g, '');
+                    html += '<button type="button" class="chip-btn' + (st.status === s ? ' on' : '') + '" data-status="' + esc(s) + '">'
+                        + '<span class="badge ' + badgeCls + '">' + esc(s) + '</span> <b>' + by[s].n + '</b></button>';
                 });
                 chips.innerHTML = html;
             }

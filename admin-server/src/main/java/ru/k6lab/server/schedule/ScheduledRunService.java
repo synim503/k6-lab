@@ -646,13 +646,15 @@ public class ScheduledRunService {
         if (ids == null || ids.isEmpty()) {
             return 0;
         }
-        int n = 0;
-        for (Long id : ids) {
-            if (id != null && cancel(id, user)) {
-                n++;
+        synchronized (schedulerLock) {
+            int n = 0;
+            for (Long id : ids) {
+                if (id != null && cancel(id, user)) {
+                    n++;
+                }
             }
+            return n;
         }
-        return n;
     }
 
     /** Массовая повторная постановка списка записей расписания в начало (после текущего) или в конец очереди с сохранением их взаимного порядка. */
@@ -660,38 +662,44 @@ public class ScheduledRunService {
         if (ids == null || ids.isEmpty()) {
             return 0;
         }
-        List<Long> ordered = new ArrayList<>(ids);
-        if (position == QueuePosition.FRONT) {
-            // чтобы при поочерёдной вставке в начало взаимный порядок выбранных записей сохранился, идём с конца списка
-            java.util.Collections.reverse(ordered);
-        }
-        int count = 0;
-        for (Long id : ordered) {
-            if (id != null && store.find(id).isPresent()) {
-                requeueScheduleItem(id, position, user);
-                count++;
+        synchronized (schedulerLock) {
+            List<Long> ordered = new ArrayList<>(ids);
+            if (position == QueuePosition.FRONT) {
+                // чтобы при поочерёдной вставке в начало взаимный порядок выбранных записей сохранился, идём с конца списка
+                java.util.Collections.reverse(ordered);
             }
+            int count = 0;
+            for (Long id : ordered) {
+                if (id != null && store.find(id).isPresent()) {
+                    requeueScheduleItem(id, position, user);
+                    count++;
+                }
+            }
+            return count;
         }
-        return count;
     }
 
     /** Очищает историю завершённых, отменённых и упавших записей расписания (ожидающие записи не затрагиваются). */
     public int clearHistory(String user) {
-        int n = store.clearHistory();
-        if (n > 0) {
-            audit.record("schedule.clear_history", "schedule", 0L, Map.of("deleted", n, "by", String.valueOf(user)));
+        synchronized (schedulerLock) {
+            int n = store.clearHistory();
+            if (n > 0) {
+                audit.record("schedule.clear_history", "schedule", 0L, Map.of("deleted", n, "by", String.valueOf(user)));
+            }
+            return n;
         }
-        return n;
     }
 
     /** Переключает флаг автосдвига (shift_forward) у ожидающей записи. */
     public boolean setShiftForward(long scheduleId, boolean shiftForward, String user) {
-        boolean ok = store.setShiftForward(scheduleId, shiftForward);
-        if (ok) {
-            audit.record("run.schedule_shift_flag", "scheduled_run", scheduleId,
-                    Map.of("shiftForward", shiftForward, "by", String.valueOf(user)));
+        synchronized (schedulerLock) {
+            boolean ok = store.setShiftForward(scheduleId, shiftForward);
+            if (ok) {
+                audit.record("run.schedule_shift_flag", "scheduled_run", scheduleId,
+                        Map.of("shiftForward", shiftForward, "by", String.valueOf(user)));
+            }
+            return ok;
         }
-        return ok;
     }
 
     /** Плановая длительность записи расписания в секундах (для отображения в таблице очереди). */
@@ -914,13 +922,13 @@ public class ScheduledRunService {
 
     @Scheduled(fixedDelay = 10_000, initialDelay = 20_000)
     public void tick() {
+        List<ScheduledRunStore.Item> candidates = new ArrayList<>();
         synchronized (schedulerLock) {
             if (paused()) {
                 return; // на паузе: ничего не стартуем и не помечаем просроченным
             }
             shiftQueue();
             Instant tickNow = Instant.now();
-            Map<Long, Integer> reservedInTick = new java.util.HashMap<>();
             for (ScheduledRunStore.Item item : store.due(tickNow)) {
                 Duration late = Duration.between(item.runAt(), tickNow);
                 if (late.compareTo(MAX_LATE) > 0) {
@@ -929,7 +937,20 @@ public class ScheduledRunService {
                     }
                     continue;
                 }
-                ScheduleGuardService.BeforeStartResult guardRes = guards.runBeforeStartGuards(item.id());
+                candidates.add(item);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        Map<Long, Integer> reservedInTick = new java.util.HashMap<>();
+        for (ScheduledRunStore.Item item : candidates) {
+            // Автопроверки (Prometheus/SSH) выполняются ВНЕ schedulerLock, чтобы UI-операции с очередью не зависали на минуты
+            ScheduleGuardService.BeforeStartResult guardRes = guards.runBeforeStartGuards(item.id());
+            synchronized (schedulerLock) {
+                if (paused()) {
+                    return;
+                }
                 if (guardRes.blocked()) {
                     log.warn("Расписание #{}: старт заблокирован автопроверкой ({}); планировщик поставлен на паузу",
                             item.id(), guardRes.reason());

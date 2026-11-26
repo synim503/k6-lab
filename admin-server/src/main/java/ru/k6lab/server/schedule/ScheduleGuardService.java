@@ -83,7 +83,6 @@ public class ScheduleGuardService {
     private final SshConnector ssh;
     private final SshCredentialService credentials;
     private final AuditService audit;
-    private final Object execLock = new Object();
     private final ExecutorService afterRunExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "schedule-guard-worker");
         t.setDaemon(true);
@@ -103,6 +102,7 @@ public class ScheduleGuardService {
     @PreDestroy
     void shutdown() {
         afterRunExecutor.shutdownNow();
+        sshPool.shutdownNow();
     }
 
     // ------------------------------------------------------------------ CRUD
@@ -204,14 +204,32 @@ public class ScheduleGuardService {
             }
             String host = tok;
             int port = defaultPort;
-            int colon = tok.lastIndexOf(':');
-            if (colon > 0 && tok.indexOf(':') == colon) {
-                String pPart = tok.substring(colon + 1);
-                try {
-                    port = Integer.parseInt(pPart);
-                    host = tok.substring(0, colon).strip();
-                } catch (NumberFormatException e) {
-                    throw new IllegalArgumentException("Некорректный порт в адресе «" + tok + "»");
+            if (tok.startsWith("[")) {
+                int close = tok.indexOf(']');
+                if (close <= 1) {
+                    throw new IllegalArgumentException("Некорректный IPv6-адрес: «" + tok + "»");
+                }
+                host = tok.substring(1, close).strip();
+                String rest = tok.substring(close + 1).strip();
+                if (rest.startsWith(":")) {
+                    try {
+                        port = Integer.parseInt(rest.substring(1));
+                    } catch (NumberFormatException e) {
+                        throw new IllegalArgumentException("Некорректный порт в адресе «" + tok + "»");
+                    }
+                } else if (!rest.isEmpty()) {
+                    throw new IllegalArgumentException("Некорректный адрес: «" + tok + "»");
+                }
+            } else {
+                int colon = tok.lastIndexOf(':');
+                if (colon > 0 && tok.indexOf(':') == colon) {
+                    String pPart = tok.substring(colon + 1);
+                    try {
+                        port = Integer.parseInt(pPart);
+                        host = tok.substring(0, colon).strip();
+                    } catch (NumberFormatException e) {
+                        throw new IllegalArgumentException("Некорректный порт в адресе «" + tok + "»");
+                    }
                 }
             }
             if (host.isEmpty() || host.length() > 255 || host.chars().anyMatch(Character::isWhitespace)) {
@@ -289,10 +307,18 @@ public class ScheduleGuardService {
 
     // ------------------------------------------------------------------ проверка и выполнение
 
-    /** Проверка метрики (и опциональный запуск SSH) для одного правила. */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Object> guardLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ExecutorService sshPool = Executors.newFixedThreadPool(8, r -> {
+        Thread th = new Thread(r, "schedule-guard-ssh");
+        th.setDaemon(true);
+        return th;
+    });
+
+    /** Проверка метрики (и опциональный запуск SSH) для одного правила (блокировка по конкретному правилу, а не глобально). */
     public Outcome checkAndRun(long guardId, boolean executeSshIfTriggered, boolean forceSsh,
                                boolean ignoreCooldown, String reason) {
-        synchronized (execLock) {
+        Object lock = guardLocks.computeIfAbsent(guardId, k -> new Object());
+        synchronized (lock) {
             ScheduleGuardStore.Guard g = get(guardId);
             Instant now = Instant.now();
 
@@ -505,35 +531,33 @@ public class ScheduleGuardService {
             }
             return out;
         }
-        int poolSize = Math.min(targets.size(), 8);
-        ExecutorService pool = Executors.newFixedThreadPool(poolSize, r -> {
-            Thread th = new Thread(r, "schedule-guard-ssh");
-            th.setDaemon(true);
-            return th;
-        });
-        try {
-            List<java.util.concurrent.Future<HostExecResult>> futures = new ArrayList<>(targets.size());
-            for (SshTarget t : targets) {
-                futures.add(pool.submit(() -> executeOnTarget(t, cred, masker, useSudo, script, timeout)));
-            }
-            List<HostExecResult> out = new ArrayList<>(targets.size());
-            for (int i = 0; i < targets.size(); i++) {
-                SshTarget t = targets.get(i);
-                try {
-                    out.add(futures.get(i).get());
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    out.add(new HostExecResult(t.host(), t.port(), false, null, 0, "", "", "Выполнение прервано", null));
-                } catch (java.util.concurrent.ExecutionException e) {
-                    Throwable cause = e.getCause() == null ? e : e.getCause();
-                    String msg = masker.mask(cause.getMessage() == null ? cause.toString() : cause.getMessage());
-                    out.add(new HostExecResult(t.host(), t.port(), false, null, 0, "", "", msg, null));
-                }
-            }
-            return out;
-        } finally {
-            pool.shutdownNow();
+        List<java.util.concurrent.Future<HostExecResult>> futures = new ArrayList<>(targets.size());
+        for (SshTarget t : targets) {
+            futures.add(sshPool.submit(() -> executeOnTarget(t, cred, masker, useSudo, script, timeout)));
         }
+        List<HostExecResult> out = new ArrayList<>(targets.size());
+        boolean interrupted = false;
+        for (int i = 0; i < targets.size(); i++) {
+            SshTarget t = targets.get(i);
+            if (interrupted) {
+                futures.get(i).cancel(true);
+                out.add(new HostExecResult(t.host(), t.port(), false, null, 0, "", "", "Выполнение прервано", null));
+                continue;
+            }
+            try {
+                out.add(futures.get(i).get());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                interrupted = true;
+                futures.get(i).cancel(true);
+                out.add(new HostExecResult(t.host(), t.port(), false, null, 0, "", "", "Выполнение прервано", null));
+            } catch (java.util.concurrent.ExecutionException e) {
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                String msg = masker.mask(cause.getMessage() == null ? cause.toString() : cause.getMessage());
+                out.add(new HostExecResult(t.host(), t.port(), false, null, 0, "", "", msg, null));
+            }
+        }
+        return out;
     }
 
     private HostExecResult executeOnTarget(SshTarget t, ResolvedCredential cred, SecretMasker masker,
@@ -599,7 +623,8 @@ public class ScheduleGuardService {
             cred = credentials.resolve(g.sshCredentialId());
         } catch (RuntimeException e) {
             String err = "SSH-учётка недоступна: " + e.getMessage();
-            store.recordCheck(g.id(), now, metricVal, series, now, ScheduleGuardStore.LastStatus.SSH_ERROR, err);
+            // Ошибка SSH не должна запускать cooldown — иначе транзиентный сбой блокирует повторную попытку
+            store.recordCheck(g.id(), now, metricVal, series, null, ScheduleGuardStore.LastStatus.SSH_ERROR, err);
             return new Outcome(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, series, triggered, false, null, err, err, null);
         }
 
@@ -608,7 +633,7 @@ public class ScheduleGuardService {
             targets = parseTargets(g.sshHost(), g.sshPort());
         } catch (IllegalArgumentException e) {
             String err = e.getMessage();
-            store.recordCheck(g.id(), now, metricVal, series, now, ScheduleGuardStore.LastStatus.SSH_ERROR, err);
+            store.recordCheck(g.id(), now, metricVal, series, null, ScheduleGuardStore.LastStatus.SSH_ERROR, err);
             return new Outcome(g, ScheduleGuardStore.LastStatus.SSH_ERROR, metricVal, series, triggered, false, null, err, err, null);
         }
 
@@ -650,7 +675,8 @@ public class ScheduleGuardService {
                     : "SSH-скрипт: успешно на " + okCount + " из " + results.size() + " серверов";
         }
 
-        store.recordCheck(g.id(), now, metricVal, series, now, st, combined);
+        // Cooldown ставим только при успешном выполнении SSH, чтобы сбой связи не блокировал повтор
+        store.recordCheck(g.id(), now, metricVal, series, allOk ? now : null, st, combined);
         recordAudit(g, st, metricVal, exitCode, reason);
         if (allOk) {
             log.info("Автопроверка #{} («{}», {}): {}", g.id(), g.name(), reason, summary);

@@ -411,22 +411,13 @@ public class ScheduleTimelineService {
 
     private static List<Long> findFree(Snapshot snap, long start, int durationSec, int n) {
         long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
-        Map<Long, Integer> pool = new HashMap<>();
-        for (Snapshot.SlotBar b : snap.bars) {
-            if (b.fromMs() >= end || b.toMs() <= start) {
-                continue;
-            }
-            if (b.generatorId() == null && b.scheduleId() != null) {
-                pool.putIfAbsent(b.scheduleId(), b.count());
-            }
-        }
+        int reservedByPool = peakPoolDemand(snap.bars, start, end);
         List<Long> free = new ArrayList<>();
         for (Snapshot.GenSlot g : snap.generators) {
             if (g.online() && peakOverlap(snap.bars, g.id(), start, end) < g.slots()) {
                 free.add(g.id());
             }
         }
-        int reservedByPool = pool.values().stream().mapToInt(Integer::intValue).sum();
         if (free.size() - reservedByPool < n) {
             return null;
         }
@@ -435,23 +426,43 @@ public class ScheduleTimelineService {
 
     private static int countFree(Snapshot snap, long start, int durationSec) {
         long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
-        Map<Long, Integer> pool = new HashMap<>();
-        for (Snapshot.SlotBar b : snap.bars) {
-            if (b.fromMs() >= end || b.toMs() <= start) {
-                continue;
-            }
-            if (b.generatorId() == null && b.scheduleId() != null) {
-                pool.putIfAbsent(b.scheduleId(), b.count());
-            }
-        }
+        int reservedByPool = peakPoolDemand(snap.bars, start, end);
         int free = 0;
         for (Snapshot.GenSlot g : snap.generators) {
             if (g.online() && peakOverlap(snap.bars, g.id(), start, end) < g.slots()) {
                 free++;
             }
         }
-        int reservedByPool = pool.values().stream().mapToInt(Integer::intValue).sum();
         return Math.max(0, free - reservedByPool);
+    }
+
+    /** Пиковая одновременная потребность пуловых записей на отрезке [start, end) методом сканирующей прямой. */
+    private static int peakPoolDemand(List<Snapshot.SlotBar> bars, long start, long end) {
+        List<long[]> events = new ArrayList<>();
+        java.util.Set<Long> seen = new java.util.HashSet<>();
+        for (Snapshot.SlotBar b : bars) {
+            if (b.generatorId() != null || b.scheduleId() == null || b.fromMs() >= end || b.toMs() <= start) {
+                continue;
+            }
+            if (!seen.add(b.scheduleId())) {
+                continue;
+            }
+            long lo = Math.max(start, b.fromMs());
+            long hi = Math.min(end, b.toMs());
+            if (hi > lo) {
+                events.add(new long[]{lo, b.count()});
+                events.add(new long[]{hi, -b.count()});
+            }
+        }
+        events.sort((a, b) -> a[0] != b[0] ? Long.compare(a[0], b[0]) : Long.compare(a[1], b[1]));
+        int cur = 0, peak = 0;
+        for (long[] ev : events) {
+            cur += (int) ev[1];
+            if (cur > peak) {
+                peak = cur;
+            }
+        }
+        return peak;
     }
 
     /**

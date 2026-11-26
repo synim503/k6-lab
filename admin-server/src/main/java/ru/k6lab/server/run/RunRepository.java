@@ -17,6 +17,10 @@ public interface RunRepository extends JpaRepository<Run, Long> {
 
     List<Run> findByScriptIdOrderByIdDesc(Long scriptId);
 
+    List<Run> findTop20ByScriptIdOrderByIdDesc(Long scriptId);
+
+    List<Run> findByFinishedAtAfter(java.time.Instant cutoff);
+
     @Query("select r from Run r where (:scriptId is null or r.scriptId = :scriptId) "
             + "and (:status is null or r.status = :status) order by r.id desc")
     List<Run> search(Long scriptId, RunStatus status, org.springframework.data.domain.Pageable page);

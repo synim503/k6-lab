@@ -25,6 +25,7 @@ public class RunArtifactService {
     private final ScriptService scripts;
     private final AdminHelper helper;
     private final StorageService storage;
+    private static final int MAX_CACHE_ENTRIES = 200;
     private final Map<Long, Artifact> cache = new ConcurrentHashMap<>();
 
     public RunArtifactService(ScriptService scripts, AdminHelper helper, StorageService storage) {
@@ -43,6 +44,9 @@ public class RunArtifactService {
         byte[] zip = ZipUtil.write(files);
         var stored = storage.store("run-artifacts", "v" + v.getId() + ".zip", new ByteArrayInputStream(zip));
         Artifact a = new Artifact(stored.key(), stored.sha256(), stored.size());
+        if (cache.size() >= MAX_CACHE_ENTRIES) {
+            cache.keySet().stream().min(Long::compare).ifPresent(cache::remove);
+        }
         cache.put(v.getId(), a);
         return a;
     }

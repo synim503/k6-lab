@@ -122,10 +122,10 @@ public class RunSeriesService {
                 ? prom.rangeByScenario(p, PromQueries.errorPct(n, PromQueries.FailureSource.HELPER, runId, window), start, end, step) : Map.of();
         Map<String, List<PrometheusClient.Point>> errHttp = Map.of();
         Map<String, List<PrometheusClient.Point>> errChecks = Map.of();
-        if (!helper && snap.operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("HTTP"))) {
+        if (!helper && snap.operations().stream().anyMatch(o -> o.enabled() && !"CHECKS".equals(o.failureSource()))) {
             errHttp = prom.rangeByScenario(p, PromQueries.errorPct(n, PromQueries.FailureSource.HTTP, runId, window), start, end, step);
         }
-        if (!helper && snap.operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("CHECKS"))) {
+        if (!helper && snap.operations().stream().anyMatch(o -> o.enabled() && "CHECKS".equals(o.failureSource()))) {
             errChecks = prom.rangeByScenario(p, PromQueries.errorPct(n, PromQueries.FailureSource.CHECKS, runId, window), start, end, step);
         }
         long t0 = start.getEpochSecond();
@@ -134,7 +134,7 @@ public class RunSeriesService {
             if (!o.enabled()) {
                 continue;
             }
-            var errSrc = helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp;
+            var errSrc = helper ? errHelper : "CHECKS".equals(o.failureSource()) ? errChecks : errHttp;
             // в первые секунды окно захватывает время до старта: интенсивность делим на реально прошедшее время
             List<Pt> actual = new ArrayList<>();
             for (PrometheusClient.Point pt : withWarmup(rate, o.name())) {

@@ -101,6 +101,23 @@ public class RunEventBroadcaster {
             if (lines != null && !lines.isEmpty()) {
                 e.send(SseEmitter.event().name("log").data(toJson(lines)));
             }
+            e.send(SseEmitter.event().name("done").data("{}"));
+            e.complete();
+        } catch (IOException | IllegalStateException ex) {
+            e.completeWithError(ex);
+        }
+        return e;
+    }
+
+    /** Мгновенно завершённый SSE-поток для терминального run (не создаёт запись в channels). */
+    public SseEmitter snapshotDone(String status) {
+        SseEmitter e = new SseEmitter(5_000L);
+        try {
+            ObjectNode n = MAPPER.createObjectNode();
+            if (status != null) {
+                n.put("status", status);
+            }
+            e.send(SseEmitter.event().name("done").data(n.toString()));
             e.complete();
         } catch (IOException | IllegalStateException ex) {
             e.completeWithError(ex);
@@ -111,7 +128,6 @@ public class RunEventBroadcaster {
     public SseEmitter subscribeLogs(long runId, List<Line> fallbackFromDb) {
         Channel c = ch(runId);
         SseEmitter e = new SseEmitter(0L);
-        register(c.logSubs, e);
         List<Line> backlog;
         synchronized (c.logs) {
             backlog = new ArrayList<>(c.logs);
@@ -119,13 +135,18 @@ public class RunEventBroadcaster {
         if (backlog.isEmpty()) {
             backlog = fallbackFromDb;
         }
+        // отправляем бэклог ДО регистрации в subs, чтобы избежать конкурентного e.send() и перепутывания порядка
         try {
-            if (!backlog.isEmpty()) {
-                e.send(SseEmitter.event().name("log").data(toJson(backlog)));
+            if (backlog != null && !backlog.isEmpty()) {
+                synchronized (e) {
+                    e.send(SseEmitter.event().name("log").data(toJson(backlog)));
+                }
             }
         } catch (IOException | IllegalStateException ex) {
-            c.logSubs.remove(e);
+            e.completeWithError(ex);
+            return e;
         }
+        register(c.logSubs, e);
         return e;
     }
 
@@ -161,26 +182,41 @@ public class RunEventBroadcaster {
     public SseEmitter subscribeMetrics(long runId) {
         Channel c = ch(runId);
         SseEmitter e = new SseEmitter(0L);
-        register(c.metricSubs, e);
         String last = c.lastMetrics;
         if (last != null) {
             try {
-                e.send(SseEmitter.event().name("metrics").data(last));
+                synchronized (e) {
+                    e.send(SseEmitter.event().name("metrics").data(last));
+                }
             } catch (IOException | IllegalStateException ex) {
-                c.metricSubs.remove(e);
+                e.completeWithError(ex);
+                return e;
             }
         }
+        register(c.metricSubs, e);
         return e;
     }
 
-    /** Освобождает память завершённого run (подписчики закрываются). */
+    /** Освобождает память завершённого run (подписчики уведомляются событием done и закрываются). */
     public void close(long runId) {
         Channel c = channels.remove(runId);
         if (c == null) {
             return;
         }
         for (List<SseEmitter> subs : List.of(c.logSubs, c.statusSubs, c.metricSubs)) {
-            subs.forEach(SseEmitter::complete);
+            for (SseEmitter e : subs) {
+                try {
+                    synchronized (e) {
+                        e.send(SseEmitter.event().name("done").data("{}"));
+                        e.complete();
+                    }
+                } catch (IOException | IllegalStateException ignored) {
+                    try {
+                        e.complete();
+                    } catch (RuntimeException ignored2) {
+                    }
+                }
+            }
             subs.clear();
         }
     }
@@ -192,7 +228,9 @@ public class RunEventBroadcaster {
             for (List<SseEmitter> subs : List.of(c.logSubs, c.statusSubs, c.metricSubs)) {
                 for (SseEmitter e : subs) {
                     try {
-                        e.send(SseEmitter.event().comment("ka"));
+                        synchronized (e) {
+                            e.send(SseEmitter.event().comment("ka"));
+                        }
                     } catch (IOException | IllegalStateException ex) {
                         subs.remove(e);
                     }
@@ -211,7 +249,9 @@ public class RunEventBroadcaster {
     private void send(List<SseEmitter> subs, String event, String data) {
         for (SseEmitter e : subs) {
             try {
-                e.send(SseEmitter.event().name(event).data(data));
+                synchronized (e) {
+                    e.send(SseEmitter.event().name(event).data(data));
+                }
             } catch (IOException | IllegalStateException ex) {
                 subs.remove(e);
             }

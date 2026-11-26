@@ -208,15 +208,35 @@ public class PrometheusClient {
             throw new IOException("URL запросов Prometheus не задан");
         }
         String base = normalize(p.queryUrl());
-        String uri = query == null || query.isEmpty() ? base + path : base + path + "?" + query;
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(uri)).timeout(Duration.ofSeconds(15)).GET();
+        boolean usePost = query != null && !query.isEmpty() && (path.endsWith("/query") || path.endsWith("/query_range"));
+        HttpRequest.Builder b;
+        if (usePost) {
+            // POST form-urlencoded не упирается в лимит длины URL (414 URI Too Long) на сложных Grafana/кастомных запросах
+            b = HttpRequest.newBuilder(URI.create(base + path))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString(query, StandardCharsets.UTF_8));
+        } else {
+            String uri = query == null || query.isEmpty() ? base + path : base + path + "?" + query;
+            b = HttpRequest.newBuilder(URI.create(uri)).timeout(Duration.ofSeconds(15)).GET();
+        }
         p.authHeaders().forEach(b::header);
         try {
             HttpResponse<String> r = http.send(b.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (r.statusCode() == 401 || r.statusCode() == 403) {
                 throw new IOException("Prometheus отклонил запрос (HTTP " + r.statusCode() + "): проверьте аутентификацию");
             }
-            JsonNode root = MAPPER.readTree(r.body());
+            String body = r.body() == null ? "" : r.body();
+            JsonNode root;
+            try {
+                root = MAPPER.readTree(body);
+            } catch (IOException parseEx) {
+                String snippet = body.replaceAll("\\s+", " ").trim();
+                if (snippet.length() > 160) {
+                    snippet = snippet.substring(0, 160) + "…";
+                }
+                throw new IOException("Prometheus вернул не-JSON (HTTP " + r.statusCode() + "): " + snippet, parseEx);
+            }
             if (!"success".equals(root.path("status").asText())) {
                 throw new IOException("Prometheus: " + root.path("errorType").asText() + " " + root.path("error").asText("HTTP " + r.statusCode()));
             }

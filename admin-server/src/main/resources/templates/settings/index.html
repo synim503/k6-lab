@@ -15,7 +15,7 @@
     <div class="row g-3">
         <div class="col-lg-6">
             <div class="card" id="prom"><div class="card-header">Prometheus</div><div class="card-body">
-                <form th:action="@{/settings/prometheus}" method="post">
+                <form th:action="@{/settings/prometheus}" method="post" data-ajax="#prom">
                     <div class="mb-2"><label class="form-label" for="p-rw">URL remote write (его используют генераторы)</label>
                         <input class="form-control" id="p-rw" name="rwUrl" th:value="${p.rwUrl}" placeholder="http://prometheus:9090/api/v1/write"></div>
                     <div class="mb-2"><label class="form-label" for="p-q">URL запросов (его использует админка)</label>
@@ -48,11 +48,11 @@
             </div></div>
 
             <div class="card mt-3" id="diag"><div class="card-header">Диагностика связки k6 → Prometheus</div><div class="card-body">
-                <form class="row g-2 mb-3" th:action="@{/settings/diagnostics}" method="post">
+                <form class="row g-2 mb-3" th:action="@{/settings/diagnostics}" method="post" data-ajax="#diag">
                     <div class="col"><select class="form-select" name="generatorId" required>
                         <option value="" th:if="${connected.isEmpty()}">нет подключённых генераторов</option>
                         <option th:each="g : ${connected}" th:value="${g.id}" th:text="${g.name}"></option></select></div>
-                    <div class="col-auto"><button class="btn btn-outline-primary" th:disabled="${connected.isEmpty() or diagRunning}">Проверить</button></div>
+                    <div class="col-auto"><button class="btn btn-outline-primary" id="diag-run-btn" th:attr="data-has-connected=${!connected.isEmpty()}" th:disabled="${connected.isEmpty() or diagRunning}">Проверить</button></div>
                 </form>
                 <div th:replace="~{settings/_diag :: panel}"></div>
                 <div class="form-text mt-2" th:if="${requireDiagnostics}">Запуск скриптов разрешён только после успешной диагностики.</div>
@@ -61,7 +61,7 @@
 
         <div class="col-lg-6">
             <div class="card" id="names"><div class="card-header">Имена метрик k6 в Prometheus</div><div class="card-body">
-                <form th:action="@{/settings/metric-names}" method="post">
+                <form th:action="@{/settings/metric-names}" method="post" data-ajax="#names">
                     <textarea class="form-control font-monospace mb-2" rows="11" name="json" th:text="${metricNames}"></textarea>
                     <button class="btn btn-primary">Сохранить</button>
                 </form>
@@ -69,7 +69,7 @@
             </div></div>
 
             <div class="card mt-3" id="allow"><div class="card-header">Какие метрики отправляют агенты (белый список)</div><div class="card-body">
-                <form th:action="@{/settings/allow-metrics}" method="post">
+                <form th:action="@{/settings/allow-metrics}" method="post" data-ajax="#allow">
                     <label class="form-label" for="allowMetrics">Отправлять только эти метрики (по одной маске на строку)</label>
                     <textarea class="form-control font-monospace mb-2" id="allowMetrics" rows="6" name="allowMetrics" th:text="${allowMetrics}"
                               placeholder="k6_http_req_duration_seconds&#10;k6_http_reqs_total&#10;k6_data_sent_total"></textarea>
@@ -96,7 +96,7 @@
             </div></div>
 
             <div class="card mt-3" id="limits"><div class="card-header">Хранение и логи</div><div class="card-body">
-                <form class="row g-2" th:action="@{/settings/limits}" method="post">
+                <form class="row g-2" th:action="@{/settings/limits}" method="post" data-ajax="#limits">
                     <div class="col-12 col-sm-4"><label class="form-label">Строк лога агента в секунду</label><input class="form-control" type="number" min="1" name="logLines" th:value="${logLines}"></div>
                     <div class="col-12 col-sm-4"><label class="form-label">Хранить логи, дней</label><input class="form-control" type="number" min="1" name="logDays" th:value="${logDays}"></div>
                     <div class="col-12 col-sm-4"><label class="form-label">Метрики генераторов, дней</label><input class="form-control" type="number" min="1" name="metricsDays" th:value="${metricsDays}"></div>
@@ -112,6 +112,7 @@
                 <div class="small text-muted mb-3">Оформление графиков в HTML, PDF и Word-отчётах. Высота — это высота самого графика: легенда снизу добавляется к ней,
                     поэтому график не сжимается, даже если в нём много рядов. Если рядов больше лимита легенды, в ней остаются ряды с наибольшим максимумом.</div>
                 <form class="row g-2 align-items-end" id="chart-style-form" th:action="@{/settings/report-charts}" method="post"
+                      data-ajax="#charts"
                       th:attr="data-preview-url=@{/settings/report-charts/preview.png}">
                     <div class="col-sm-6 col-md-4"><label class="form-label small mb-1">Тема</label>
                         <select class="form-select form-select-sm" name="theme">
@@ -208,130 +209,164 @@
 <th:block layout:fragment="scripts">
     <script th:inline="none">
         (function () {
-            var form = document.getElementById('chart-style-form');
-            var img = document.getElementById('chart-prev-img');
-            if (!form || !img) { return; }
-            var spin = document.getElementById('chart-prev-spin');
-            var dimEl = document.getElementById('chart-prev-dim');
-            var dirtyBadge = document.getElementById('chart-dirty-badge');
-            var seriesBtns = document.querySelectorAll('#chart-prev-series [data-sc]');
-            var baseUrl = form.dataset.previewUrl;
-            var seriesCount = 6;
-            var seq = 0, timer = null, prevObjUrl = null;
+            var seriesCount = 6, seq = 0, timer = null, prevObjUrl = null;
 
-            function readState() {
-                var fd = new FormData(form);
-                return {
-                    theme: fd.get('theme') || 'DARK',
-                    width: fd.get('width') || '1000',
-                    height: fd.get('height') || '320',
-                    legend: fd.get('legend') || 'BOTTOM',
-                    maxLegend: fd.get('maxLegend') || '20',
-                    timeAxis: fd.get('timeAxis') || 'rel',
-                    sortBy: fd.get('sortBy') || 'NONE',
-                    sortDir: fd.get('sortDir') || 'DESC',
-                    skipWarmup: fd.get('skipWarmup') || 'false',
-                    stats: form.querySelector('#chart-stats').checked ? 'true' : 'false',
-                    autoWidth: form.querySelector('#chart-auto-width').checked ? 'true' : 'false'
-                };
-            }
+            function bindChartPreview(forceRefresh) {
+                var form = document.getElementById('chart-style-form');
+                var img = document.getElementById('chart-prev-img');
+                if (!form || !img || form.dataset.k6ChartBound === '1') { return; }
+                form.dataset.k6ChartBound = '1';
+                var spin = document.getElementById('chart-prev-spin');
+                var dimEl = document.getElementById('chart-prev-dim');
+                var dirtyBadge = document.getElementById('chart-dirty-badge');
+                var seriesBtns = document.querySelectorAll('#chart-prev-series [data-sc]');
+                var baseUrl = form.dataset.previewUrl;
 
-            var initialSnap = JSON.stringify(readState());
-
-            function updateDim() {
-                if (img.naturalWidth > 0 && dimEl) {
-                    dimEl.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' px';
+                function readState() {
+                    var fd = new FormData(form);
+                    return {
+                        theme: fd.get('theme') || 'DARK',
+                        width: fd.get('width') || '1000',
+                        height: fd.get('height') || '320',
+                        legend: fd.get('legend') || 'BOTTOM',
+                        maxLegend: fd.get('maxLegend') || '20',
+                        timeAxis: fd.get('timeAxis') || 'rel',
+                        sortBy: fd.get('sortBy') || 'NONE',
+                        sortDir: fd.get('sortDir') || 'DESC',
+                        skipWarmup: fd.get('skipWarmup') || 'false',
+                        stats: form.querySelector('#chart-stats').checked ? 'true' : 'false',
+                        autoWidth: form.querySelector('#chart-auto-width').checked ? 'true' : 'false'
+                    };
                 }
-            }
-            img.addEventListener('load', updateDim);
-            if (img.complete) { updateDim(); }
 
-            function refreshPreview() {
-                var st = readState();
-                if (dirtyBadge) {
-                    dirtyBadge.classList.toggle('d-none', JSON.stringify(st) === initialSnap);
+                var initialSnap = JSON.stringify(readState());
+
+                function updateDim() {
+                    if (img.naturalWidth > 0 && dimEl) {
+                        dimEl.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' px';
+                    }
                 }
-                var params = new URLSearchParams(st);
-                params.set('seriesCount', String(seriesCount));
-                var mySeq = ++seq;
-                if (spin) { spin.classList.remove('d-none'); }
-                img.style.opacity = '0.6';
+                img.addEventListener('load', updateDim);
+                if (img.complete) { updateDim(); }
 
-                fetch(baseUrl + '?' + params.toString(), {cache: 'no-store'})
-                    .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.blob(); })
-                    .then(function (blob) {
-                        if (mySeq !== seq) { return; }
-                        var url = URL.createObjectURL(blob);
-                        var next = new Image();
-                        next.onload = function () {
-                            if (mySeq !== seq) { URL.revokeObjectURL(url); return; }
-                            img.src = url;
-                            img.style.opacity = '1';
-                            if (prevObjUrl) { URL.revokeObjectURL(prevObjUrl); }
-                            prevObjUrl = url;
-                            if (spin) { spin.classList.add('d-none'); }
-                            if (dimEl) { dimEl.textContent = next.naturalWidth + ' × ' + next.naturalHeight + ' px'; }
-                        };
-                        next.onerror = function () {
-                            URL.revokeObjectURL(url);
+                function refreshPreview() {
+                    var st = readState();
+                    if (dirtyBadge) {
+                        dirtyBadge.classList.toggle('d-none', JSON.stringify(st) === initialSnap);
+                    }
+                    var params = new URLSearchParams(st);
+                    params.set('seriesCount', String(seriesCount));
+                    var mySeq = ++seq;
+                    if (spin) { spin.classList.remove('d-none'); }
+                    img.style.opacity = '0.6';
+
+                    fetch(baseUrl + '?' + params.toString(), {cache: 'no-store'})
+                        .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.blob(); })
+                        .then(function (blob) {
+                            if (mySeq !== seq) { return; }
+                            var url = URL.createObjectURL(blob);
+                            var next = new Image();
+                            next.onload = function () {
+                                if (mySeq !== seq) { URL.revokeObjectURL(url); return; }
+                                img.src = url;
+                                img.style.opacity = '1';
+                                if (prevObjUrl) { URL.revokeObjectURL(prevObjUrl); }
+                                prevObjUrl = url;
+                                if (spin) { spin.classList.add('d-none'); }
+                                if (dimEl) { dimEl.textContent = next.naturalWidth + ' × ' + next.naturalHeight + ' px'; }
+                            };
+                            next.onerror = function () {
+                                URL.revokeObjectURL(url);
+                                if (mySeq === seq) { img.style.opacity = '1'; if (spin) { spin.classList.add('d-none'); } }
+                            };
+                            next.src = url;
+                        })
+                        .catch(function () {
                             if (mySeq === seq) { img.style.opacity = '1'; if (spin) { spin.classList.add('d-none'); } }
-                        };
-                        next.src = url;
-                    })
-                    .catch(function () {
-                        if (mySeq === seq) { img.style.opacity = '1'; if (spin) { spin.classList.add('d-none'); } }
+                        });
+                }
+
+                function schedule() {
+                    clearTimeout(timer);
+                    timer = setTimeout(refreshPreview, 130);
+                }
+
+                form.addEventListener('input', schedule);
+                form.addEventListener('change', schedule);
+                seriesBtns.forEach(function (btn) {
+                    btn.classList.toggle('active', (parseInt(btn.dataset.sc, 10) || 6) === seriesCount);
+                    btn.addEventListener('click', function () {
+                        seriesCount = parseInt(btn.dataset.sc, 10) || 6;
+                        seriesBtns.forEach(function (b) { b.classList.toggle('active', b === btn); });
+                        refreshPreview();
                     });
-            }
-
-            function schedule() {
-                clearTimeout(timer);
-                timer = setTimeout(refreshPreview, 130);
-            }
-
-            form.addEventListener('input', schedule);
-            form.addEventListener('change', schedule);
-            seriesBtns.forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    seriesCount = parseInt(btn.dataset.sc, 10) || 6;
-                    seriesBtns.forEach(function (b) { b.classList.toggle('active', b === btn); });
-                    refreshPreview();
                 });
-            });
 
-            img.addEventListener('click', function () {
-                var mImg = document.getElementById('chart-prev-modal-img');
-                var mDim = document.getElementById('chart-prev-modal-dim');
-                var mBody = document.getElementById('chart-prev-modal-body');
-                mImg.src = img.src;
-                mDim.textContent = dimEl ? dimEl.textContent : '';
-                if (mBody) { mBody.style.background = readState().theme === 'LIGHT' ? '#ffffff' : '#111827'; }
-                bootstrap.Modal.getOrCreateInstance(document.getElementById('chart-prev-modal')).show();
-            });
+                img.addEventListener('click', function () {
+                    var mImg = document.getElementById('chart-prev-modal-img');
+                    var mDim = document.getElementById('chart-prev-modal-dim');
+                    var mBody = document.getElementById('chart-prev-modal-body');
+                    mImg.src = img.src;
+                    mDim.textContent = dimEl ? dimEl.textContent : '';
+                    if (mBody) { mBody.style.background = readState().theme === 'LIGHT' ? '#ffffff' : '#111827'; }
+                    bootstrap.Modal.getOrCreateInstance(document.getElementById('chart-prev-modal')).show();
+                });
 
-            var stage = document.getElementById('chart-prev-stage');
-            form.addEventListener('change', function () {
-                if (stage) { stage.style.background = readState().theme === 'LIGHT' ? '#ffffff' : '#181b1f'; }
-            });
-        })();
-
-        // Условное отображение полей аутентификации Prometheus + scroll-spy по секциям настроек
-        (function () {
-            var auth = document.getElementById('p-auth');
-            var userWrap = document.getElementById('p-user-wrap');
-            var secWrap = document.getElementById('p-secret-wrap');
-            function syncAuth() {
-                if (!auth || !userWrap || !secWrap) { return; }
-                var v = auth.value;
-                userWrap.classList.toggle('d-none', v === 'NONE' || v === 'BEARER');
-                secWrap.classList.toggle('d-none', v === 'NONE');
+                var stage = document.getElementById('chart-prev-stage');
+                function syncStageBg() {
+                    if (stage) { stage.style.background = readState().theme === 'LIGHT' ? '#ffffff' : '#181b1f'; }
+                }
+                form.addEventListener('change', syncStageBg);
+                syncStageBg();
+                if (forceRefresh) { refreshPreview(); }
             }
-            if (auth) { auth.addEventListener('change', syncAuth); syncAuth(); }
+
+            function bindPromAuth() {
+                var auth = document.getElementById('p-auth');
+                var userWrap = document.getElementById('p-user-wrap');
+                var secWrap = document.getElementById('p-secret-wrap');
+                if (!auth || !userWrap || !secWrap) { return; }
+                function syncAuth() {
+                    var v = auth.value;
+                    userWrap.classList.toggle('d-none', v === 'NONE' || v === 'BEARER');
+                    secWrap.classList.toggle('d-none', v === 'NONE');
+                }
+                if (auth.dataset.k6AuthBound !== '1') {
+                    auth.dataset.k6AuthBound = '1';
+                    auth.addEventListener('change', syncAuth);
+                }
+                syncAuth();
+            }
+
+            function syncDiagButton() {
+                var panel = document.getElementById('diag-panel');
+                var btn = document.getElementById('diag-run-btn');
+                if (!panel || !btn) { return; }
+                var running = panel.dataset.diagRunning === 'true';
+                var hasConn = btn.dataset.hasConnected !== 'false';
+                btn.disabled = running || !hasConn;
+            }
+
+            bindChartPreview(false);
+            bindPromAuth();
+            syncDiagButton();
+            document.addEventListener('k6:swapped', function () {
+                bindChartPreview(true);
+                bindPromAuth();
+                syncDiagButton();
+            });
+            document.body.addEventListener('htmx:afterSwap', function (ev) {
+                var t = ev.detail && ev.detail.target;
+                if (t && (t.id === 'diag-panel' || (t.querySelector && t.querySelector('#diag-panel')))) {
+                    syncDiagButton();
+                }
+            });
 
             var nav = document.getElementById('settings-nav');
             if (!nav) { return; }
             var links = [].slice.call(nav.querySelectorAll('a[href^="#"]'));
-            var targets = links.map(function (a) { return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
             function syncSpy() {
+                var targets = links.map(function (a) { return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
                 var cur = targets[0];
                 var top = window.scrollY + 120;
                 targets.forEach(function (el) { if (el.offsetTop <= top) { cur = el; } });

@@ -80,19 +80,28 @@ public class ReportService {
     private List<ChartRenderer.Img> buildCharts(Run run, RunSnapshot snap, ResultData data, boolean skipWarmup) {
         List<ChartRenderer.Img> charts = new java.util.ArrayList<>();
         try {
-            // графики по времени от начала теста (или от конца прогрева)
             charts.addAll(ChartRenderer.timeCharts(seriesService.series(run, snap), skipWarmup));
-            // при многоступенчатом тесте (поиск максимума) добавляем графики по ступеням нагрузки (%) —
-            // или используем их как запасные, если временных рядов нет
+        } catch (RuntimeException | LinkageError e) {
+            org.slf4j.LoggerFactory.getLogger(ReportService.class).warn("Run {}: ошибка построения временных графиков: {}", run.getId(), e.toString());
+        }
+        try {
             if (charts.isEmpty() || data.isStepTest()) {
                 charts.addAll(ChartRenderer.charts(data));
             }
-            long wSec = warmupSec(snap);
+        } catch (RuntimeException | LinkageError e) {
+            org.slf4j.LoggerFactory.getLogger(ReportService.class).warn("Run {}: ошибка построения ступенчатых графиков: {}", run.getId(), e.toString());
+        }
+        long wSec = warmupSec(snap);
+        try {
             charts.addAll(customCharts.charts(run, wSec, skipWarmup));
+        } catch (RuntimeException | LinkageError e) {
+            org.slf4j.LoggerFactory.getLogger(ReportService.class).warn("Run {}: ошибка построения пользовательских графиков: {}", run.getId(), e.toString());
+        }
+        try {
             charts.addAll(customCharts.customCheckCharts(run, results.getEffectiveCustomChecks(run, snap),
                     results.varsForRun(run, snap), wSec, skipWarmup));
         } catch (RuntimeException | LinkageError e) {
-            // графики - украшение: без них отчёт всё равно полезен (например, нет AWT на сервере)
+            org.slf4j.LoggerFactory.getLogger(ReportService.class).warn("Run {}: ошибка построения графиков кастомных проверок: {}", run.getId(), e.toString());
         }
         return charts;
     }

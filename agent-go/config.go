@@ -166,8 +166,9 @@ func (c *Config) SavePermanent(token string) error {
 	path := filepath.Join(c.Home, "agent.properties")
 	var out []string
 	replaced := false
-	if f, err := os.Open(path); err == nil {
-		sc := bufio.NewScanner(f)
+	fRead, err := os.Open(path)
+	if err == nil {
+		sc := bufio.NewScanner(fRead)
 		for sc.Scan() {
 			l := sc.Text()
 			if strings.HasPrefix(l, "agent.token=") {
@@ -177,7 +178,13 @@ func (c *Config) SavePermanent(token string) error {
 				out = append(out, l)
 			}
 		}
-		f.Close()
+		scanErr := sc.Err()
+		_ = fRead.Close()
+		if scanErr != nil {
+			return fmt.Errorf("read %s: %w", path, scanErr)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("open %s: %w", path, err)
 	}
 	if !replaced {
 		out = append(out, "agent.token="+token)

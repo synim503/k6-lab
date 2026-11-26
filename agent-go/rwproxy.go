@@ -199,7 +199,7 @@ func (p *RWProxy) SetAllow(patterns []string) {
 }
 
 func (p *RWProxy) Close() {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	_ = p.srv.Shutdown(ctx)
 }

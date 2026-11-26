@@ -475,7 +475,9 @@ public class LoadService {
                 applyBaseOverridesToProfileForm(script, pf, true);
                 profiles.save(scriptId, p.name(), LoadJson.toJson(pf), user == null ? "system" : user);
                 updated++;
-            } catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException e) {
+                org.slf4j.LoggerFactory.getLogger(LoadService.class)
+                        .warn("Скрипт {}: не удалось синхронизировать базовые параметры в профиль «{}»: {}", scriptId, p.name(), e.getMessage());
             }
         }
         return updated;

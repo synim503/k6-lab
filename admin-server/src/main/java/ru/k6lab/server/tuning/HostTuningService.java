@@ -372,7 +372,12 @@ public class HostTuningService {
                     } else {
                         persistCmd.append("rm -f ").append(TMPFILES).append("; ");
                     }
-                    ssh.sudo(persistCmd.toString(), Duration.ofSeconds(30));
+                    var persistRes = ssh.sudo(persistCmd.toString(), Duration.ofSeconds(30));
+                    if (!persistRes.ok()) {
+                        String pErr = "Не удалось сохранить файлы настроек (" + CONF + "): " + persistRes.stderr().strip();
+                        op.step("Сохранение после перезагрузки", "FAILED", pErr);
+                        err = err == null ? pErr : err + "; " + pErr;
+                    }
                 } finally {
                     if (tmpDir != null) {
                         try {
@@ -383,9 +388,8 @@ public class HostTuningService {
                     }
                 }
 
-                // новая запись заменяет прежние: исходные значения перенесены в неё
-                store.markReplaced(g.getId());
-                store.insertTuning(g.getId(), g.getName(), user, "APPLIED", changes, err);
+                // новая запись заменяет прежние: исходные значения перенесены в неё (атомарно в одной транзакции)
+                store.replaceTuning(g.getId(), g.getName(), user, "APPLIED", changes, err);
                 audit.record("host.tuning.apply", "generator", g.getId(), Map.of("changes", changes.size(), "by", String.valueOf(user)));
                 op.finish(true, err);
                 return "применено параметров: " + okCount + " из " + changes.size() + (err == null ? "" : " (" + op.masker.mask(err) + ")");
@@ -417,7 +421,7 @@ public class HostTuningService {
             Op op = new Op(g, Deployment.Operation.TUNE_ROLLBACK, user, Map.of("settings", original.size()));
             try (SshConnection ssh = connect(g, op.masker)) {
                 op.step("Подключение по SSH", "OK", g.getHost());
-                StringBuilder cmd = new StringBuilder(PATH_FIX).append("rm -f ").append(CONF).append(' ').append(TMPFILES).append("; rc=0; ");
+                StringBuilder cmd = new StringBuilder(PATH_FIX).append("rc=0; rm -f ").append(CONF).append(' ').append(TMPFILES).append(" || rc=1; ");
                 for (Map.Entry<String, String> e : original.entrySet()) {
                     String v = norm(e.getValue());
                     if (!TuningAnalyzer.valid(e.getKey(), v)) {
@@ -436,10 +440,11 @@ public class HostTuningService {
                     }
                     op.step("Параметр " + k, ok ? "OK" : "FAILED", after.getOrDefault(k, "") + (ok ? " (исходное)" : " (ожидалось " + norm(v) + ")"));
                 });
-                op.step("Файлы настроек удалены", "OK", CONF);
+                op.step("Удаление файлов настроек", r.ok() ? "OK" : "FAILED", r.ok() ? CONF : r.stderr().strip());
                 audit.record("host.tuning.rollback", "generator", g.getId(), Map.of("by", String.valueOf(user)));
-                if (!notRestored.isEmpty()) {
-                    String msg = "не вернулись: " + String.join(", ", notRestored) + (r.stderr().isBlank() ? "" : " (" + r.stderr().strip() + ")");
+                if (!notRestored.isEmpty() || !r.ok()) {
+                    String msg = (!notRestored.isEmpty() ? "не вернулись: " + String.join(", ", notRestored) : "ошибка удаления файлов настроек")
+                            + (r.stderr().isBlank() ? "" : " (" + r.stderr().strip() + ")");
                     op.finish(false, msg);
                     return "откат выполнен частично, " + op.masker.mask(msg) + " (запись оставлена активной для повторного отката)";
                 }
@@ -461,7 +466,7 @@ public class HostTuningService {
     private static String writeCmd(String key, String v) {
         return switch (key) {
             case TuningAnalyzer.THP -> "echo " + v + " > " + THP_FILE + " || rc=1; ";
-            case TuningAnalyzer.GOVERNOR -> "for f in " + GOV_GLOB + "; do echo " + v + " > \"$f\" || rc=1; done; ";
+            case TuningAnalyzer.GOVERNOR -> "for f in " + GOV_GLOB + "; do [ -e \"$f\" ] || continue; echo " + v + " > \"$f\" || rc=1; done; ";
             default -> "sysctl -w " + key + "=\"" + v + "\" >/dev/null || rc=1; ";
         };
     }
@@ -505,6 +510,9 @@ public class HostTuningService {
             return out;
         }
         var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(30));
+        if (!r.ok() && r.stdout().isBlank()) {
+            throw new IllegalStateException("Не удалось прочитать текущие параметры ОС (sudo): " + r.stderr().strip());
+        }
         for (String line : r.stdout().split("\\R")) {
             int eq = line.indexOf('=');
             if (eq > 0) {

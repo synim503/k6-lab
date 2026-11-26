@@ -35,7 +35,7 @@ public final class K6ConfigOverrides {
     public static Applied apply(JsonNode base, Map<String, Object> overrides) {
         List<String> notes = new ArrayList<>();
         if (overrides == null || overrides.isEmpty()) {
-            return new Applied(base, notes);
+            return new Applied(base == null ? null : base.deepCopy(), notes);
         }
         ObjectNode patch = MAPPER.valueToTree(overrides);
         // сценарий, которого больше нет (операцию переименовали или убрали из нагрузки), создавать из правки нельзя
@@ -158,16 +158,28 @@ public final class K6ConfigOverrides {
 
     private static List<String> riskyPaths(ObjectNode patch) {
         List<String> out = new ArrayList<>();
-        for (String p : paths(MAPPER.convertValue(patch, new TypeReference<LinkedHashMap<String, Object>>() {
-        }))) {
-            String[] seg = p.split("\\.");
-            boolean scenarioField = seg.length >= 3 && seg[0].equals("scenarios") && PLAN_FIELDS.contains(seg[2]);
-            // сценарий целиком удалён или добавлен вручную - тоже расходится с планом
-            boolean scenarioWhole = seg.length == 2 && seg[0].equals("scenarios");
-            if (scenarioField || scenarioWhole || p.equals("systemTags") || p.equals("scenarios")) {
-                out.add(p);
-            }
-        }
+        collectRisky(patch, new ArrayList<>(), out);
         return out;
+    }
+
+    private static void collectRisky(JsonNode n, List<String> segs, List<String> out) {
+        if (n.isObject() && !n.isEmpty()) {
+            n.fields().forEachRemaining(e -> {
+                segs.add(e.getKey());
+                collectRisky(e.getValue(), segs, out);
+                segs.remove(segs.size() - 1);
+            });
+            return;
+        }
+        if (segs.isEmpty()) {
+            return;
+        }
+        String first = segs.get(0);
+        boolean scenarioField = segs.size() >= 3 && "scenarios".equals(first) && PLAN_FIELDS.contains(segs.get(2));
+        boolean scenarioWhole = segs.size() == 2 && "scenarios".equals(first);
+        boolean topRisky = segs.size() == 1 && ("systemTags".equals(first) || "scenarios".equals(first));
+        if (scenarioField || scenarioWhole || topRisky) {
+            out.add(String.join(".", segs));
+        }
     }
 }

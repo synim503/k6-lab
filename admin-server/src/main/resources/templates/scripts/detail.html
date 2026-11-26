@@ -14,10 +14,14 @@
         <code>config/</code> и <code>data/</code> прежней установки (или после смены <code>K6LAB_STORAGE_DIR</code>).
         Верните каталог хранилища на место либо загрузите скрипт заново на вкладке «Версии».</div>
 
+    <div id="script-running-wrap">
     <div class="alert alert-info d-flex justify-content-between align-items-center gap-3 flex-wrap" th:if="${running}">
         <span><span class="dot dot-busy me-2"></span><strong>Скрипт сейчас выполняется.</strong> Новый запуск начнётся после завершения текущего.</span>
-        <form th:action="@{/scripts/{id}/stop(id=${script.id})}" method="post" data-confirm="Остановить выполняющийся скрипт?">
+        <form th:action="@{/scripts/{id}/stop(id=${script.id})}" method="post"
+              data-ajax="#script-running-wrap,#script-runs-section"
+              data-confirm="Остановить выполняющийся скрипт?">
             <button class="btn btn-sm btn-outline-danger"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form></div>
+    </div>
 
     <!-- ============ Обзор ============ -->
     <div id="pane-overview">
@@ -79,19 +83,22 @@
             </div>
         </div>
 
+        <div id="script-runs-section">
         <div class="sect-title flex-wrap gap-2" id="runs">
             <h5 class="mb-0">Запуски <span class="badge text-bg-light border ms-1" th:if="${runsPage.totalElements > 0}" th:text="${runsPage.totalElements}"></span></h5>
             <span class="hint" th:if="${runsPage.totalElements == 0}">запуски этого скрипта</span>
             <span class="hint" th:if="${runsPage.totalElements > 0}"
                   th:with="from=${runsPage.number * runsPage.size + 1}, to=${runsPage.number * runsPage.size + runsPage.numberOfElements}"
                   th:text="'показано ' + ${from} + '–' + ${to} + ' из ' + ${runsPage.totalElements}"></span>
-            <form th:action="@{/scripts/{id}(id=${script.id})} + '#runs'" method="get" class="d-flex flex-wrap align-items-center gap-2 ms-auto">
+            <form th:action="@{/scripts/{id}(id=${script.id})} + '#runs'" method="get"
+                  data-ajax-get="#script-runs-section"
+                  class="d-flex flex-wrap align-items-center gap-2 ms-auto">
                 <input type="hidden" name="page" value="0">
-                <select class="form-select form-select-sm" style="width:auto" name="status" aria-label="Фильтр по статусу" onchange="this.form.submit()">
+                <select class="form-select form-select-sm" style="width:auto" name="status" aria-label="Фильтр по статусу" onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
                     <option value="" th:selected="${runStatus == null}">Все статусы</option>
                     <option th:each="st : ${runStatuses}" th:value="${st.name()}" th:text="${fmt.runStatus(st.name())}" th:selected="${runStatus == st}"></option>
                 </select>
-                <select class="form-select form-select-sm" style="width:auto" name="size" aria-label="Запусков на странице" onchange="this.form.submit()">
+                <select class="form-select form-select-sm" style="width:auto" name="size" aria-label="Запусков на странице" onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
                     <option th:each="sz : ${pageSizes}" th:value="${sz}" th:text="${sz} + ' на стр.'" th:selected="${runsPage.size == sz}"></option>
                 </select>
             </form>
@@ -103,7 +110,7 @@
                 <tr th:if="${history.isEmpty()}"><td colspan="7"><div class="empty-state"><i class="bi bi-inbox"></i>
                     <span th:text="${runStatus != null} ? 'Нет запусков с выбранным статусом' : 'Запусков ещё не было'">Запусков ещё не было</span>
                     <div class="mt-2" th:if="${runStatus != null}">
-                        <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id},size=${runsPage.size})} + '#runs'">Сбросить фильтр</a>
+                        <a class="btn btn-sm btn-outline-secondary" data-ajax-get="#script-runs-section" th:href="@{/scripts/{id}(id=${script.id},size=${runsPage.size})} + '#runs'">Сбросить фильтр</a>
                     </div>
                 </div></td></tr>
                 <tr th:each="r : ${history}" class="run-row" th:attr="data-href=@{/runs/{id}(id=${r.id})}">
@@ -122,7 +129,7 @@
                     <td class="small" th:text="${r.conclusion} ?: '—'"></td>
                     <td class="text-end text-nowrap">
                         <div class="btn-group btn-group-sm">
-                            <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="d-inline m-0">
+                            <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="d-inline m-0" data-ajax="toast">
                                 <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Добавить прогон в конец очереди" aria-label="Добавить в конец очереди">
                                     <i class="bi bi-arrow-repeat"></i>
                                 </button>
@@ -132,14 +139,14 @@
                             </button>
                             <ul class="dropdown-menu dropdown-menu-end">
                                 <li>
-                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='front')}" method="post" class="m-0">
+                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='front')}" method="post" class="m-0" data-ajax="toast">
                                         <button type="submit" class="dropdown-item small">
                                             <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
                                         </button>
                                     </form>
                                 </li>
                                 <li>
-                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="m-0">
+                                    <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="m-0" data-ajax="toast">
                                         <button type="submit" class="dropdown-item small">
                                             <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
                                         </button>
@@ -156,27 +163,28 @@
                 <nav aria-label="Пагинация запусков скрипта">
                     <ul class="pagination pagination-sm mb-0">
                         <li class="page-item" th:classappend="${runsPage.first} ? 'disabled'">
-                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=0,size=${runsPage.size},status=${runStatus})} + '#runs'" title="Первая страница" aria-label="Первая">«</a>
+                            <a class="page-link" data-ajax-get="#script-runs-section" th:href="@{/scripts/{id}(id=${script.id},page=0,size=${runsPage.size},status=${runStatus})} + '#runs'" title="Первая страница" aria-label="Первая">«</a>
                         </li>
                         <li class="page-item" th:classappend="${!runsPage.hasPrevious()} ? 'disabled'">
-                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.number > 0 ? runsPage.number - 1 : 0},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Предыдущая страница" aria-label="Назад">‹</a>
+                            <a class="page-link" data-ajax-get="#script-runs-section" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.number > 0 ? runsPage.number - 1 : 0},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Предыдущая страница" aria-label="Назад">‹</a>
                         </li>
                         <li class="page-item" th:each="p : ${pageNumbers}"
                             th:classappend="${p == -1} ? 'disabled' : (${p == runsPage.number} ? 'active' : '')">
                             <span class="page-link" th:if="${p == -1}">…</span>
-                            <a class="page-link" th:if="${p != -1}"
+                            <a class="page-link" th:if="${p != -1}" data-ajax-get="#script-runs-section"
                                th:href="@{/scripts/{id}(id=${script.id},page=${p},size=${runsPage.size},status=${runStatus})} + '#runs'"
                                th:text="${p + 1}"></a>
                         </li>
                         <li class="page-item" th:classappend="${!runsPage.hasNext()} ? 'disabled'">
-                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.number + 1},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Следующая страница" aria-label="Вперёд">›</a>
+                            <a class="page-link" data-ajax-get="#script-runs-section" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.number + 1},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Следующая страница" aria-label="Вперёд">›</a>
                         </li>
                         <li class="page-item" th:classappend="${runsPage.last} ? 'disabled'">
-                            <a class="page-link" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.totalPages - 1},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Последняя страница" aria-label="Последняя">»</a>
+                            <a class="page-link" data-ajax-get="#script-runs-section" th:href="@{/scripts/{id}(id=${script.id},page=${runsPage.totalPages - 1},size=${runsPage.size},status=${runStatus})} + '#runs'" title="Последняя страница" aria-label="Последняя">»</a>
                         </li>
                     </ul>
                 </nav>
             </div>
+        </div>
         </div>
     </div>
 

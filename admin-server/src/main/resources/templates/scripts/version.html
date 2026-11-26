@@ -6,7 +6,8 @@
 <th:block layout:fragment="content">
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='versions')}"></th:block>
 
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"
+         id="version-meta" th:attr="data-version-id=${v.id}, data-version-number=${v.number}">
         <div class="d-flex align-items-center gap-2 flex-wrap">
             <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}(id=${script.id})} + '#versions'"><i class="bi bi-arrow-left me-1"></i>Все версии</a>
             <h5 class="mb-0">Версия <span th:text="${v.number}"></span>
@@ -42,16 +43,18 @@
                     <tr th:if="${v.comment}"><th>Комментарий</th><td th:text="${v.comment}"></td></tr>
                 </table></div></div>
 
-            <div class="card mb-3"><div class="card-header">Операции <span class="badge text-bg-secondary" title="Извлекаются эвристикой по export function / export const">эвристика</span></div>
+            <div class="card mb-3" id="version-ops-card"><div class="card-header">Операции <span class="badge text-bg-secondary" title="Извлекаются эвристикой по export function / export const">эвристика</span></div>
                 <ul class="list-group list-group-flush">
                     <li class="list-group-item text-muted" th:if="${v.operations.isEmpty()}">Не найдено — добавьте вручную</li>
                     <li class="list-group-item d-flex justify-content-between align-items-center" th:each="o : ${v.operations}">
                         <span><code th:text="${o.name}"></code> <span class="badge text-bg-light" th:text="${o.origin == 'MANUAL' ? 'вручную' : 'авто'}"></span></span>
-                        <form th:if="${o.origin == 'MANUAL'}" th:action="@{/scripts/{id}/versions/{vid}/operations/delete(id=${script.id},vid=${v.id})}" method="post">
-                            <input type="hidden" name="name" th:value="${o.name}"><button class="btn btn-sm btn-outline-danger py-0">×</button></form>
+                        <form th:if="${o.origin == 'MANUAL'}" th:action="@{/scripts/{id}/versions/{vid}/operations/delete(id=${script.id},vid=${v.id})}" method="post"
+                              data-ajax="#version-ops-card">
+                            <input type="hidden" name="name" th:value="${o.name}"><button class="btn btn-sm btn-outline-danger py-0" aria-label="Удалить операцию">×</button></form>
                     </li>
                 </ul>
-                <form class="card-body d-flex gap-2" th:action="@{/scripts/{id}/versions/{vid}/operations(id=${script.id},vid=${v.id})}" method="post">
+                <form class="card-body d-flex gap-2" th:action="@{/scripts/{id}/versions/{vid}/operations(id=${script.id},vid=${v.id})}" method="post"
+                      data-ajax="#version-ops-card" data-ajax-reset="true">
                     <input class="form-control form-control-sm" name="name" placeholder="имя экспортируемой функции">
                     <button class="btn btn-sm btn-outline-primary">Добавить</button></form>
             </div>

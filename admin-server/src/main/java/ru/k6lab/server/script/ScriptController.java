@@ -277,6 +277,9 @@ public class ScriptController {
         if (data == null) {
             throw new IllegalArgumentException("Файл не найден: " + path);
         }
+        if (data.length > 5 * 1024 * 1024) {
+            throw new IllegalArgumentException("Файл слишком большой для веб-редактора (> 5 МБ)");
+        }
         return Map.of("path", path, "content", new String(data, StandardCharsets.UTF_8));
     }
 

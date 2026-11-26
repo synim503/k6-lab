@@ -32,6 +32,12 @@ public final class Messages {
                                    boolean trendAsNativeHistogram, boolean classicHistograms, List<String> keepHistograms,
                                    List<String> allowMetrics) {
 
+        public PrometheusParams {
+            headers = headers == null ? Map.of() : Map.copyOf(headers);
+            keepHistograms = keepHistograms == null ? List.of() : List.copyOf(keepHistograms);
+            allowMetrics = allowMetrics == null ? List.of() : List.copyOf(allowMetrics);
+        }
+
         public PrometheusParams(String url, Map<String, String> headers, String pushInterval, boolean trendAsNativeHistogram) {
             this(url, headers, pushInterval, trendAsNativeHistogram, false, List.of(), List.of());
         }
@@ -55,12 +61,18 @@ public final class Messages {
     /** Первое сообщение после handshake: что у агента на руках. */
     public record Hello(int protocolVersion, String agentVersion, String k6Version, long agentTime,
                         long lastAckedSeq, long lastSeq, List<AgentRun> runs) implements Message {
+        public Hello {
+            runs = runs == null ? List.of() : List.copyOf(runs);
+        }
     }
 
     public record Heartbeat(long agentTime, double cpuPct, long ramUsedBytes, long ramTotalBytes,
                             long netRxBytesPerSec, long netTxBytesPerSec, double load1, double load5,
                             double load15, long diskFreeBytes, int openSockets, String k6Version,
                             String agentVersion, List<String> activeRuns) implements Message {
+        public Heartbeat {
+            activeRuns = activeRuns == null ? List.of() : List.copyOf(activeRuns);
+        }
     }
 
     /** Ответ на PING: t1 - отправка PING сервером, t2 - приём агентом, t3 - отправка PONG агентом. */
@@ -114,6 +126,15 @@ public final class Messages {
                           Map<String, String> tags, List<DataRule> dataRules,
                           PrometheusParams prometheus, int k6ApiPort, List<String> systemTags,
                           String entrypoint, int logLinesPerSecond, List<String> k6Flags) implements Command {
+
+        public Prepare {
+            env = env == null ? Map.of() : Map.copyOf(env);
+            secrets = secrets == null ? Map.of() : Map.copyOf(secrets);
+            tags = tags == null ? Map.of() : Map.copyOf(tags);
+            dataRules = dataRules == null ? List.of() : List.copyOf(dataRules);
+            systemTags = systemTags == null ? List.of() : List.copyOf(systemTags);
+            k6Flags = k6Flags == null ? List.of() : List.copyOf(k6Flags);
+        }
 
         /** Без дополнительных флагов k6 (прежняя форма сообщения). */
         public Prepare(String cmdId, String runId, String artifactUrl, String artifactSha256,

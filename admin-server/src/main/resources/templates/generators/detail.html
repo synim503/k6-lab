@@ -5,16 +5,16 @@
 <body>
 <th:block layout:fragment="content">
     <nav class="crumbs" aria-label="Навигация"><a th:href="@{/generators}">Генераторы</a><i class="bi bi-chevron-right"></i><span th:text="${v.g().name}"></span></nav>
-    <div class="page-head">
+    <div class="page-head" id="gen-head">
         <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-hdd-network"></i></span><span class="name" th:text="${v.g().name}" style="overflow-wrap:anywhere"></span>
             <span class="badge fs-6 align-middle ms-1" th:classappend="${v.badgeClass}" th:text="${v.statusLabel}"></span>
             <span class="badge text-bg-warning fs-6 align-middle" th:if="${v.g().maintenance}">обслуживание</span></h3>
         <div class="d-flex gap-2 flex-wrap align-items-center" sec:authorize="hasRole('ADMIN')">
-            <form th:action="@{/generators/{id}/maintenance(id=${v.g().id})}" method="post">
+            <form th:action="@{/generators/{id}/maintenance(id=${v.g().id})}" method="post" data-ajax="#gen-head,#card">
                 <input type="hidden" name="on" th:value="${!v.g().maintenance}">
                 <button class="btn btn-outline-secondary" th:title="${v.g().maintenance} ? 'Генератор снова будет получать запуски' : 'Новые запуски на этот генератор не назначаются'">
                     <i class="bi me-1" th:classappend="${v.g().maintenance} ? 'bi-play-circle' : 'bi-pause-circle'"></i><span th:text="${v.g().maintenance} ? 'Вернуть в работу' : 'На обслуживание'"></span></button></form>
-            <form th:action="@{/generators/{id}/restart(id=${v.g().id})}" method="post" data-confirm="Перезапустить агента?">
+            <form th:action="@{/generators/{id}/restart(id=${v.g().id})}" method="post" data-ajax="#gen-head,#card" data-confirm="Перезапустить агента?">
                 <button class="btn btn-outline-secondary" th:disabled="${v.g().busy}"><i class="bi bi-arrow-clockwise me-1"></i>Перезапустить</button></form>
             <div class="dropdown">
                 <button class="btn btn-outline-secondary" data-bs-toggle="dropdown" aria-label="Другие действия"><i class="bi bi-three-dots"></i></button>
@@ -94,7 +94,8 @@
                     <div class="col-12"><button class="btn btn-sm btn-primary" th:disabled="${v.g().busy}"><i class="bi bi-cloud-arrow-down me-1"></i>Обновить</button>
                         <span class="form-text ms-2" th:if="${v.g().busy}">Недоступно, пока генератор занят запуском.</span></div>
                 </form>
-                <form th:action="@{/generators/{id}/settings(id=${v.g().id})}" method="post" class="card-body border-top row g-2 align-items-end">
+                <form id="gen-settings-form" th:action="@{/generators/{id}/settings(id=${v.g().id})}" method="post"
+                      data-ajax="#card,#gen-settings-form" class="card-body border-top row g-2 align-items-end">
                     <div class="col-6"><label class="form-label" for="u-max">Одновременных запусков</label>
                         <input class="form-control form-control-sm" id="u-max" type="number" min="1" name="maxConcurrentRuns" th:value="${v.g().maxConcurrentRuns}"></div>
                     <div class="col-6"><button class="btn btn-sm btn-outline-primary">Сохранить</button></div>

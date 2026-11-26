@@ -20,6 +20,24 @@ public class StopCriteriaEvaluator {
                          int consecutive, int windowSec,
                          boolean extraStepOnMaxSearch) {
 
+        public Config {
+            if (!Double.isFinite(slaMultiplier) || slaMultiplier <= 0) {
+                slaMultiplier = 1.5;
+            }
+            if (!Double.isFinite(minRatePct) || minRatePct < 0) {
+                minRatePct = 0.0;
+            }
+            if (!Double.isFinite(maxDroppedPct) || maxDroppedPct < 0) {
+                maxDroppedPct = 0.0;
+            }
+            if (consecutive < 1) {
+                consecutive = 1;
+            }
+            if (windowSec < 1) {
+                windowSec = 1;
+            }
+        }
+
         public Config(boolean percentileEnabled, double slaMultiplier,
                       boolean errorsEnabled,
                       boolean rateEnabled, double minRatePct,
@@ -49,6 +67,9 @@ public class StopCriteriaEvaluator {
 
     private final Config config;
     private final Map<String, Integer> streaks = new HashMap<>();
+    /** Сколько подряд тиков по ключу не было данных: 1 пропуск скрейпа прощаем, 2+ пропуска сбрасывают «залипшую» серию. */
+    private final Map<String, Integer> missingTicks = new HashMap<>();
+    private static final int MAX_CONSECUTIVE_MISSING = 2;
 
     public StopCriteriaEvaluator(Config config) {
         this.config = config;
@@ -65,49 +86,97 @@ public class StopCriteriaEvaluator {
 
     /** Возвращает причину остановки с учётом как операций k6, так и кастомных правил Prometheus с флагом autoStop. */
     public Optional<String> evaluate(List<Sample> samples, List<CustomSample> customSamples) {
+        return evaluate(samples, customSamples, config.windowSec());
+    }
+
+    /**
+     * Возвращает причину остановки с учётом фактической длины окна {@code actualWindowSec} для расчёта доли dropped_iterations.
+     * Серии нарушений, отсутствующие в текущем тике (или при {@code null}-сэмпле), сбрасываются, чтобы не «залипать»
+     * и не срабатывать на одиночный всплеск спустя минуты.
+     */
+    public Optional<String> evaluate(List<Sample> samples, List<CustomSample> customSamples, double actualWindowSec) {
+        double winSec = actualWindowSec > 0 ? actualWindowSec : config.windowSec();
         Optional<String> stop = Optional.empty();
-        for (Sample s : samples) {
-            if (config.percentileEnabled() && s.percentileMs() != null) {
-                double limit = s.slaThresholdMs() * config.slaMultiplier();
-                Optional<String> r = track(s.operation() + "/p", s.percentileMs() > limit,
-                        String.format(java.util.Locale.ROOT, "%s: перцентиль %.0f мс > SLA × %.2f (%.0f мс)", s.operation(),
-                                s.percentileMs(), config.slaMultiplier(), limit));
-                if (r.isPresent() && stop.isEmpty()) {
-                    stop = r;
+        java.util.Set<String> seenK6 = new java.util.HashSet<>();
+        java.util.Set<String> seenCustom = new java.util.HashSet<>();
+        if (samples != null && !samples.isEmpty()) {
+            for (Sample s : samples) {
+                String pKey = s.operation() + "/p";
+                if (config.percentileEnabled() && s.percentileMs() != null && Double.isFinite(s.percentileMs())) {
+                    if (seenK6.add(pKey)) {
+                        double limit = s.slaThresholdMs() * config.slaMultiplier();
+                        Optional<String> r = track(pKey, s.percentileMs() > limit,
+                                String.format(java.util.Locale.ROOT, "%s: перцентиль %.0f мс > SLA × %.2f (%.0f мс)", s.operation(),
+                                        s.percentileMs(), config.slaMultiplier(), limit));
+                        if (r.isPresent() && stop.isEmpty()) {
+                            stop = r;
+                        }
+                    }
+                } else {
+                    markMissing(pKey);
+                }
+                String eKey = s.operation() + "/e";
+                if (config.errorsEnabled() && s.errorPct() != null && Double.isFinite(s.errorPct())) {
+                    if (seenK6.add(eKey)) {
+                        Optional<String> r = track(eKey, s.errorPct() > s.maxErrorPct(),
+                                String.format(java.util.Locale.ROOT, "%s: ошибки %.2f%% > %.2f%%", s.operation(), s.errorPct(), s.maxErrorPct()));
+                        if (r.isPresent() && stop.isEmpty()) {
+                            stop = r;
+                        }
+                    }
+                } else {
+                    markMissing(eKey);
+                }
+                String rKey = s.operation() + "/r";
+                if (config.rateEnabled() && s.actualRate() != null && Double.isFinite(s.actualRate()) && s.targetRate() > 0) {
+                    if (seenK6.add(rKey)) {
+                        double pct = s.actualRate() / s.targetRate() * 100.0;
+                        Optional<String> r = track(rKey, pct < config.minRatePct(),
+                                String.format(java.util.Locale.ROOT, "%s: фактическая интенсивность %.1f%% от цели (< %.0f%%)", s.operation(),
+                                        pct, config.minRatePct()));
+                        if (r.isPresent() && stop.isEmpty()) {
+                            stop = r;
+                        }
+                    }
+                } else {
+                    markMissing(rKey);
+                }
+                String dKey = s.operation() + "/d";
+                if (config.droppedEnabled() && s.dropped() != null && Double.isFinite(s.dropped()) && s.targetRate() > 0) {
+                    if (seenK6.add(dKey)) {
+                        // доля итераций, которые k6 не успел запустить, от плана за фактическое окно (цель × окно)
+                        double pct = s.dropped() / (s.targetRate() * winSec) * 100.0;
+                        Optional<String> r = track(dKey, pct > config.maxDroppedPct(),
+                                String.format(java.util.Locale.ROOT, "%s: dropped_iterations %.1f%% от плана (> %.1f%%, %d шт)", s.operation(),
+                                        pct, config.maxDroppedPct(), s.dropped().longValue()));
+                        if (r.isPresent() && stop.isEmpty()) {
+                            stop = r;
+                        }
+                    }
+                } else {
+                    markMissing(dKey);
                 }
             }
-            if (config.errorsEnabled() && s.errorPct() != null) {
-                Optional<String> r = track(s.operation() + "/e", s.errorPct() > s.maxErrorPct(),
-                        String.format(java.util.Locale.ROOT, "%s: ошибки %.2f%% > %.2f%%", s.operation(), s.errorPct(), s.maxErrorPct()));
-                if (r.isPresent() && stop.isEmpty()) {
-                    stop = r;
-                }
-            }
-            if (config.rateEnabled() && s.actualRate() != null && s.targetRate() > 0) {
-                double pct = s.actualRate() / s.targetRate() * 100.0;
-                Optional<String> r = track(s.operation() + "/r", pct < config.minRatePct(),
-                        String.format(java.util.Locale.ROOT, "%s: фактическая интенсивность %.1f%% от цели (< %.0f%%)", s.operation(),
-                                pct, config.minRatePct()));
-                if (r.isPresent() && stop.isEmpty()) {
-                    stop = r;
-                }
-            }
-            if (config.droppedEnabled() && s.dropped() != null && s.targetRate() > 0) {
-                // доля итераций, которые k6 не успел запустить, от плана за окно (цель × окно)
-                double pct = s.dropped() / (s.targetRate() * config.windowSec()) * 100.0;
-                Optional<String> r = track(s.operation() + "/d", pct > config.maxDroppedPct(),
-                        String.format(java.util.Locale.ROOT, "%s: dropped_iterations %.1f%% от плана (> %.1f%%, %d шт)", s.operation(),
-                                pct, config.maxDroppedPct(), s.dropped().longValue()));
-                if (r.isPresent() && stop.isEmpty()) {
-                    stop = r;
+            for (String k : List.copyOf(streaks.keySet())) {
+                if (!k.startsWith("custom/") && !seenK6.contains(k) && !missingTicks.containsKey(k)) {
+                    markMissing(k);
                 }
             }
         }
-        if (customSamples != null) {
+        if (customSamples != null && !customSamples.isEmpty()) {
             for (CustomSample cs : customSamples) {
-                Optional<String> r = track("custom/" + cs.key(), cs.violated(), cs.violationMessage());
+                String cKey = "custom/" + cs.key();
+                if (!seenCustom.add(cKey)) {
+                    continue;
+                }
+                Optional<String> r = track(cKey, cs.violated(), cs.violationMessage());
                 if (r.isPresent() && stop.isEmpty()) {
                     stop = r;
+                }
+            }
+            for (String k : List.copyOf(streaks.keySet())) {
+                if (k.startsWith("custom/") && !seenCustom.contains(k)) {
+                    markMissing(k);
                 }
             }
         }
@@ -117,9 +186,23 @@ public class StopCriteriaEvaluator {
     /** Сбрасывает счётчики (например, при переходе на новую ступень или в разгоне). */
     public void reset() {
         streaks.clear();
+        missingTicks.clear();
+    }
+
+    private void markMissing(String key) {
+        if (!streaks.containsKey(key)) {
+            missingTicks.remove(key);
+            return;
+        }
+        int m = missingTicks.merge(key, 1, Integer::sum);
+        if (m >= MAX_CONSECUTIVE_MISSING) {
+            streaks.remove(key);
+            missingTicks.remove(key);
+        }
     }
 
     private Optional<String> track(String key, boolean violated, String message) {
+        missingTicks.remove(key);
         if (!violated) {
             streaks.remove(key);
             return Optional.empty();

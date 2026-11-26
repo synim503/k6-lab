@@ -80,8 +80,7 @@ public class AgentMaintenanceJobs {
 
     private void dropDeadSession(AgentSession s, String reason) {
         s.close(reason);
-        if (registry.unregister(s)) {
-            state.markOffline(s.generatorId());
+        if (registry.unregister(s) && state.markOfflineIfDisconnected(s.generatorId(), registry::isConnected)) {
             publisher.publishEvent(new AgentLifecycleEvents.Disconnected(s.generatorId(), s.generatorName()));
         }
     }

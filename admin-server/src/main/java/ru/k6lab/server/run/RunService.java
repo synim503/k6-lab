@@ -71,8 +71,29 @@ public class RunService {
         }
     }
 
+    /** Проверяет наличие указанного executor в scenarios конфига k6 (без хрупкого toString().contains). */
+    public static boolean hasExecutor(JsonNode config, String executor) {
+        if (config == null || executor == null) {
+            return false;
+        }
+        JsonNode scs = config.path("scenarios");
+        if (!scs.isObject()) {
+            return false;
+        }
+        for (var it = scs.fields(); it.hasNext(); ) {
+            if (executor.equals(it.next().getValue().path("executor").asText(""))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Конфиг k6 с интенсивностью, умноженной по операциям на заданные проценты (исходный конфиг плана не меняется). */
     static com.fasterxml.jackson.databind.JsonNode scaledConfig(com.fasterxml.jackson.databind.JsonNode config, Map<String, Double> pct) {
+        return scaledConfig(config, pct, 1);
+    }
+
+    static com.fasterxml.jackson.databind.JsonNode scaledConfig(com.fasterxml.jackson.databind.JsonNode config, Map<String, Double> pct, int generatorCount) {
         if (config == null || pct == null || pct.isEmpty()) {
             return config;
         }
@@ -85,14 +106,15 @@ public class RunService {
                     if (copy.path("thresholds") instanceof com.fasterxml.jackson.databind.node.ObjectNode thr) {
                         List<String> drop = new ArrayList<>();
                         thr.fieldNames().forEachRemaining(k -> {
-                            if (k.contains("scenario:" + op + "}") || k.contains("scenario:" + op + ",")) {
+                            String compact = k.replace(" ", "");
+                            if (compact.contains("scenario:" + op + "}") || compact.contains("scenario:" + op + ",")) {
                                 drop.add(k);
                             }
                         });
                         drop.forEach(thr::remove);
                     }
                 } else {
-                    ru.k6lab.core.k6config.ScenarioScaler.scale(sc, p / 100.0);
+                    ru.k6lab.core.k6config.ScenarioScaler.scale(sc, p / 100.0, generatorCount);
                 }
             }
         });
@@ -171,7 +193,7 @@ public class RunService {
         if (!plan.ok()) {
             throw new IllegalArgumentException("Скрипт нельзя запустить: " + String.join("; ", plan.errors()));
         }
-        if (count > 1 && plan.config().toString().contains("externally-controlled")) {
+        if (count > 1 && hasExecutor(plan.config(), "externally-controlled")) {
             throw new IllegalArgumentException("Executor externally-controlled не поддерживает деление на execution segments: "
                     + "запускайте такую нагрузку на одном генераторе");
         }
@@ -205,7 +227,7 @@ public class RunService {
                 }
             }
         }
-        JsonNode effectiveConfig = ov != null && ov.scalesLoad() ? scaledConfig(plan.config(), ov.intensityPct()) : plan.config();
+        JsonNode effectiveConfig = ov != null && ov.scalesLoad() ? scaledConfig(plan.config(), ov.intensityPct(), count) : plan.config();
         if (effectiveConfig != null && effectiveConfig.path("scenarios").isEmpty()) {
             throw new IllegalArgumentException("Все операции имеют нулевую интенсивность — нагрузки не будет");
         }
@@ -242,8 +264,9 @@ public class RunService {
         if (built != null && built.stop() != null) {
             rawStop.putAll(built.stop());
             // Если в профиле нет customChecks, но они настроены в базовом скрипте — всегда наследуем их!
-            if ((!built.stop().containsKey("customChecks") || ((List<?>) built.stop().get("customChecks")).isEmpty())
-                    && script.getStopCriteria() != null && script.getStopCriteria().containsKey("customChecks")) {
+            Object profCustom = built.stop().get("customChecks");
+            boolean emptyProfCustom = !(profCustom instanceof List<?> l) || l.isEmpty();
+            if (emptyProfCustom && script.getStopCriteria() != null && script.getStopCriteria().containsKey("customChecks")) {
                 rawStop.put("customChecks", script.getStopCriteria().get("customChecks"));
             }
         }
@@ -363,14 +386,7 @@ public class RunService {
     }
 
     public boolean consumeArtifact(Long runGeneratorId, Instant now) {
-        return Boolean.TRUE.equals(tx.execute(st -> {
-            RunGenerator g = runGenerators.findById(runGeneratorId).orElse(null);
-            if (g == null || g.getArtifactConsumedAt() != null) {
-                return false;
-            }
-            g.setArtifactConsumedAt(now);
-            return true;
-        }));
+        return Boolean.TRUE.equals(tx.execute(st -> runGenerators.consumeArtifactIfUnused(runGeneratorId, now) > 0));
     }
 
     public void saveSteps(Long runId, List<RunStep> steps) {
@@ -378,6 +394,22 @@ public class RunService {
             runSteps.deleteByRunId(runId);
             runSteps.flush();
             runSteps.saveAll(steps);
+        });
+    }
+
+    /** Атомарно обновляет plannedStartAt/initSec запуска и пересохраняет run_step в одной транзакции. */
+    public Run updatePlannedStartAndSteps(Long runId, Instant plannedStartAt, Integer initSec, List<RunStep> steps) {
+        return tx.execute(st -> {
+            Run r = runs.findById(runId).orElseThrow();
+            r.setPlannedStartAt(plannedStartAt);
+            if (initSec != null) {
+                r.setInitSec(initSec);
+            }
+            Run saved = runs.saveAndFlush(r);
+            runSteps.deleteByRunId(runId);
+            runSteps.flush();
+            runSteps.saveAll(steps);
+            return saved;
         });
     }
 

@@ -124,28 +124,37 @@ public class SandboxService {
         return bos.toByteArray();
     }
 
+    private static final int MAX_FINISHED_RETAINED = 10;
+    private final java.util.concurrent.Semaphore activeSlots = new java.util.concurrent.Semaphore(MAX_ACTIVE);
+    private final java.util.concurrent.ScheduledExecutorService killerScheduler = java.util.concurrent.Executors.newScheduledThreadPool(1, r -> {
+        Thread t = new Thread(r, "sandbox-killer");
+        t.setDaemon(true);
+        return t;
+    });
+
     // ------------------------------------------------------------------ запуск
 
     public String start(RunRequest req) throws IOException {
         cleanup();
-        long active = sessions.values().stream().filter(s -> !s.done).count();
-        if (active >= MAX_ACTIVE) {
-            throw new IllegalStateException("Уже идёт " + active + " отладочных запусков: дождитесь завершения или остановите их");
+        if (!activeSlots.tryAcquire()) {
+            throw new IllegalStateException("Уже идёт " + MAX_ACTIVE + " отладочных запусков: дождитесь завершения или остановите их");
         }
-        Path k6bin = k6.locate().orElseThrow(() -> new IllegalStateException(
-                "k6 не найден на сервере админки: загрузите k6 для архитектуры сервера в «Дистрибутивы» или задайте K6LAB_K6_PATH"));
-        Map<String, byte[]> files = decode(req.files());
-        String entry = req.entrypoint() == null ? "" : req.entrypoint().trim();
-        if (entry.isEmpty() || ZipUtil.safePath(entry) == null || !files.containsKey(ZipUtil.safePath(entry))) {
-            throw new IllegalArgumentException("Укажите основной файл скрипта из добавленных");
-        }
-        entry = ZipUtil.safePath(entry);
-        List<K6Flag> flags = K6Flag.parse(req.flags());
-
-        Path dir = Files.createTempDirectory("k6lab-sandbox");
+        boolean handoffToPump = false;
+        Path dir = null;
         String id = null;
         Session s = null;
         try {
+            Path k6bin = k6.locate().orElseThrow(() -> new IllegalStateException(
+                    "k6 не найден на сервере админки: загрузите k6 для архитектуры сервера в «Дистрибутивы» или задайте K6LAB_K6_PATH"));
+            Map<String, byte[]> files = decode(req.files());
+            String entry = req.entrypoint() == null ? "" : req.entrypoint().trim();
+            if (entry.isEmpty() || ZipUtil.safePath(entry) == null || !files.containsKey(ZipUtil.safePath(entry))) {
+                throw new IllegalArgumentException("Укажите основной файл скрипта из добавленных");
+            }
+            entry = ZipUtil.safePath(entry);
+            List<K6Flag> flags = K6Flag.parse(req.flags());
+
+            dir = Files.createTempDirectory("k6lab-sandbox");
             for (var e : files.entrySet()) {
                 Path p = dir.resolve(e.getKey()).normalize();
                 if (!p.startsWith(dir)) {
@@ -188,14 +197,16 @@ public class SandboxService {
             s = new Session(dir);
             id = UUID.randomUUID().toString().substring(0, 12);
             sessions.put(id, s);
+            Path finalDir = dir;
             add(s, "INFO", "$ k6 run " + String.join(" ", cmd.subList(2, cmd.size()).stream()
-                    .map(a -> a.startsWith(dir.toString()) ? a.substring(dir.toString().length() + 1) : a).toList()));
+                    .map(a -> a.startsWith(finalDir.toString()) ? a.substring(finalDir.toString().length() + 1) : a).toList()));
             s.process = pb.start();
             s.process.getOutputStream().close();
             int limit = Math.max(10, Math.min(req.maxDurationSec() == null ? 300 : req.maxDurationSec(), 3600));
             Session fs = s;
             Thread t = new Thread(() -> pump(fs, limit), "sandbox-" + id);
             t.setDaemon(true);
+            handoffToPump = true;
             t.start();
             return id;
         } catch (IOException | RuntimeException e) {
@@ -205,8 +216,14 @@ public class SandboxService {
             if (s != null && s.process != null && s.process.isAlive()) {
                 s.process.destroyForcibly();
             }
-            deleteQuietly(dir);
+            if (dir != null) {
+                deleteQuietly(dir);
+            }
             throw e;
+        } finally {
+            if (!handoffToPump) {
+                activeSlots.release();
+            }
         }
     }
 
@@ -234,29 +251,28 @@ public class SandboxService {
     }
 
     private void pump(Session s, int limitSec) {
+        var timeoutTask = killerScheduler.schedule(() -> {
+            if (s.process != null && s.process.isAlive()) {
+                s.note = "Остановлено по времени (" + limitSec + " с)";
+                s.process.destroyForcibly();
+            }
+        }, limitSec + 15L, TimeUnit.SECONDS);
         try (BufferedReader r = new BufferedReader(new InputStreamReader(s.process.getInputStream(), StandardCharsets.UTF_8))) {
-            Thread killer = new Thread(() -> {
-                try {
-                    if (!s.process.waitFor(limitSec + 15L, TimeUnit.SECONDS)) {
-                        s.note = "Остановлено по времени (" + limitSec + " с)";
-                        s.process.destroyForcibly();
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }, "sandbox-killer");
-            killer.setDaemon(true);
-            killer.start();
             String line;
             while ((line = r.readLine()) != null) {
                 add(s, level(line), line);
             }
             s.exitCode = s.process.waitFor();
         } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             s.note = "Ошибка чтения вывода: " + e.getMessage();
         } finally {
+            timeoutTask.cancel(false);
             s.finished = System.currentTimeMillis();
             s.done = true;
+            activeSlots.release();
         }
     }
 
@@ -309,6 +325,12 @@ public class SandboxService {
         if (s != null && s.process != null && s.process.isAlive()) {
             s.note = "Остановлено пользователем";
             s.process.destroy();
+            // Эскалация в SIGKILL через 5 с, если скрипт завис и не реагирует на SIGTERM
+            killerScheduler.schedule(() -> {
+                if (s.process != null && s.process.isAlive()) {
+                    s.process.destroyForcibly();
+                }
+            }, 5, TimeUnit.SECONDS);
         }
     }
 
@@ -328,10 +350,23 @@ public class SandboxService {
             }
             return old;
         });
+        // Ограничиваем число завершённых сессий в памяти, чтобы их буферы логов не росли бесконечно
+        List<Map.Entry<String, Session>> finished = sessions.entrySet().stream()
+                .filter(e -> e.getValue().done)
+                .sorted(java.util.Comparator.comparingLong(e -> e.getValue().finished))
+                .toList();
+        int excess = finished.size() - MAX_FINISHED_RETAINED;
+        for (int i = 0; i < excess; i++) {
+            var e = finished.get(i);
+            if (sessions.remove(e.getKey(), e.getValue())) {
+                deleteQuietly(e.getValue().dir);
+            }
+        }
     }
 
     @jakarta.annotation.PreDestroy
     void shutdown() {
+        killerScheduler.shutdownNow();
         for (Session s : sessions.values()) {
             if (s.process != null && s.process.isAlive()) {
                 s.process.destroyForcibly();

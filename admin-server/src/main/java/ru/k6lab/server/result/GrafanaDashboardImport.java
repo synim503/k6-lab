@@ -57,20 +57,29 @@ public class GrafanaDashboardImport {
         for (JsonNode row : dash.path("rows")) { // старый формат дашбордов: rows[].panels[]
             collect(row.path("panels"), out, skipped, names);
         }
-        // в результат попадают только переменные, которые реально используются в запросах импортированных панелей
+        // в результат попадают переменные, используемые в запросах или заголовках импортированных панелей
         Map<String, String> used = new java.util.LinkedHashMap<>();
         for (Panel p : out) {
+            collectUsedVars(p.name(), vars, used);
             for (ChartTemplateStore.Query q : p.queries()) {
-                Matcher m = VAR.matcher(q.promql());
-                while (m.find()) {
-                    String name = m.group(1) != null ? m.group(1) : m.group(2) != null ? m.group(2) : m.group(3);
-                    if (vars.containsKey(name)) {
-                        used.put(name, vars.get(name));
-                    }
-                }
+                collectUsedVars(q.promql(), vars, used);
+                collectUsedVars(q.legend(), vars, used);
             }
         }
         return new Result(dash.path("title").asText(""), out, skipped, used);
+    }
+
+    private static void collectUsedVars(String text, Map<String, String> vars, Map<String, String> used) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        Matcher m = VAR.matcher(text);
+        while (m.find()) {
+            String name = m.group(1) != null ? m.group(1) : m.group(2) != null ? m.group(2) : m.group(3);
+            if (vars.containsKey(name)) {
+                used.put(name, vars.get(name));
+            }
+        }
     }
 
     private void collect(JsonNode panels, List<Panel> out, List<String> skipped, Set<String> names) {

@@ -65,7 +65,7 @@ public record OperationSpec(
      */
     public static boolean isProfile(String executor, Map<String, Object> scenario) {
         return PROFILE_EXECUTOR.equals(executor)
-                && (scenario == null || (!scenario.containsKey("stages") && !scenario.containsKey("startRate") && !scenario.containsKey("timeUnit")));
+                && (scenario == null || (scenario.get("stages") == null && scenario.get("startRate") == null && scenario.get("timeUnit") == null));
     }
 
     public double levelFor(double stepLevelPct) {

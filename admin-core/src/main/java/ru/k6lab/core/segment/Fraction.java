@@ -12,17 +12,33 @@ public record Fraction(long num, long den) implements Comparable<Fraction> {
         if (den == 0) {
             throw new IllegalArgumentException("Знаменатель равен нулю");
         }
-        if (den < 0) {
-            num = -num;
-            den = -den;
-        }
-        long g = gcd(Math.abs(num), den);
-        if (g > 1) {
-            num /= g;
-            den /= g;
-        }
-        if (num == 0) {
-            den = 1;
+        if (num == Long.MIN_VALUE || den == Long.MIN_VALUE) {
+            BigInteger n = BigInteger.valueOf(num);
+            BigInteger d = BigInteger.valueOf(den);
+            if (d.signum() < 0) {
+                n = n.negate();
+                d = d.negate();
+            }
+            BigInteger g = n.gcd(d);
+            if (g.signum() > 0) {
+                n = n.divide(g);
+                d = d.divide(g);
+            }
+            num = n.longValueExact();
+            den = n.signum() == 0 ? 1 : d.longValueExact();
+        } else {
+            if (den < 0) {
+                num = -num;
+                den = -den;
+            }
+            long g = gcd(Math.abs(num), den);
+            if (g > 1) {
+                num /= g;
+                den /= g;
+            }
+            if (num == 0) {
+                den = 1;
+            }
         }
     }
 
@@ -69,9 +85,16 @@ public record Fraction(long num, long den) implements Comparable<Fraction> {
         return new Fraction(n.longValueExact(), d.longValueExact());
     }
 
-    /** floor(this * n) без переполнения. */
+    /** floor(this * n) без переполнения (математический floor даже для отрицательных дробей). */
     public long floorTimes(long n) {
-        return BigInteger.valueOf(num).multiply(BigInteger.valueOf(n)).divide(BigInteger.valueOf(den)).longValueExact();
+        BigInteger prod = BigInteger.valueOf(num).multiply(BigInteger.valueOf(n));
+        BigInteger d = BigInteger.valueOf(den);
+        BigInteger[] qr = prod.divideAndRemainder(d);
+        BigInteger q = qr[0];
+        if (qr[1].signum() < 0) {
+            q = q.subtract(BigInteger.ONE);
+        }
+        return q.longValueExact();
     }
 
     public double toDouble() {

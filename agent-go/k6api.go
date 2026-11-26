@@ -74,10 +74,12 @@ func (a *K6Api) Counter(metric string) int64 {
 }
 
 func (a *K6Api) patch(body string) error {
-	req, _ := http.NewRequest(http.MethodPatch, a.base+"/v1/status", bytes.NewBufferString(body))
+	req, err := http.NewRequest(http.MethodPatch, a.base+"/v1/status", bytes.NewBufferString(body))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	c := &http.Client{Timeout: 5 * time.Second}
-	r, err := c.Do(req)
+	r, err := a.http.Do(req)
 	if err != nil {
 		return err
 	}

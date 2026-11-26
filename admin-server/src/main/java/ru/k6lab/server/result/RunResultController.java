@@ -35,17 +35,30 @@ public class RunResultController {
         this.reports = reports;
     }
 
-    /** htmx-фрагмент вкладки «Результаты». */
+    /** htmx-фрагмент вкладки «Результаты» (включая предварительные итоги во время выполнения теста). */
     @GetMapping("/results")
-    public String panel(@PathVariable Long id, Model model) {
+    public String panel(@PathVariable Long id,
+                        @RequestParam(defaultValue = "false") boolean refresh,
+                        Model model) {
         Run run = runService.get(id);
         boolean terminal = run.getStatus().isTerminal();
+        boolean livePreview = !terminal && (run.getStatus() == ru.k6lab.core.runstate.RunStatus.RUNNING
+                || run.getStatus() == ru.k6lab.core.runstate.RunStatus.STOPPING);
+        ResultData data;
+        if (terminal) {
+            data = results.getOrCompute(id);
+        } else if (livePreview) {
+            data = results.preview(id, refresh);
+        } else {
+            data = results.load(id).orElse(null);
+        }
         model.addAttribute("run", run);
         model.addAttribute("fmt", new ReportFormat());
         model.addAttribute("conclusions", CONCLUSIONS);
-        model.addAttribute("data", terminal ? results.getOrCompute(id) : results.load(id).orElse(null));
+        model.addAttribute("data", data);
         model.addAttribute("customChecksConfig", results.getEffectiveCustomChecks(run, runService.snapshot(run)));
         model.addAttribute("terminal", terminal);
+        model.addAttribute("livePreview", livePreview);
         return "runs/_results :: results";
     }
 

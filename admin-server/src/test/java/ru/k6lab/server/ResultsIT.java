@@ -283,4 +283,45 @@ class ResultsIT extends AbstractIT {
         mvc.perform(post("/settings/metric-names").with(csrf()).param("json", "{\"opDuration\":\"k6_op_duration_seconds\"}"))
                 .andExpect(status().is3xxRedirection());
     }
+
+    @Test
+    void preliminaryResultsAreShownWhileRunIsStillRunning() throws Exception {
+        connectProm();
+        Script s = scriptWithLoad();
+        Generator g = new Generator();
+        g.setName("live-res-" + UUID.randomUUID().toString().substring(0, 6));
+        g.setHost("127.0.0.1");
+        g.setInstallDir("/opt/k6-agent");
+        g.setServerUrl("ws://127.0.0.1:1/agent/ws");
+        g.setStatus(Generator.Status.INSTALLING);
+        g = generators.save(g);
+
+        Instant now = Instant.now();
+        // Ступень 1 завершилась 100 с назад, ступень 2 идёт прямо сейчас (удержание уже > 50 с), ступень 3 ещё впереди
+        Instant t0 = now.minusSeconds(250);
+        Run run = runService.create(new RunService.CreateRequest(s.getId(), List.of(new RunService.GeneratorSel(g.getId(), 1)),
+                Run.FailurePolicy.CONTINUE, 90));
+        runService.update(run.getId(), r -> {
+            r.setStatus(RunStatus.RUNNING);
+            r.setStartedAt(t0);
+            r.setPlannedStartAt(t0);
+        });
+        for (int i = 1; i <= 3; i++) {
+            Instant ramp = t0.plusSeconds((long) (i - 1) * STEP_SEC);
+            jdbc.update("insert into run_step (run_id, step_no, label, level_pct, ramp_start_at, hold_start_at, hold_end_at) values (?,?,?,?,?,?,?)",
+                    run.getId(), i, "ступень " + i, 100.0 + 10 * (i - 1), java.sql.Timestamp.from(ramp),
+                    java.sql.Timestamp.from(ramp.plusSeconds(30)), java.sql.Timestamp.from(ramp.plusSeconds(STEP_SEC)));
+        }
+        prom.respond(responder(t0, 1.0));
+
+        String html = mvc.perform(get("/runs/" + run.getId() + "/results"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(html)
+                .contains("Предварительные итоги")
+                .contains("Ступень 1")
+                .contains("Ступень 2")
+                .contains("ожидает очереди (тест ещё выполняется)");
+        // Предварительный просмотр НЕ должен сохранять частичный результат в таблицу run_result
+        assertThat(results.load(run.getId())).isEmpty();
+    }
 }

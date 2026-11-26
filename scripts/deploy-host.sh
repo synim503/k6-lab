@@ -46,6 +46,10 @@ echo "== Копирование на $TARGET ($(du -h "$ARCHIVE" | cut -f1))"
 scp "${SCP_OPTS[@]}" "$ARCHIVE" "$TARGET:$REMOTE_ARCHIVE"
 scp "${SCP_OPTS[@]}" scripts/remote-update.sh "$TARGET:$REMOTE_SCRIPT"
 
+shq() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 echo "== Обновление на хосте (может запросить пароль sudo)"
-REMOTE_CMD="ARCHIVE=$(printf %q "$REMOTE_ARCHIVE") DIR=$(printf %q "$DIR") SERVICE=$(printf %q "$SERVICE") PORT=$(printf %q "$PORT") bash $(printf %q "$REMOTE_SCRIPT"); rc=\$?; rm -f $(printf %q "$REMOTE_SCRIPT") $(printf %q "$REMOTE_ARCHIVE"); exit \$rc"
+REMOTE_CMD="ARCHIVE=$(shq "$REMOTE_ARCHIVE") DIR=$(shq "$DIR") SERVICE=$(shq "$SERVICE") PORT=$(shq "$PORT") bash $(shq "$REMOTE_SCRIPT"); rc=\$?; rm -f $(shq "$REMOTE_SCRIPT") $(shq "$REMOTE_ARCHIVE"); exit \$rc"
 ssh -t "${SSH_OPTS[@]}" "$TARGET" "$REMOTE_CMD"

@@ -29,6 +29,7 @@ type Conn struct {
 	recMu  sync.Mutex // защищает дедупликацию cmdId
 	recent []string
 	recSet map[string]bool
+	cmdMu  sync.Mutex // гарантирует строгий порядок исполнения команд (PREPARE -> CANCEL_PREPARE, START -> STOP)
 
 	k6mu      sync.Mutex
 	k6ver     *string
@@ -189,13 +190,15 @@ func (c *Conn) session(ctx context.Context) {
 }
 
 func (c *Conn) sendHelloAndReplayLocked(ws *websocket.Conn) error {
-	helloBytes, err := json.Marshal(Hello{Type: "HELLO", ProtocolVersion: protocolVersion, AgentVersion: version, K6Version: c.k6Version(),
+	// k6Version() может запускать подпроцесс — вызываем ДО блокировки c.mu, а seq/runs снимаем строго под c.mu
+	k6Ver := c.k6Version()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	helloBytes, err := json.Marshal(Hello{Type: "HELLO", ProtocolVersion: protocolVersion, AgentVersion: version, K6Version: k6Ver,
 		AgentTime: time.Now().UnixMilli(), LastAckedSeq: c.journal.AckedSeq(), LastSeq: c.journal.LastSeq(), Runs: c.runs.AgentRuns()})
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := c.writeLocked(ws, helloBytes); err != nil {
 		return err
 	}
@@ -241,7 +244,9 @@ func (c *Conn) onMessage(data []byte, receivedAt int64) bool {
 		_ = json.Unmarshal(data, &p)
 		c.sendJSON(Pong{Type: "PONG", PingID: p.PingID, T1: p.T1, T2: receivedAt, T3: time.Now().UnixMilli()})
 	case "PREPARE", "START", "STOP", "ABORT", "PAUSE", "RESUME", "SCALE_VUS", "CANCEL_PREPARE":
-		go c.handleCommand(typ, data)
+		// Выполняем команды строго последовательно в порядке поступления (в отдельном потоке с общим cmdMu,
+		// чтобы тяжёлые операции не блокировали чтение PING/ACK, но PREPARE/CANCEL_PREPARE и START/STOP не обгоняли друг друга)
+		c.handleCommand(typ, data)
 	default:
 		debugf("Игнорируем сообщение %s", typ)
 	}
@@ -249,24 +254,38 @@ func (c *Conn) onMessage(data []byte, receivedAt int64) bool {
 }
 
 func (c *Conn) handleCommand(typ string, data []byte) {
+	c.cmdMu.Lock()
+	defer c.cmdMu.Unlock()
 	var base struct {
 		CmdID string `json:"cmdId"`
 	}
-	_ = json.Unmarshal(data, &base)
-	c.recMu.Lock()
-	if c.recSet[base.CmdID] {
-		c.recMu.Unlock()
-		c.sendJSON(ackOK(base.CmdID)) // повторная доставка: команду не выполняем, подтверждаем успешно
+	if err := json.Unmarshal(data, &base); err != nil {
+		logf("Некорректный JSON команды %s: %v", typ, err)
 		return
 	}
-	c.recSet[base.CmdID] = true
-	c.recent = append(c.recent, base.CmdID)
-	for len(c.recent) > 1000 {
-		delete(c.recSet, c.recent[0])
-		c.recent = c.recent[1:]
+	if strings.TrimSpace(base.CmdID) != "" {
+		c.recMu.Lock()
+		if c.recSet[base.CmdID] {
+			c.recMu.Unlock()
+			c.sendJSON(ackOK(base.CmdID)) // повторная доставка уже успешно выполненной команды
+			return
+		}
+		c.recMu.Unlock()
 	}
-	c.recMu.Unlock()
-	c.sendJSON(c.runs.HandleCommand(typ, data))
+	ack := c.runs.HandleCommand(typ, data)
+	if ack.Ok && strings.TrimSpace(base.CmdID) != "" {
+		c.recMu.Lock()
+		if !c.recSet[base.CmdID] {
+			c.recSet[base.CmdID] = true
+			c.recent = append(c.recent, base.CmdID)
+			for len(c.recent) > 1000 {
+				delete(c.recSet, c.recent[0])
+				c.recent = c.recent[1:]
+			}
+		}
+		c.recMu.Unlock()
+	}
+	c.sendJSON(ack)
 }
 
 var k6VersionRe = regexp.MustCompile(`k6(?:\.exe)?\s+v?(\S+)`)

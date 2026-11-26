@@ -30,10 +30,12 @@ class ScenarioScalerTest {
     }
 
     @Test
-    void loweringKeepsVuReserveAndNonZeroValuesStayNonZero() {
+    void loweringKeepsVuReserveAndAdjustsTimeUnitForFractionalRates() {
         ObjectNode sc = json("{\"executor\":\"constant-arrival-rate\",\"rate\":3,\"timeUnit\":\"1s\",\"duration\":\"5m\",\"preAllocatedVUs\":20,\"maxVUs\":100}");
         ScenarioScaler.scale(sc, 0.1);
-        assertThat(sc.path("rate").asLong()).isEqualTo(1);          // 0.3 -> не ноль
+        // 3/1s * 0.1 = 0.3/s -> 3/10s (точное масштабирование через переподбор timeUnit)
+        assertThat(sc.path("rate").asLong()).isEqualTo(3);
+        assertThat(sc.path("timeUnit").asText()).isEqualTo("10s");
         assertThat(sc.path("preAllocatedVUs").asLong()).isEqualTo(20);
         assertThat(sc.path("maxVUs").asLong()).isEqualTo(100);
     }

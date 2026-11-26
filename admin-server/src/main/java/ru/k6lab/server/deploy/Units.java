@@ -74,37 +74,55 @@ final class Units {
 
     /** Супервизор для пользовательского режима без systemd --user (cron). */
     static String ctlScript(boolean nativeAgent) {
+        String marker = nativeAgent ? "k6-agent" : "agent.jar";
         return """
                 #!/bin/sh
                 # Управление агентом k6-lab без systemd. Вызывается из cron: @reboot -> start, раз в минуту -> ensure.
                 DIR="$(cd "$(dirname "$0")/.." && pwd)"
                 PIDFILE="$DIR/data/agent.pid"
+                LOCKFILE="$DIR/data/agent.lock"
                 mkdir -p "$DIR/data" "$DIR/logs"
-                is_running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+                is_running() {
+                  [ -f "$PIDFILE" ] || return 1
+                  pid="$(cat "$PIDFILE" 2>/dev/null)"
+                  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+                  if [ -r "/proc/$pid/cmdline" ]; then
+                    tr '\\0' ' ' < "/proc/$pid/cmdline" | grep -Fq "@@MARKER@@" || return 1
+                  fi
+                  return 0
+                }
                 start() {
                   is_running && return 0
                   cd "$DIR" || exit 1
                   nohup @@CMD@@ \
-                    </dev/null >/dev/null 2>&1 &
+                    </dev/null >>"$DIR/logs/agent-stderr.log" 2>&1 &
                   echo $! > "$PIDFILE"
                 }
                 stop() {
                   if is_running; then
-                    kill "$(cat "$PIDFILE")" 2>/dev/null
+                    pid="$(cat "$PIDFILE")"
+                    kill "$pid" 2>/dev/null
                     i=0
                     while is_running && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done
-                    is_running && kill -9 "$(cat "$PIDFILE")" 2>/dev/null
+                    is_running && kill -9 "$pid" 2>/dev/null
                   fi
                   rm -f "$PIDFILE"
                 }
-                case "$1" in
-                  start|ensure) start ;;
-                  stop) stop ;;
-                  restart) stop; start ;;
-                  status) is_running && echo running || { echo stopped; exit 3; } ;;
-                  *) echo "usage: $0 {start|stop|restart|ensure|status}"; exit 2 ;;
-                esac
-                """.replace("@@CMD@@", nativeAgent ? "\"$DIR/k6-agent\" --agent.home=\"$DIR\""
+                run_cmd() {
+                  case "$1" in
+                    start|ensure) start ;;
+                    stop) stop ;;
+                    restart) stop; start ;;
+                    status) is_running && echo running || { echo stopped; exit 3; } ;;
+                    *) echo "usage: $0 {start|stop|restart|ensure|status}"; exit 2 ;;
+                  esac
+                }
+                if command -v flock >/dev/null 2>&1 && [ "$1" != "status" ]; then
+                  ( flock -w 15 9 || exit 1; run_cmd "$1" ) 9>"$LOCKFILE"
+                else
+                  run_cmd "$1"
+                fi
+                """.replace("@@MARKER@@", marker).replace("@@CMD@@", nativeAgent ? "\"$DIR/k6-agent\" --agent.home=\"$DIR\""
                 : "\"$DIR/jre/bin/java\" -Xmx256m -XX:+ExitOnOutOfMemoryError -jar \"$DIR/agent.jar\" --agent.home=\"$DIR\"");
     }
 

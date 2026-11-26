@@ -31,9 +31,11 @@ public interface GeneratorRepository extends JpaRepository<Generator, Long> {
             + "and active_runs < max_concurrent_runs for update skip locked", nativeQuery = true)
     List<Generator> lockAvailable(java.util.Collection<Long> ids);
 
-    /** Точечные обновления из потока heartbeat без загрузки сущности и без конфликтов версий. */
+    /** Точечные обновления из потока heartbeat без загрузки сущности и без конфликтов версий (заодно чинит рассинхрон OFFLINE -> ONLINE). */
     @Modifying
-    @Query("update Generator g set g.lastHeartbeatAt = :ts, g.k6Version = :k6, g.agentVersion = :agent where g.id = :id")
+    @Query("update Generator g set g.lastHeartbeatAt = :ts, g.k6Version = :k6, g.agentVersion = :agent, "
+            + "g.status = case when g.status = ru.k6lab.server.generator.Generator.Status.OFFLINE "
+            + "then ru.k6lab.server.generator.Generator.Status.ONLINE else g.status end where g.id = :id")
     void touchHeartbeat(Long id, Instant ts, String k6, String agent);
 
     @Modifying

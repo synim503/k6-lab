@@ -30,31 +30,34 @@ public final class SetupWizard {
     private SetupWizard() {
     }
 
-    /** Нужно ли показывать мастер: конфигурация отсутствует или БД из неё недоступна. */
+    /**
+     * Нужно ли показывать мастер первого запуска: только когда нет K6LAB_DB_URL и отсутствует config/k6lab.properties.
+     * Если конфиг уже существует, а PostgreSQL временно недоступен (например, поднимается после ребута) — мастер
+     * НЕ открывается, чтобы не выставлять неаутентифицированную форму настройки БД в сеть.
+     */
     public static boolean needed(Path configFile, Map<String, String> env) {
         if (env.get("K6LAB_DB_URL") != null && !env.get("K6LAB_DB_URL").isBlank()) {
             return false;
         }
-        if (!Files.isRegularFile(configFile)) {
-            return true;
-        }
-        Properties p = load(configFile);
-        return check(p.getProperty("spring.datasource.url", ""), p.getProperty("spring.datasource.username", ""),
-                p.getProperty("spring.datasource.password", "")) != null;
+        return !Files.isRegularFile(configFile);
     }
 
-    /** Блокирует до завершения настройки. */
+    /** Блокирует до завершения настройки. По умолчанию слушает loopback (127.0.0.1); адрес можно задать K6LAB_SETUP_HOST. */
     public static void run(Path configFile, int httpPort) throws IOException, InterruptedException {
         CountDownLatch done = new CountDownLatch(1);
-        HttpServer server = HttpServer.create(new InetSocketAddress(httpPort), 0);
+        String bindHost = System.getenv().getOrDefault("K6LAB_SETUP_HOST", "127.0.0.1").trim();
+        if (bindHost.isEmpty()) {
+            bindHost = "127.0.0.1";
+        }
+        HttpServer server = HttpServer.create(new InetSocketAddress(bindHost, httpPort), 0);
         server.createContext("/", ex -> handle(ex, configFile, done));
         server.start();
         System.out.println("=====================================================================");
-        System.out.println(" k6-lab: первый запуск. Откройте http://localhost:" + httpPort + " и введите параметры PostgreSQL");
+        System.out.println(" k6-lab: первый запуск. Откройте http://" + bindHost + ":" + httpPort + " и введите параметры PostgreSQL");
+        System.out.println(" (для доступа с другого хоста задайте K6LAB_SETUP_HOST=0.0.0.0)");
         System.out.println("=====================================================================");
         done.await();
-        Thread.sleep(500); // страница успеха должна дойти до браузера
-        server.stop(0);
+        server.stop(2);
     }
 
     private static final int MAX_BODY_BYTES = 16 * 1024;

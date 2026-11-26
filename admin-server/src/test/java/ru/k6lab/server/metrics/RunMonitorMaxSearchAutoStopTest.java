@@ -78,7 +78,6 @@ class RunMonitorMaxSearchAutoStopTest {
         RunMonitor.State st = new RunMonitor.State();
         st.evaluator = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(
                 false, 1.5, true, false, 90, false, 1, 1, 60, true));
-        st.tick = 2; // следующий evaluateStop будет tick=3 (кратно 3)
 
         // 1. На ступени 2 (середина удержания) срабатывает условие автостопа — немедленной остановки быть НЕ должно
         Instant wallOnStep2 = t0.plusSeconds(420);
@@ -129,7 +128,6 @@ class RunMonitorMaxSearchAutoStopTest {
         RunMonitor.State st = new RunMonitor.State();
         st.evaluator = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(
                 false, 1.5, true, false, 90, false, 1, 1, 60, true));
-        st.tick = 2;
 
         Instant wallOnLast = t0.plusSeconds(420);
         monitor.evaluateStop(run, null, st, steps, s2, true, 120, 15, 60, failingRows(), List.of(),
@@ -157,7 +155,6 @@ class RunMonitorMaxSearchAutoStopTest {
         RunMonitor.State st1 = new RunMonitor.State();
         st1.evaluator = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(
                 false, 1.5, true, false, 90, false, 1, 1, 60, true));
-        st1.tick = 2;
         m1.evaluateStop(runningRun(10L), null, st1, List.of(s1), s1, true, 120, 15, 60, failingRows(), List.of(),
                 t0.plusSeconds(105), t0.plusSeconds(120), null, 1);
         verify(orch1, times(1)).stop(eq(10L), anyString());
@@ -168,9 +165,123 @@ class RunMonitorMaxSearchAutoStopTest {
         RunMonitor.State st2 = new RunMonitor.State();
         st2.evaluator = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(
                 false, 1.5, true, false, 90, false, 1, 1, 60, false));
-        st2.tick = 2;
         m2.evaluateStop(runningRun(11L), null, st2, List.of(s1, s2), s1, true, 120, 15, 60, failingRows(), List.of(),
                 t0.plusSeconds(105), t0.plusSeconds(120), null, 1);
         verify(orch2, times(1)).stop(eq(11L), anyString());
+    }
+
+    @Test
+    void customMetricChecksImmediatelyAfterSettleAndCarriesStreakAcrossSteps() throws Exception {
+        RunOrchestrator orchestrator = mock(RunOrchestrator.class);
+        RunLogService logs = mock(RunLogService.class);
+        RunMonitor monitor = newMonitor(orchestrator, logs);
+
+        Instant t0 = Instant.parse("2026-11-26T00:00:00Z");
+        RunStep s1 = step(1, t0, t0.plusSeconds(180));
+        RunStep s2 = step(2, t0.plusSeconds(180), t0.plusSeconds(360));
+        RunStep s3 = step(3, t0.plusSeconds(360), t0.plusSeconds(540));
+        RunStep s4 = step(4, t0.plusSeconds(540), t0.plusSeconds(720));
+        RunStep s5 = step(5, t0.plusSeconds(720), t0.plusSeconds(900));
+        List<RunStep> steps = List.of(s1, s2, s3, s4, s5);
+
+        var cpuRule = new ru.k6lab.core.analysis.StepAnalysis.CustomCheck(
+                "CPU unix", "cpu_usage", "LTE", 80.0, "%", true, true);
+        var breach = List.of(new ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult(
+                cpuRule, 86.1, "storage-05", false, false));
+
+        Run run = runningRun(77L);
+        RunMonitor.State st = new RunMonitor.State();
+        // consecutive = 3, k6-критерии выключены, только кастомный автостоп
+        st.evaluator = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(
+                false, 1.5, false, false, 90, false, 1, 3, 60, true));
+
+        // 2 нарушения в конце ступени 3 (1/3 и 2/3, шаг ровно 15 с по реальному времени) — автостоп ещё не сработал
+        monitor.evaluateStop(run, null, st, steps, s3, true, 150, 30, 60, List.of(), breach,
+                t0.plusSeconds(495), t0.plusSeconds(510), null, 3);
+        // Повторный тик через 5 с (< 15 с) игнорируется и не должен засчитываться в серию
+        monitor.evaluateStop(run, null, st, steps, s3, true, 155, 30, 60, List.of(), breach,
+                t0.plusSeconds(500), t0.plusSeconds(515), null, 3);
+        monitor.evaluateStop(run, null, st, steps, s3, true, 165, 30, 60, List.of(), breach,
+                t0.plusSeconds(510), t0.plusSeconds(525), null, 3);
+        assertThat(st.pendingStopAt).isNull();
+
+        // Переходим на ступень 4 (intoHold = 25 с: уже >= SETTLE_SEC=20, хотя < SETTLE_SEC+minWindow=50!)
+        // Серия не сброшена -> 3-я проверка подряд сразу фиксирует деградацию на ступени 4 и планирует стоп после ступени 5
+        monitor.evaluateStop(run, null, st, steps, s4, true, 25, 30, 60, List.of(), breach,
+                t0.plusSeconds(550), t0.plusSeconds(565), null, 4);
+        assertThat(st.pendingStopTriggerStep).isEqualTo(4);
+        assertThat(st.pendingStopAfterStep).isEqualTo(5);
+        assertThat(st.pendingStopAt).isEqualTo(s5.getHoldEndAt());
+        verify(orchestrator, never()).stop(anyLong(), anyString());
+    }
+
+    @Test
+    void briefSingleTickCustomMetricSpikeDoesNotTriggerAutostop() throws Exception {
+        RunOrchestrator orchestrator = mock(RunOrchestrator.class);
+        RunMonitor monitor = newMonitor(orchestrator, mock(RunLogService.class));
+
+        Instant t0 = Instant.parse("2026-11-26T00:00:00Z");
+        RunStep s1 = step(1, t0, t0.plusSeconds(180));
+        RunStep s2 = step(2, t0.plusSeconds(180), t0.plusSeconds(360));
+        List<RunStep> steps = List.of(s1, s2);
+
+        var cpuRule = new ru.k6lab.core.analysis.StepAnalysis.CustomCheck(
+                "CPU unix", "cpu_usage", "LTE", 80.0, "%", true, true);
+        var spike = List.of(new ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult(
+                cpuRule, 86.1, "storage-05", false, false));
+        var normal = List.of(new ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult(
+                cpuRule, 72.0, "storage-05", true, false));
+
+        Run run = runningRun(78L);
+        RunMonitor.State st = new RunMonitor.State();
+        st.evaluator = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(
+                false, 1.5, false, false, 90, false, 1, 3, 60, true));
+
+        // 1 всплеск -> возврат в норму через 15 с -> ещё 1 всплеск через 15 с: серия каждый раз сбрасывается
+        monitor.evaluateStop(run, null, st, steps, s1, true, 60, 30, 60, List.of(), spike,
+                t0.plusSeconds(45), t0.plusSeconds(60), null, 1);
+        monitor.evaluateStop(run, null, st, steps, s1, true, 75, 30, 60, List.of(), normal,
+                t0.plusSeconds(60), t0.plusSeconds(75), null, 1);
+        monitor.evaluateStop(run, null, st, steps, s1, true, 90, 30, 60, List.of(), spike,
+                t0.plusSeconds(75), t0.plusSeconds(90), null, 1);
+
+        assertThat(st.pendingStopAt).isNull();
+        verify(orchestrator, never()).stop(anyLong(), anyString());
+    }
+
+    @Test
+    void stopCheckUsesWallClockIntervalWithoutTickJitter() throws Exception {
+        RunOrchestrator orchestrator = mock(RunOrchestrator.class);
+        RunMonitor monitor = newMonitor(orchestrator, mock(RunLogService.class));
+
+        Instant t0 = Instant.parse("2026-11-26T00:00:00Z");
+        RunStep s1 = step(1, t0, t0.plusSeconds(300));
+        var cpuRule = new ru.k6lab.core.analysis.StepAnalysis.CustomCheck(
+                "CPU unix", "cpu_usage", "LTE", 80.0, "%", true, true);
+        var breach = List.of(new ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult(
+                cpuRule, 88.0, "storage-05", false, false));
+
+        Run run = runningRun(79L);
+        RunMonitor.State st = new RunMonitor.State();
+        st.evaluator = new StopCriteriaEvaluator(new StopCriteriaEvaluator.Config(
+                false, 1.5, false, false, 90, false, 1, 2, 60, false));
+
+        // Первая проверка сразу после SETTLE_SEC (intoHold=20) срабатывает без задержки (1/2)
+        monitor.evaluateStop(run, null, st, List.of(s1), s1, true, 20, 30, 60, List.of(), breach,
+                t0.plusSeconds(20), t0.plusSeconds(35), null, 1);
+        assertThat(st.lastStopCheckAt).isEqualTo(t0.plusSeconds(35));
+        verify(orchestrator, never()).stop(anyLong(), anyString());
+
+        // Тики через 5 с и 14 с (< 15 с) пропускаются — автостоп (2/2) НЕ срабатывает преждевременно
+        monitor.evaluateStop(run, null, st, List.of(s1), s1, true, 25, 30, 60, List.of(), breach,
+                t0.plusSeconds(25), t0.plusSeconds(40), null, 1);
+        monitor.evaluateStop(run, null, st, List.of(s1), s1, true, 34, 30, 60, List.of(), breach,
+                t0.plusSeconds(34), t0.plusSeconds(49), null, 1);
+        verify(orchestrator, never()).stop(anyLong(), anyString());
+
+        // Ровно через 15 с (t0+50) выполняется 2-я проверка -> автостоп срабатывает
+        monitor.evaluateStop(run, null, st, List.of(s1), s1, true, 35, 30, 60, List.of(), breach,
+                t0.plusSeconds(35), t0.plusSeconds(50), null, 1);
+        verify(orchestrator, times(1)).stop(eq(79L), anyString());
     }
 }

@@ -26,13 +26,13 @@ public final class ScenarioPlan {
             return out;
         }
         String ex = sc.path("executor").asText("");
-        double start = ConfigDuration.parse(sc.path("startTime").asText("0s"), 0);
-        double unit = ConfigDuration.parse(sc.path("timeUnit").asText("1s"), 1);
+        double start = ConfigDuration.seconds(sc.path("startTime"), 0);
+        double unit = ConfigDuration.seconds(sc.path("timeUnit"), 1);
         if (unit <= 0) {
             unit = 1;
         }
         if ("constant-arrival-rate".equals(ex) && sc.has("rate")) {
-            double dur = ConfigDuration.parse(sc.path("duration").asText("0s"), 0);
+            double dur = ConfigDuration.seconds(sc.path("duration"), 0);
             double r = sc.path("rate").asDouble() / unit;
             out.add(new Pt(start, 0));
             out.add(new Pt(start, r));
@@ -44,7 +44,7 @@ public final class ScenarioPlan {
             double r = sc.path("startRate").asDouble(0) / unit;
             out.add(new Pt(t, r));
             for (JsonNode st : sc.path("stages")) {
-                t += ConfigDuration.parse(st.path("duration").asText("0s"), 0);
+                t += ConfigDuration.seconds(st.path("duration"), 0);
                 r = st.path("target").asDouble(0) / unit;
                 out.add(new Pt(t, r));
             }

@@ -77,19 +77,21 @@ if [ "$DOWNLOAD" -eq 1 ]; then
   mkdir -p vendor/k6 vendor/xk6
   for arch in amd64 arm64; do
     tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
     curl -fsSL "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-${arch}.tar.gz" \
       | tar -xz -C "$tmp" --strip-components=1 "k6-${K6_VERSION}-linux-${arch}/k6"
     mv "$tmp/k6" "vendor/k6/k6-linux-$arch"; rm -rf "$tmp"
+    trap - EXIT
   done
   if ! command -v xk6 >/dev/null 2>&1; then
     echo "== Установка xk6"
     go install go.k6.io/xk6/cmd/xk6@latest
     export PATH="$PATH:$(go env GOPATH)/bin"
   fi
-  WITH=""
-  for e in $XK6_EXTENSIONS; do WITH="$WITH --with $e"; done
+  WITH=()
+  for e in $XK6_EXTENSIONS; do WITH+=(--with "$e"); done
   for arch in amd64 arm64; do
-    GOOS=linux GOARCH=$arch CGO_ENABLED=0 xk6 build "$K6_VERSION" $WITH --output "vendor/xk6/xk6-linux-$arch"
+    GOOS=linux GOARCH=$arch CGO_ENABLED=0 xk6 build "$K6_VERSION" "${WITH[@]}" --output "vendor/xk6/xk6-linux-$arch"
   done
   (cd vendor && sha256sum k6/* xk6/* > SHA256SUMS)
   echo "vendor/ обновлён. Закоммитьте изменения (файлы хранятся в Git LFS)."
@@ -134,7 +136,7 @@ cp admin-server/target/k6-lab-admin.jar "$OUT/"
 
 # ---------------------------------------------------------------- агент на Go (зависимости - agent-go/vendor, без сети)
 echo "== Агент на Go (статический бинарь, JRE на генераторах не нужна)"
-AGENT_VERSION="$(grep -m1 -o '<version>0\.[^<]*</version>' pom.xml | sed 's/<[^>]*>//g')"
+AGENT_VERSION="$(awk '/<artifactId>k6-lab<\/artifactId>/{f=1} f && /<version>/{gsub(/.*<version>|<\/version>.*/,""); print; exit}' pom.xml)"
 AGENT_VERSION="${AGENT_VERSION:-dev}"
 # к версии добавляем идентификатор сборки (коммит; для изменённого дерева - ещё время): новый бинарь агента с тем же номером версии
 # иначе не импортировался бы как новый дистрибутив, а генераторы получали бы старого агента

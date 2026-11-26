@@ -10,7 +10,7 @@
             <div class="sub mt-1">Откуда импортируются версии скриптов. Сервер забирает код сам, генераторам доступ к Git не нужен.</div></div>
         <a sec:authorize="hasRole('ADMIN')" class="btn btn-primary" th:href="@{/git-repos/new}"><i class="bi bi-plus-lg me-1"></i>Добавить репозиторий</a>
     </div>
-    <div class="card mb-3"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+    <div class="card mb-3" id="git-repos-card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
         <thead><tr><th>Имя</th><th>Адрес</th><th>Доступ</th><th>Подкаталог</th><th></th></tr></thead>
         <tbody>
         <tr th:if="${repos.isEmpty()}"><td colspan="5"><div class="empty-state"><i class="bi bi-git"></i>Репозиториев пока нет.
@@ -27,6 +27,7 @@
                     <span class="spinner-border spinner-border-sm k6-htmx-spin me-1" role="status" aria-hidden="true"></span><i class="bi bi-plug me-1"></i>Проверить доступ</button>
                 <a sec:authorize="hasRole('ADMIN')" class="btn btn-sm btn-outline-secondary btn-icon" th:href="@{/git-repos/{id}/edit(id=${r.id})}" title="Изменить" aria-label="Изменить"><i class="bi bi-pencil"></i></a>
                 <form sec:authorize="hasRole('ADMIN')" class="d-inline" th:action="@{/git-repos/{id}/delete(id=${r.id})}" method="post"
+                      data-ajax="#git-repos-card"
                       data-confirm="Удалить репозиторий? Уже загруженные версии скриптов останутся.">
                     <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
             </td></tr></tbody></table></div></div>

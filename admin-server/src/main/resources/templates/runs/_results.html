@@ -2,10 +2,42 @@
 <html lang="ru" xmlns:th="http://www.thymeleaf.org">
 <body>
 <div th:fragment="results" id="results-panel">
-    <div class="alert alert-secondary" th:if="${!terminal}">Итоги по ступеням рассчитываются после завершения run.</div>
+    <div class="alert alert-secondary" th:if="${!terminal and !livePreview}">
+        <i class="bi bi-hourglass-split me-1"></i>Тест ещё не запущен — предварительные итоги по ступеням появятся сразу после начала нагрузки.
+    </div>
+
+    <!-- Предварительные итоги во время выполнения теста -->
+    <div th:if="${livePreview}">
+        <div class="alert alert-info py-2 d-flex flex-wrap align-items-center gap-2 mb-3">
+            <span class="dot dot-busy"></span>
+            <div class="me-auto small">
+                <strong>Предварительные итоги</strong> — тест ещё выполняется. Показаны уже пройденные ступени и текущая ступень
+                <span th:if="${data != null and data.computedAt != null}" th:text="'(обновлено в ' + ${fmt.time(data.computedAt)} + ', автообновление каждые 15 с)'"></span>.
+                Окончательный отчёт, экспорт и вывод инженера будут доступны после завершения запуска.
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary"
+                    th:attr="hx-get=@{/runs/{id}/results(id=${run.id},refresh=true)}"
+                    hx-target="#results-box" hx-swap="innerHTML">
+                <span class="spinner-border spinner-border-sm k6-htmx-spin me-1" role="status" aria-hidden="true"></span>
+                <i class="bi bi-arrow-clockwise me-1"></i>Обновить
+            </button>
+        </div>
+
+        <div class="alert alert-warning" th:if="${data == null}">Данные по ступеням ещё собираются. Нажмите «Обновить» через несколько секунд.</div>
+        <div th:if="${data != null}">
+            <div class="alert alert-danger" th:if="${!data.prometheusOk}" th:text="${data.error}"></div>
+            <th:block th:if="${data.prometheusOk}">
+                <h5>Ступени и операции (предварительно)</h5>
+                <div class="small text-muted mb-2">Перцентили — histogram_quantile по гистограммам, просуммированным по всем генераторам. Для текущей ступени показан расчёт по накопленному окну удержания.</div>
+                <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
+            </th:block>
+        </div>
+    </div>
+
     <div th:if="${terminal}">
         <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-            <form th:action="@{/runs/{id}/results/recompute(id=${run.id})}" method="post" class="m-0">
+            <form th:action="@{/runs/{id}/results/recompute(id=${run.id})}" method="post" class="m-0"
+                  data-ajax="#results-panel">
                 <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise me-1"></i>Пересчитать итоги</button>
             </form>
             <div class="btn-group btn-group-sm" role="group" aria-label="Отчёты">
@@ -14,8 +46,7 @@
                 <a class="btn btn-outline-primary rep-link" th:href="@{/runs/{id}/report.pdf(id=${run.id})}"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</a>
                 <a class="btn btn-outline-primary rep-link" th:href="@{/runs/{id}/report.docx(id=${run.id})}"><i class="bi bi-file-earmark-word me-1"></i>Word (docx)</a>
             </div>
-            <select class="form-select form-select-sm ms-sm-auto" style="width:auto" id="rep-time" title="Ось времени на графиках отчёта" aria-label="Ось времени на графиках"
-                    onchange="document.querySelectorAll('.rep-link').forEach(function (a) { var u = new URL(a.getAttribute('data-base') || a.getAttribute('href'), location.origin); a.setAttribute('data-base', a.getAttribute('data-base') || a.getAttribute('href')); if (this.value) { u.searchParams.set('time', this.value); } a.setAttribute('href', u.pathname + u.search); }, this)">
+            <select class="form-select form-select-sm ms-sm-auto" style="width:auto" id="rep-time" title="Ось времени на графиках отчёта" aria-label="Ось времени на графиках">
                 <option value="">Время: по настройкам</option>
                 <option value="rel">Время: от начала теста</option>
                 <option value="abs">Время: абсолютное</option></select>
@@ -27,7 +58,8 @@
 
             <div class="card mb-3"><div class="card-body">
                 <h5 class="card-title mt-0 mb-2">Вывод инженера</h5>
-                <form th:action="@{/runs/{id}/conclusion(id=${run.id})}" method="post" class="row g-2">
+                <form th:action="@{/runs/{id}/conclusion(id=${run.id})}" method="post" class="row g-2"
+                      data-ajax="#results-panel">
                     <div class="col-md-4">
                         <label class="form-label small mb-1" for="res-conclusion">Итоговая оценка</label>
                         <select class="form-select form-select-sm" id="res-conclusion" name="conclusion">

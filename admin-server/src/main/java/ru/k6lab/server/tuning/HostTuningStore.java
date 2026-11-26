@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -82,6 +83,13 @@ public class HostTuningStore {
     /** Новое применение заменяет прежние (исходные значения перенесены в него): прежние записи остаются в истории. */
     public void markReplaced(long generatorId) {
         jdbc.update("update host_tuning set status = 'REPLACED' where generator_id = ? and status = 'APPLIED'", generatorId);
+    }
+
+    /** Атомарно переводит предыдущие записи в REPLACED и вставляет новую APPLIED-запись с перенесёнными исходными значениями. */
+    @Transactional
+    public long replaceTuning(long generatorId, String name, String user, String status, Object changes, String error) {
+        markReplaced(generatorId);
+        return insertTuning(generatorId, name, user, status, changes, error);
     }
 
     /** Последняя запись о тюнинге каждого генератора (для списка). */

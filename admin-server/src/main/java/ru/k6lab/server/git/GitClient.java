@@ -73,7 +73,6 @@ public class GitClient {
 
     private final AppProperties props;
     private final KnownHostService knownHosts;
-    private final Map<Long, ReentrantLock> locks = new ConcurrentHashMap<>();
 
     public GitClient(AppProperties props, KnownHostService knownHosts) {
         this.props = props;
@@ -84,9 +83,17 @@ public class GitClient {
         return props.getStorageDir().resolve("git-cache").resolve(String.valueOf(repoId)).toAbsolutePath();
     }
 
+    private static final int TRANSPORT_TIMEOUT_SEC = 60;
+
+    private java.util.concurrent.locks.ReentrantReadWriteLock rwLock(Long repoId) {
+        return rwLocks.computeIfAbsent(repoId, k -> new java.util.concurrent.locks.ReentrantReadWriteLock());
+    }
+
+    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.locks.ReentrantReadWriteLock> rwLocks = new java.util.concurrent.ConcurrentHashMap<>();
+
     /** Обновляет кеш (clone при первом обращении, иначе fetch). */
     public void sync(Long repoId, String url, Auth auth) throws IOException {
-        ReentrantLock lock = locks.computeIfAbsent(repoId, k -> new ReentrantLock());
+        var lock = rwLock(repoId).writeLock();
         lock.lock();
         SshHandle sshHandle = null;
         try {
@@ -95,14 +102,16 @@ public class GitClient {
             try {
                 if (!exists) {
                     Files.createDirectories(dir);
-                    var clone = Git.cloneRepository().setURI(url).setBare(true).setDirectory(dir.toFile());
+                    var clone = Git.cloneRepository().setURI(url).setBare(true).setDirectory(dir.toFile())
+                            .setTimeout(TRANSPORT_TIMEOUT_SEC);
                     sshHandle = configure(clone, auth);
                     clone.call().close();
                 } else {
                     try (Git git = Git.open(dir.toFile())) {
                         var fetch = git.fetch().setRemote(url)
                                 .setRefSpecs("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
-                                .setRemoveDeletedRefs(true);
+                                .setRemoveDeletedRefs(true)
+                                .setTimeout(TRANSPORT_TIMEOUT_SEC);
                         sshHandle = configure(fetch, auth);
                         fetch.call();
                     }
@@ -121,9 +130,9 @@ public class GitClient {
         }
     }
 
-    /** Удаляет локальный bare-кеш репозитория (вызывается при удалении GitRepo). */
+    /** Удаляет локальный bare-кеш репозитория (вызывается после commit удаления GitRepo). */
     public void evictCache(Long repoId) {
-        ReentrantLock lock = locks.computeIfAbsent(repoId, k -> new ReentrantLock());
+        var lock = rwLock(repoId).writeLock();
         lock.lock();
         try {
             Path dir = cacheDir(repoId);
@@ -132,11 +141,12 @@ public class GitClient {
             }
         } finally {
             lock.unlock();
-            locks.remove(repoId, lock);
         }
     }
 
     public List<RefInfo> refs(Long repoId) throws IOException {
+        var lock = rwLock(repoId).readLock();
+        lock.lock();
         try (Repository r = open(repoId)) {
             List<RefInfo> out = new ArrayList<>();
             for (Ref ref : r.getRefDatabase().getRefs()) {
@@ -151,11 +161,15 @@ public class GitClient {
             }
             out.sort(Comparator.comparing(RefInfo::kind).thenComparing(RefInfo::name));
             return out;
+        } finally {
+            lock.unlock();
         }
     }
 
     /** Разрешает ветку, тег или (сокращённый) hash коммита. */
     public String resolve(Long repoId, String ref) throws IOException {
+        var lock = rwLock(repoId).readLock();
+        lock.lock();
         try (Repository r = open(repoId); RevWalk walk = new RevWalk(r)) {
             ObjectId id = null;
             for (String candidate : new String[]{"refs/heads/" + ref, "refs/tags/" + ref, ref}) {
@@ -168,11 +182,15 @@ public class GitClient {
                 throw new IOException("Ветка, тег или коммит «" + ref + "» не найдены");
             }
             return walk.parseCommit(id).getName();
+        } finally {
+            lock.unlock();
         }
     }
 
     /** Файлы коммита из подкаталога (пути относительно него) - как zip. */
     public byte[] exportZip(Long repoId, String commit, String subdir) throws IOException {
+        var lock = rwLock(repoId).readLock();
+        lock.lock();
         try (Repository r = open(repoId); RevWalk walk = new RevWalk(r)) {
             RevCommit c = walk.parseCommit(ObjectId.fromString(commit));
             String sub = normalizeSubdir(subdir);
@@ -207,11 +225,15 @@ public class GitClient {
                 throw new IOException("В коммите нет файлов" + (sub.isEmpty() ? "" : " в каталоге " + sub));
             }
             return ZipUtil.write(files);
+        } finally {
+            lock.unlock();
         }
     }
 
     /** Коммиты (новые первыми) от exclusive (не включая) до ref; не больше limit. */
     public List<CommitInfo> log(Long repoId, String fromExclusive, String toCommit, int limit) throws IOException {
+        var lock = rwLock(repoId).readLock();
+        lock.lock();
         try (Repository r = open(repoId); RevWalk walk = new RevWalk(r)) {
             walk.markStart(walk.parseCommit(ObjectId.fromString(toCommit)));
             if (fromExclusive != null) {
@@ -231,6 +253,8 @@ public class GitClient {
                 }
             }
             return out;
+        } finally {
+            lock.unlock();
         }
     }
 

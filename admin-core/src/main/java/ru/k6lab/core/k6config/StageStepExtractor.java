@@ -67,19 +67,27 @@ public final class StageStepExtractor {
         if (!stages.isArray() || stages.isEmpty()) {
             return List.of();
         }
-        double t = ConfigDuration.parse(sc.path("startTime").asText(""), 0);
+        double t = ConfigDuration.seconds(sc.path("startTime"), 0);
         double prev = sc.path(arrival ? "startRate" : "startVUs").asDouble(0);
-        int warm = Math.max(0, warmupEndSec);
+        int warm = scenarioWarmupEndSec(sc, warmupEndSec);
         List<Plateau> out = new ArrayList<>();
         for (JsonNode st : stages) {
-            double dur = st.path("duration").isNumber() ? st.path("duration").asDouble() / 1000.0
-                    : ConfigDuration.parse(st.path("duration").asText(""), 0);
+            double dur = ConfigDuration.seconds(st.path("duration"), 0);
             double target = st.path("target").asDouble(0);
             double end = t + Math.max(0, dur);
             if (dur > 0 && target > 0 && Math.abs(target - prev) < 1e-9) {
                 int s0 = (int) Math.round(Math.max(t, warm));
                 int s1 = (int) Math.round(end);
                 if (s1 - s0 >= MIN_HOLD_SEC) {
+                    if (!out.isEmpty()) {
+                        Plateau last = out.get(out.size() - 1);
+                        if (Math.abs(last.target() - target) < 1e-9 && s0 <= last.endSec() + 1) {
+                            out.set(out.size() - 1, new Plateau(last.startSec(), Math.max(last.endSec(), s1), target));
+                            t = end;
+                            prev = target;
+                            continue;
+                        }
+                    }
                     out.add(new Plateau(s0, s1, target));
                 }
             }
@@ -87,5 +95,17 @@ public final class StageStepExtractor {
             prev = target;
         }
         return out;
+    }
+
+    private static int scenarioWarmupEndSec(JsonNode sc, int fallbackWarmupEndSec) {
+        JsonNode wMs = sc.path("env").path(K6ConfigGenerator.WARMUP_END_ENV);
+        if (!wMs.isMissingNode() && !wMs.isNull()) {
+            try {
+                long ms = wMs.isNumber() ? wMs.asLong() : Long.parseLong(wMs.asText().trim());
+                return (int) Math.max(0, Math.round(ms / 1000.0));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return Math.max(0, fallbackWarmupEndSec);
     }
 }

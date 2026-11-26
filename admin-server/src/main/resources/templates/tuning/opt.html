@@ -4,13 +4,14 @@
 <head><title>Профиль оптимизации</title></head>
 <body>
 <th:block layout:fragment="content">
+    <div id="opt-profile-root">
     <nav class="crumbs" aria-label="Навигация"><a th:href="@{/generators}">Генераторы</a><i class="bi bi-chevron-right"></i><a th:href="@{/tuning}">Профилирование хостов</a><i class="bi bi-chevron-right"></i><span th:text="${p.name}"></span></nav>
     <div class="page-head">
         <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-sliders"></i></span>Профиль оптимизации: <span th:text="${p.name}"></span></h3>
         <a class="btn btn-outline-secondary" th:href="@{/tuning}"><i class="bi bi-arrow-left me-1"></i>К профилированию</a>
     </div>
 
-    <form th:action="@{/tuning/profiles/{id}(id=${p.id})}" method="post">
+    <form th:action="@{/tuning/profiles/{id}(id=${p.id})}" method="post" data-ajax="#opt-profile-root">
         <div class="card mb-3"><div class="card-body">
             <div class="row g-3">
                 <div class="col-md-5"><label class="form-label small fw-semibold" for="p-name">Название</label>
@@ -44,6 +45,7 @@
 
     <div class="card mt-4"><div class="card-body d-flex flex-wrap gap-2 align-items-center">
         <form th:action="@{/tuning/profiles/{id}/apply(id=${p.id})}" method="post" class="m-0"
+              data-ajax="#opt-profile-root"
               data-confirm="Раскатить профиль на все хосты с SSH-учёткой? Чтобы выбрать хосты, раскатывайте со страницы профилирования (отметьте хосты). Исходные значения сохраняются, вернуть их можно в любой момент.">
             <button class="btn btn-warning"><i class="bi bi-rocket-takeoff me-1"></i>Раскатить на все хосты</button></form>
         <form th:action="@{/tuning/profiles/{id}/delete(id=${p.id})}" method="post" class="m-0 ms-auto"
@@ -52,6 +54,7 @@
         <span class="small text-muted w-100">Создан <span th:text="${#temporals.format(p.createdAt, 'dd.MM.yyyy HH:mm')}"></span>
             <span th:if="${p.createdBy != null}" th:text="'(' + ${p.createdBy} + ')'"></span>, изменён <span th:text="${#temporals.format(p.updatedAt, 'dd.MM.yyyy HH:mm')}"></span>.</span>
     </div></div>
+    </div>
 </th:block>
 </body>
 </html>

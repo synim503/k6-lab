@@ -7,14 +7,15 @@
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='versions')}"></th:block>
 
     <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-        <h5 class="mb-0">Редактор: <code th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span th:text="${v.number}"></span></span></h5>
-        <a class="btn btn-outline-secondary btn-sm edit-nav-guard" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}"><i class="bi bi-arrow-left me-1"></i>К версии</a>
+        <h5 class="mb-0">Редактор: <code th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span id="edit-ver-num" th:text="${v.number}"></span></span></h5>
+        <a class="btn btn-outline-secondary btn-sm edit-nav-guard" id="edit-back-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}"><i class="bi bi-arrow-left me-1"></i>К версии</a>
     </div>
-    <div class="mb-2 small text-muted">Файлы версии:
+    <div class="mb-2 small text-muted" id="edit-files-bar">Файлы версии:
         <a class="me-2 edit-nav-guard" th:each="f : ${scriptFiles}" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
            th:text="${f.path}" th:classappend="${f.path == path} ? 'fw-bold'"></a></div>
     <div class="alert alert-info py-2 small">Сохранение создаёт <strong>новую версию</strong>: старая остаётся неизменной. Сценарии, пороги и теги из <code>options</code> при сохранении вырезаются, их задаёт админка.</div>
-    <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post">
+    <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post"
+          data-no-loading="true" th:attr="data-cur-vid=${v.id}">
         <input type="hidden" name="file" th:value="${path}">
         <input type="hidden" name="content" id="content">
         <div class="alert alert-danger py-2 small d-none" id="edit-err"></div>
@@ -121,9 +122,90 @@
                             .then(function (t) { if (t) { ts.javascriptDefaults.addExtraLib(t, 'file:///node_modules/@types/k6/' + f); } })
                             .catch(function () { /* редактор работает и без подсказок k6 */ });
                     });
-                    form.addEventListener('submit', function () {
+                    form.addEventListener('submit', function (ev) {
+                        ev.preventDefault();
+                        if (!editor || !saveBtn || saveBtn.disabled) { return; }
+                        var curVal = editor.getValue();
+                        document.getElementById('content').value = curVal;
+                        if (errBox) { errBox.classList.add('d-none'); errBox.textContent = ''; }
                         submitting = true;
-                        document.getElementById('content').value = editor.getValue();
+                        var origHtml = saveBtn.innerHTML;
+                        saveBtn.disabled = true;
+                        saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Сохранение…';
+                        var fd = new FormData(form);
+                        var csrf = window.K6 ? window.K6.getCsrf() : {token: ''};
+                        if (csrf.token && !fd.has('_csrf')) { fd.append('_csrf', csrf.token); }
+                        var req = window.K6 && window.K6.fetchHtml
+                            ? window.K6.fetchHtml(form.getAttribute('action'), {method: 'POST', body: fd})
+                            : fetch(form.getAttribute('action'), {
+                                method: 'POST',
+                                body: fd,
+                                credentials: 'same-origin',
+                                headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
+                                redirect: 'follow'
+                            }).then(function (res) {
+                                return res.text().then(function (html) {
+                                    var finalUrl = new URL(res.url || form.action, location.origin);
+                                    if (finalUrl.pathname === '/login') {
+                                        location.href = finalUrl.href;
+                                        var e = new Error('login'); e.redirectedToLogin = true; throw e;
+                                    }
+                                    return {res: res, doc: new DOMParser().parseFromString(html, 'text/html'), finalUrl: finalUrl};
+                                });
+                            });
+                        req.then(function (r) {
+                            var finalUrl = r.finalUrl;
+                            var doc = r.doc;
+                            var hasErr = false;
+                            doc.querySelectorAll('main > .alert.alert-dismissible[role="alert"]').forEach(function (al) {
+                                var txt = ((al.querySelector('span.flex-grow-1') || al).textContent || '').trim();
+                                if (!txt) { return; }
+                                var isErr = al.classList.contains('alert-danger');
+                                if (isErr) {
+                                    hasErr = true;
+                                    if (errBox) { errBox.textContent = txt; errBox.classList.remove('d-none'); }
+                                }
+                                if (window.k6Toast) { window.k6Toast(txt, isErr ? 'err' : 'ok'); }
+                            });
+                            if (hasErr || !r.res.ok) {
+                                if (!hasErr && window.k6Toast) { window.k6Toast('Ошибка сохранения (HTTP ' + r.res.status + ')', 'err'); }
+                                return;
+                            }
+                            var m = /\/versions\/(\d+)(?:\/|$)/.exec(finalUrl.pathname);
+                            var oldVid = form.dataset.curVid;
+                            if (m && oldVid && m[1] !== oldVid) {
+                                var newVid = m[1];
+                                var oldRe = new RegExp('/versions/' + oldVid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=/|$)');
+                                form.dataset.curVid = newVid;
+                                form.setAttribute('action', form.getAttribute('action').replace(oldRe, '/versions/' + newVid));
+                                document.querySelectorAll('a.edit-nav-guard').forEach(function (a) {
+                                    var h = a.getAttribute('href');
+                                    if (h) { a.setAttribute('href', h.replace(oldRe, '/versions/' + newVid)); }
+                                });
+                                var verNumEl = document.getElementById('edit-ver-num');
+                                var metaEl = doc.getElementById('version-meta');
+                                var verNum = metaEl && metaEl.dataset ? metaEl.dataset.versionNumber : null;
+                                if (!verNum) {
+                                    var h5 = doc.querySelector('h5');
+                                    var vm = h5 && /Версия\s+(\d+)/.exec(h5.textContent || '');
+                                    verNum = vm ? vm[1] : null;
+                                }
+                                if (verNumEl && verNum) { verNumEl.textContent = verNum; }
+                                var nextEditUrl = location.pathname.replace(oldRe, '/versions/' + newVid) + location.search;
+                                history.replaceState(null, '', nextEditUrl);
+                            }
+                            initialText = curVal;
+                            setDirty(false);
+                            var cmt = form.querySelector('input[name="comment"]');
+                            if (cmt) { cmt.value = ''; }
+                        }).catch(function (err) {
+                            if (err && err.redirectedToLogin) { return; }
+                            if (window.k6Toast) { window.k6Toast('Не удалось сохранить версию — проверьте связь', 'err'); }
+                        }).finally(function () {
+                            submitting = false;
+                            saveBtn.disabled = false;
+                            saveBtn.innerHTML = origHtml;
+                        });
                     });
                     if (saveBtn) { saveBtn.disabled = false; }
                 }).catch(function (e) {

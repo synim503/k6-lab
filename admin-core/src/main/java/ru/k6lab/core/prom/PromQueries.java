@@ -30,7 +30,8 @@ public final class PromQueries {
 
         /** Время HTTP-запросов (http_req_duration): имя берётся из имени iteration_duration, чтобы совпадали суффиксы единиц и формат. */
         public String httpReqDuration() {
-            return iterationDuration.contains("iteration_duration") ? iterationDuration.replace("iteration_duration", "http_req_duration")
+            return iterationDuration != null && iterationDuration.contains("iteration_duration")
+                    ? iterationDuration.replace("iteration_duration", "http_req_duration")
                     : "k6_http_req_duration_seconds";
         }
 
@@ -58,7 +59,7 @@ public final class PromQueries {
     }
 
     static String escape(String v) {
-        return v.replace("\\", "\\\\").replace("\"", "\\\"");
+        return v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     private static String range(long seconds) {
@@ -103,13 +104,17 @@ public final class PromQueries {
     public static String errorPct(Names n, FailureSource source, long runId, long rangeSec) {
         String r = range(rangeSec);
         return switch (source) {
-            case HELPER -> "100 * sum by (scenario) (increase(" + selector(n.opErrors(), runId, null) + "[" + r
-                    + "])) / sum by (scenario) (increase(" + selector(n.opCount(), runId, null) + "[" + r + "]))";
+            case HELPER -> {
+                String count = "sum by (scenario) (increase(" + selector(n.opCount(), runId, null) + "[" + r + "]))";
+                // при нуле ошибок серия opErrors отсутствует: fallback на count * 0 (как у HTTP), иначе «нет данных»
+                yield "100 * (sum by (scenario) (increase(" + selector(n.opErrors(), runId, null) + "[" + r
+                        + "])) / (" + count + " > 0) or " + count + " * 0)";
+            }
             case HTTP -> {
                 // по счётчикам запросов за окно: http_req_failed в Prometheus - доля с начала теста отдельно по каждому набору меток
                 // (status, name, генератор), её среднее не взвешено числом запросов и не относится к окну
                 String all = httpCount(n, runId, r, false);
-                yield "100 * (" + httpCount(n, runId, r, true) + " / " + all + " or " + all + " * 0)";
+                yield "100 * (" + httpCount(n, runId, r, true) + " / (" + all + " > 0) or " + all + " * 0)";
             }
             case CHECKS -> "100 * (1 - avg by (scenario) (avg_over_time(" + selector(n.checks(), runId, null) + "[" + r + "])))";
         };

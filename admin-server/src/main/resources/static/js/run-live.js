@@ -234,6 +234,9 @@
         // закрываем EventSource, чтобы браузер не переподключался и не дублировал все строки.
         if (isFinal) { logEs.close(); }
     });
+    logEs.addEventListener('done', function () {
+        logEs.close();
+    });
     logEs.onerror = function () {
         if (isFinal) { logEs.close(); }
     };
@@ -242,6 +245,7 @@
     var inflight = false, again = false;
     function refreshStatus() {
         if (isFinal || !window.htmx || document.hidden) { return; }
+        if (window.K6 && window.K6.isAjaxBusy('#run-status')) { return; }
         if (inflight) { again = true; return; }
         inflight = true;
         var finish = function () { inflight = false; if (again && !isFinal) { again = false; refreshStatus(); } };
@@ -256,13 +260,15 @@
     var statusEs = null;
     var statusTimer = null;
     var pending = null;
-    function stopLiveStreams() {
+    function stopLiveStreams(finalStatus) {
+        if (isFinal) { return; }
         isFinal = true;
         root.dataset.final = 'true';
         if (pending) { clearTimeout(pending); pending = null; }
         if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
         if (statusEs) { statusEs.close(); statusEs = null; }
         setTimeout(function () { logEs.close(); }, 2000);
+        window.dispatchEvent(new CustomEvent('k6:run-final', {detail: {status: finalStatus || ''}}));
         // Обновляем вкладку «Результаты», чтобы сразу подгрузились итоги после завершения запуска
         var resBox = document.getElementById('results-box');
         if (resBox && window.htmx) {
@@ -281,6 +287,10 @@
             if (pending || isFinal) { return; }
             pending = setTimeout(function () { pending = null; refreshStatus(); }, 1000);
         });
+        statusEs.addEventListener('done', function () {
+            if (statusEs) { statusEs.close(); statusEs = null; }
+            if (!isFinal) { refreshStatus(); }
+        });
         statusTimer = setInterval(refreshStatus, 5000);
     }
     function gensOpen() { try { return sessionStorage.getItem('run-gens-open') === '1'; } catch (e) { return false; } }
@@ -288,18 +298,31 @@
     document.addEventListener('toggle', function (e) {
         if (e.target && e.target.id === 'gens-box') { try { sessionStorage.setItem('run-gens-open', e.target.open ? '1' : '0'); } catch (x) { /* без сохранения */ } }
     }, true);
-    document.body.addEventListener('htmx:afterSwap', function () {
+    function onStatusUpdated() {
         applyGens();
         stampUpdated();
         var stEl = document.getElementById('run-status');
         var st = stEl && stEl.dataset ? stEl.dataset.runStatus : '';
         if (!isFinal && (st === 'FINISHED' || st === 'FAILED' || st === 'ABORTED')) {
-            stopLiveStreams();
+            stopLiveStreams(st);
         }
-    });
+    }
+    document.body.addEventListener('htmx:afterSwap', onStatusUpdated);
+    document.addEventListener('k6:swapped', onStatusUpdated);
     document.body.addEventListener('htmx:afterSettle', applyGens);
     applyGens();
     if (!isFinal) { stampUpdated(); }
+    document.addEventListener('change', function (e) {
+        var sel = e.target;
+        if (!sel || sel.id !== 'rep-time') { return; }
+        document.querySelectorAll('.rep-link').forEach(function (a) {
+            var base = a.getAttribute('data-base') || a.getAttribute('href');
+            a.setAttribute('data-base', base);
+            var u = new URL(base, location.origin);
+            if (sel.value) { u.searchParams.set('time', sel.value); } else { u.searchParams.delete('time'); }
+            a.setAttribute('href', u.pathname + u.search);
+        });
+    });
     window.addEventListener('beforeunload', function () {
         logEs.close();
         if (statusEs) { statusEs.close(); }

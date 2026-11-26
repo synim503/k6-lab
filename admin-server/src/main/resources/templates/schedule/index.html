@@ -5,7 +5,7 @@
 <body>
 <th:block layout:fragment="content">
     <!-- Шапка и основные действия -->
-    <div class="page-head">
+    <div class="page-head" id="sch-head">
         <div>
             <h3>
                 <span class="icon-tile"><i class="bi bi-calendar-event"></i></span>
@@ -27,6 +27,7 @@
                 <i class="bi bi-collection me-1"></i>Импорт профилей нагрузки
             </button>
             <form class="m-0" th:unless="${paused}" th:action="@{/schedule/pause}" method="post"
+                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                   data-confirm="Поставить планировщик на паузу? Идущий тест закончится сам, новые запуски по расписанию не стартуют.">
                 <button class="btn btn-outline-warning btn-sm"><i class="bi bi-pause-fill me-1"></i>Поставить на паузу</button>
             </form>
@@ -34,6 +35,7 @@
     </div>
 
     <!-- Баннер паузы -->
+    <div id="sch-paused-wrap">
     <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 mb-3" th:if="${paused}">
         <div class="me-auto">
             <b><i class="bi bi-pause-circle me-1"></i>Планировщик на паузе.</b>
@@ -42,13 +44,15 @@
             <span th:if="${!activeRuns.isEmpty()}">Идёт тест (<a th:each="r,st : ${activeRuns}" th:href="@{/runs/{id}(id=${r.id})}" th:text="'#' + ${r.id} + (${st.last} ? '' : ', ')"></a>): он закончится сам.</span>
             <span th:if="${activeRuns.isEmpty()}">При снятии паузы первый тест из очереди запустится сразу, а остальные сдвинутся следом.</span>
         </div>
-        <form class="m-0" th:action="@{/schedule/resume}" method="post">
+        <form class="m-0" th:action="@{/schedule/resume}" method="post"
+              data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
             <button class="btn btn-success btn-sm"><i class="bi bi-play-fill me-1"></i>Снять с паузы</button>
         </form>
     </div>
+    </div>
 
     <!-- Сводка KPI (клик по карточке фильтрует таблицу ниже) -->
-    <div class="sch-kpi-grid">
+    <div class="sch-kpi-grid" id="sch-kpi-row">
         <div class="sch-kpi sch-kpi-clickable" data-kpi-filter="pending" tabindex="0" role="button" title="Нажмите, чтобы показать ожидающие в очереди тесты">
             <div class="k"><i class="bi bi-hourglass-split text-primary"></i>Ожидают в очереди <i class="bi bi-funnel ms-auto opacity-50"></i></div>
             <div class="v">
@@ -107,6 +111,7 @@
     </div>
 
     <!-- Очередь и история расписания (сразу под таймлайном, чтобы очередь была видна без прокрутки) -->
+    <div id="sch-queue-wrap">
     <div class="card empty-state mb-3" th:if="${items.isEmpty()}">
         <i class="bi bi-calendar-check"></i>
         <div class="fw-semibold text-body mb-1">Запланированных запусков пока нет</div>
@@ -141,6 +146,7 @@
                     <ul class="dropdown-menu dropdown-menu-end">
                         <li th:if="${pendingCount > 0}">
                             <form class="m-0" th:action="@{/schedule/cancel-all-pending}" method="post"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                                   data-confirm="Отменить ВСЕ ожидающие запуски в расписании?">
                                 <button type="submit" class="dropdown-item small text-danger">
                                     <i class="bi bi-x-circle me-2"></i>Отменить все ожидающие (<span th:text="${pendingCount}"></span>)
@@ -149,6 +155,7 @@
                         </li>
                         <li th:if="${historyCount > 0}">
                             <form class="m-0" th:action="@{/schedule/clear-history}" method="post"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                                   data-confirm="Очистить историю завершённых, отменённых и упавших записей расписания? Ожидающие в очереди тесты останутся.">
                                 <button type="submit" class="dropdown-item small">
                                     <i class="bi bi-trash3 me-2"></i>Очистить историю (<span th:text="${historyCount}"></span>)
@@ -164,17 +171,20 @@
         <div class="sch-bulk-bar d-none" id="sch-bulk-bar">
             <span class="small fw-semibold"><i class="bi bi-check2-square me-1 text-primary"></i>Выбрано: <span id="sch-bulk-count">0</span></span>
             <div class="d-flex flex-wrap align-items-center gap-1 ms-auto">
-                <form th:action="@{/schedule/bulk-requeue(position='front')}" method="post" class="m-0 sch-bulk-form">
+                <form th:action="@{/schedule/bulk-requeue(position='front')}" method="post" class="m-0 sch-bulk-form"
+                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                     <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Поставить все выбранные прогоны в начало очереди (сразу после текущего запуска)">
                         <i class="bi bi-chevron-bar-up me-1"></i>В начало (после текущего)
                     </button>
                 </form>
-                <form th:action="@{/schedule/bulk-requeue(position='back')}" method="post" class="m-0 sch-bulk-form">
+                <form th:action="@{/schedule/bulk-requeue(position='back')}" method="post" class="m-0 sch-bulk-form"
+                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                     <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Поставить все выбранные прогоны в конец очереди">
                         <i class="bi bi-chevron-bar-down me-1"></i>В конец очереди
                     </button>
                 </form>
                 <form th:action="@{/schedule/bulk-cancel}" method="post" class="m-0 sch-bulk-form"
+                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                       data-confirm="Отменить выбранные ожидающие записи расписания?">
                     <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" id="sch-bulk-cancel-btn" title="Отменить выбранные ожидающие записи">
                         <i class="bi bi-x-lg me-1"></i>Отменить ожидающие
@@ -222,7 +232,8 @@
                         </div>
                         <div class="mt-1 d-flex flex-wrap gap-1 align-items-center">
                             <span class="sch-countdown" th:if="${s.pending}" th:attr="data-countdown=${s.runAt}">скоро</span>
-                            <form th:if="${s.pending}" th:action="@{/schedule/{id}/shift(id=${s.id})}" method="post" class="d-inline m-0">
+                            <form th:if="${s.pending}" th:action="@{/schedule/{id}/shift(id=${s.id})}" method="post" class="d-inline m-0"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                 <input type="hidden" name="shift" th:value="${!s.shiftForward}">
                                 <button type="submit" class="btn btn-sm py-0 px-1 border-0"
                                         th:classappend="${s.shiftForward} ? 'text-primary fw-semibold' : 'text-muted opacity-75'"
@@ -274,6 +285,7 @@
                             <!-- Компактные быстрые действия для ожидающего теста -->
                             <th:block th:if="${s.pending}">
                                 <form th:action="@{/schedule/{id}/start-now(id=${s.id})}" method="post" class="d-inline m-0"
+                                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                                       data-confirm="Запустить этот тест прямо сейчас (если генераторы свободны)? Остальные записи очереди сдвинутся следом.">
                                     <button type="submit" class="btn btn-sm btn-outline-success btn-icon-sm"
                                             title="Запустить прямо сейчас вне очереди" aria-label="Запустить сейчас">
@@ -281,12 +293,14 @@
                                     </button>
                                 </form>
                                 <div class="sch-shift-pill" th:if="${pendingCount > 1}" role="group" aria-label="Сдвиг в очереди">
-                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='up')}" method="post">
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='up')}" method="post"
+                                          data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                         <button type="submit" class="btn" th:disabled="${qPos == 1}" title="На 1 позицию выше" aria-label="Выше">
                                             <i class="bi bi-chevron-up"></i>
                                         </button>
                                     </form>
-                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='down')}" method="post">
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='down')}" method="post"
+                                          data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                         <button type="submit" class="btn" th:disabled="${qPos == pendingCount}" title="На 1 позицию ниже" aria-label="Ниже">
                                             <i class="bi bi-chevron-down"></i>
                                         </button>
@@ -296,7 +310,8 @@
 
                             <!-- Повторное добавление и вторичные действия в выпадающем меню (не обрезается таблицей) -->
                             <div class="btn-group btn-group-sm">
-                                <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='back')}" method="post" class="d-inline m-0">
+                                <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='back')}" method="post" class="d-inline m-0"
+                                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                     <button type="submit" class="btn btn-sm btn-outline-primary btn-icon-sm"
                                             title="Снова добавить этот прогон в конец очереди (со всеми параметрами)" aria-label="Повторить в конец очереди">
                                         <i class="bi bi-arrow-repeat"></i>
@@ -310,14 +325,16 @@
                                     <th:block th:if="${s.pending and pendingCount > 1}">
                                         <li><h6 class="dropdown-header">Позиция в очереди</h6></li>
                                         <li>
-                                            <form th:action="@{/schedule/{id}/move(id=${s.id},position='front')}" method="post" class="m-0">
+                                            <form th:action="@{/schedule/{id}/move(id=${s.id},position='front')}" method="post" class="m-0"
+                                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                                 <button type="submit" class="dropdown-item small" th:disabled="${qPos == 1}">
                                                     <i class="bi bi-chevron-bar-up me-2 text-primary"></i>Переместить в самое начало
                                                 </button>
                                             </form>
                                         </li>
                                         <li>
-                                            <form th:action="@{/schedule/{id}/move(id=${s.id},position='back')}" method="post" class="m-0">
+                                            <form th:action="@{/schedule/{id}/move(id=${s.id},position='back')}" method="post" class="m-0"
+                                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                                 <button type="submit" class="dropdown-item small" th:disabled="${qPos == pendingCount}">
                                                     <i class="bi bi-chevron-bar-down me-2 text-primary"></i>Переместить в самый конец
                                                 </button>
@@ -327,14 +344,16 @@
                                     </th:block>
                                     <li><h6 class="dropdown-header">Повторить запуск</h6></li>
                                     <li>
-                                        <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='front')}" method="post" class="m-0">
+                                        <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='front')}" method="post" class="m-0"
+                                              data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                             <button type="submit" class="dropdown-item small">
                                                 <i class="bi bi-chevron-bar-up me-2 text-primary"></i>В начало очереди (после текущего)
                                             </button>
                                         </form>
                                     </li>
                                     <li>
-                                        <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='back')}" method="post" class="m-0">
+                                        <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='back')}" method="post" class="m-0"
+                                              data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                             <button type="submit" class="dropdown-item small">
                                                 <i class="bi bi-chevron-bar-down me-2 text-primary"></i>В конец очереди
                                             </button>
@@ -359,6 +378,7 @@
                             </div>
 
                             <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                                   data-confirm="Отменить запланированный запуск?">
                                 <button class="btn btn-sm btn-outline-danger btn-icon-sm" title="Отменить" aria-label="Отменить"><i class="bi bi-x-lg"></i></button>
                             </form>
@@ -369,6 +389,7 @@
                 </tbody>
             </table>
         </div>
+    </div>
     </div>
 
     <!-- Автопроверки планировщика (Prometheus -> SSH-скрипт): компактно под очередью, сворачиваемые -->
@@ -404,7 +425,8 @@
                     <code th:text="${guardHostKey.get('keyType')}"></code>
                     <code th:text="${guardHostKey.get('fingerprint')}"></code>
                 </div>
-                <form class="m-0" th:action="@{/schedule/guards/confirm-host-key}" method="post">
+                <form class="m-0" th:action="@{/schedule/guards/confirm-host-key}" method="post"
+                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                     <input type="hidden" name="host" th:value="${guardHostKey.get('host')}">
                     <input type="hidden" name="port" th:value="${guardHostKey.get('port')}">
                     <input type="hidden" name="keyType" th:value="${guardHostKey.get('keyType')}">
@@ -427,7 +449,8 @@
                         <div class="flex-grow-1" style="min-width:260px">
                             <div class="d-flex flex-wrap align-items-center gap-2">
                                 <form class="m-0 d-inline" sec:authorize="hasRole('ADMIN')"
-                                      th:action="@{/schedule/guards/{id}/toggle(id=${g.id})}" method="post">
+                                      th:action="@{/schedule/guards/{id}/toggle(id=${g.id})}" method="post"
+                                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                     <input type="hidden" name="enabled" th:value="${!g.enabled}">
                                     <button type="submit" class="btn btn-sm py-0 px-2"
                                             th:classappend="${g.enabled} ? 'btn-success' : 'btn-outline-secondary'"
@@ -478,17 +501,20 @@
                         </div>
 
                         <div class="d-flex flex-wrap align-items-center gap-1" sec:authorize="hasRole('ADMIN')">
-                            <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=false)}" method="post">
+                            <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=false)}" method="post"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                 <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2" title="Запросить метрику из Prometheus сейчас (без запуска SSH)">
                                     <i class="bi bi-activity me-1"></i>Метрика
                                 </button>
                             </form>
-                            <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=true)}" method="post">
+                            <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=true)}" method="post"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                 <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Проверить метрику и выполнить SSH-скрипт, если порог превышен">
                                     <i class="bi bi-play-circle me-1"></i>Проверить
                                 </button>
                             </form>
                             <form class="m-0" th:action="@{/schedule/guards/{id}/run-ssh(id=${g.id})}" method="post"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                                   data-confirm="Выполнить SSH-скрипт прямо сейчас независимо от значения метрики?">
                                 <button type="submit" class="btn btn-sm btn-outline-warning py-0 px-2" title="Принудительно выполнить SSH-скрипт сейчас (для отладки)">
                                     <i class="bi bi-terminal me-1"></i>SSH
@@ -499,6 +525,7 @@
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <form class="m-0" th:action="@{/schedule/guards/{id}/delete(id=${g.id})}" method="post"
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                                   data-confirm="Удалить автопроверку?">
                                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Удалить правило" aria-label="Удалить">
                                     <i class="bi bi-trash"></i>
@@ -515,6 +542,7 @@
     <div class="modal fade" id="sch-quick-modal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
             <form class="modal-content" id="sch-quick-form" method="post"
+                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
                   th:attr="data-action-tpl=@{/scripts/__ID__/schedule},data-meta-base=@{/schedule/script-meta}">
                 <input type="hidden" th:if="${_csrf != null}" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
                 <input type="hidden" name="returnTo" value="schedule">
@@ -621,7 +649,8 @@
     <div class="modal fade" id="sch-imp-tests-modal" tabindex="-1" aria-hidden="true"
          th:attr="data-auto-open=${importJson != null}">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-            <form class="modal-content" th:action="@{/schedule/import}" method="post" enctype="multipart/form-data">
+            <form class="modal-content" th:action="@{/schedule/import}" method="post" enctype="multipart/form-data"
+                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards" data-ajax-reset="true">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-upload me-2 text-primary"></i>Импорт списка тестов (JSON)</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
@@ -633,7 +662,7 @@
                     </div>
                     <div class="dropzone mb-3" id="sch-imp-tests-dz">
                         <i class="bi bi-filetype-json"></i>
-                        <div id="sch-imp-tests-lbl">Перетащите JSON-файл списка тестов сюда или <u>выберите на компьютере</u></div>
+                        <div id="sch-imp-tests-lbl" data-dz-default="Перетащите JSON-файл списка тестов сюда или <u>выберите на компьютере</u>">Перетащите JSON-файл списка тестов сюда или <u>выберите на компьютере</u></div>
                         <input class="d-none" type="file" name="file" id="sch-imp-tests-file" accept=".json,application/json">
                     </div>
                     <label class="form-label small mb-1" for="sch-imp-tests-json">Или вставьте JSON-текст</label>
@@ -695,7 +724,8 @@
     <div class="modal fade" id="sch-imp-prof-modal" tabindex="-1" aria-hidden="true"
          th:attr="data-auto-open=${importProfilesJson != null}">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-            <form class="modal-content" th:action="@{/schedule/import-profiles}" method="post" enctype="multipart/form-data">
+            <form class="modal-content" th:action="@{/schedule/import-profiles}" method="post" enctype="multipart/form-data"
+                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards" data-ajax-reset="true">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-collection me-2 text-primary"></i>Импорт профилей нагрузки (JSON)</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
@@ -707,7 +737,7 @@
                     </div>
                     <div class="dropzone mb-3" id="sch-imp-prof-dz">
                         <i class="bi bi-filetype-json"></i>
-                        <div id="sch-imp-prof-lbl">Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u></div>
+                        <div id="sch-imp-prof-lbl" data-dz-default="Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u>">Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u></div>
                         <input class="d-none" type="file" name="file" id="sch-imp-prof-file" accept=".json,application/json">
                     </div>
                     <label class="form-label small mb-1" for="sch-imp-prof-json">Или вставьте JSON-текст</label>
@@ -864,7 +894,8 @@
     <!-- Модалка: Добавить / редактировать автопроверку (Prometheus -> SSH) -->
     <div class="modal fade" id="sch-guard-modal" tabindex="-1" aria-hidden="true" sec:authorize="hasRole('ADMIN')">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-            <form class="modal-content" th:action="@{/schedule/guards}" method="post" id="sch-guard-form">
+            <form class="modal-content" th:action="@{/schedule/guards}" method="post" id="sch-guard-form"
+                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                 <input type="hidden" name="id" id="gd-id" value="">
                 <div class="modal-header">
                     <h5 class="modal-title" id="gd-modal-title"><i class="bi bi-shield-check me-2 text-primary"></i>Автопроверка (Prometheus → SSH)</h5>

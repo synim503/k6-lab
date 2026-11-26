@@ -28,11 +28,12 @@ import (
 // START в заданное время, логи, статус k6, STOP (SIGINT), ABORT (SIGKILL), PAUSE/RESUME/SCALE_VUS через REST API k6.
 // Потеря связи с сервером тест не прерывает: события копятся в дисковом журнале.
 type RunManager struct {
-	cfg   *Config
-	emit  func(factory func(seq int64) any)
-	mu    sync.Mutex
-	runs  map[string]*Run
-	httpc *http.Client
+	cfg       *Config
+	emit      func(factory func(seq int64) any)
+	mu        sync.Mutex
+	runs      map[string]*Run
+	usedPorts map[int]bool
+	httpc     *http.Client
 }
 
 type Run struct {
@@ -69,7 +70,7 @@ func NewRunManager(cfg *Config, emit func(factory func(seq int64) any)) *RunMana
 			_ = os.RemoveAll(filepath.Join(runsRoot, e.Name()))
 		}
 	}
-	return &RunManager{cfg: cfg, emit: emit, runs: map[string]*Run{}, httpc: &http.Client{}}
+	return &RunManager{cfg: cfg, emit: emit, runs: map[string]*Run{}, usedPorts: map[int]bool{}, httpc: &http.Client{Timeout: 10 * time.Minute}}
 }
 
 func (m *RunManager) get(id string) *Run {
@@ -79,9 +80,16 @@ func (m *RunManager) get(id string) *Run {
 }
 
 func (m *RunManager) remove(r *Run) {
+	r.mu.Lock()
+	port := r.apiPort
+	r.apiPort = 0
+	r.mu.Unlock()
 	m.mu.Lock()
 	if m.runs[r.id] == r {
 		delete(m.runs, r.id)
+	}
+	if port > 0 {
+		delete(m.usedPorts, port)
 	}
 	m.mu.Unlock()
 }
@@ -138,9 +146,33 @@ func (m *RunManager) ActiveRunIDs() []string {
 
 func (m *RunManager) Shutdown() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	list := make([]*Run, 0, len(m.runs))
 	for _, r := range m.runs {
+		list = append(list, r)
+	}
+	m.mu.Unlock()
+	for _, r := range list {
+		r.mu.Lock()
+		r.cancelled = true
+		if r.startTimer != nil {
+			r.startTimer.Stop()
+			r.startTimer = nil
+		}
+		if r.cancel != nil {
+			r.cancel()
+		}
+		proxy := r.proxy
+		r.proxy = nil
+		logs := r.logs
+		r.logs = nil
+		r.mu.Unlock()
 		r.killQuietly()
+		if proxy != nil {
+			proxy.Close()
+		}
+		if logs != nil {
+			logs.Close()
+		}
 	}
 }
 
@@ -277,12 +309,18 @@ func (m *RunManager) cancelPrepare(c RunCmd) CmdAck {
 	}
 	r.mu.Lock()
 	st := r.state
-	if st == stRunning || st == stStopping || st == stStarting {
-		// отмена пришла, когда k6 уже стартует или стартовал: сервер этот run больше не ведёт
+	if st == stRunning || st == stStopping {
+		// отмена пришла, когда k6 уже стартовал: сервер этот run больше не ведёт
 		r.cancelled = true
 		r.aborted = true
 		r.mu.Unlock()
 		r.killQuietly()
+		return ackOK(c.CmdID)
+	}
+	if st == stStarting {
+		// k6 ещё не запустился: ставим только cancelled (без aborted), чтобы finishCancelledBeforeStart не слал ложный EXIT(SIGKILL)
+		r.cancelled = true
+		r.mu.Unlock()
 		return ackOK(c.CmdID)
 	}
 	r.cancelled = true
@@ -292,6 +330,11 @@ func (m *RunManager) cancelPrepare(c RunCmd) CmdAck {
 	}
 	if r.cancel != nil {
 		r.cancel()
+	}
+	if st == stPreparing {
+		// doPrepare сам удалит r и r.dir после выхода из prepareSteps — избегаем гонки RemoveAll с записью файлов
+		r.mu.Unlock()
+		return ackOK(c.CmdID)
 	}
 	r.state = stExited
 	r.mu.Unlock()
@@ -308,7 +351,9 @@ func (m *RunManager) doPrepare(r *Run) {
 	if err == nil {
 		r.mu.Lock()
 		if r.cancelled {
+			r.state = stExited
 			r.mu.Unlock()
+			m.remove(r)
 			_ = os.RemoveAll(r.dir)
 			return
 		}
@@ -428,12 +473,11 @@ func (m *RunManager) prepareSteps(r *Run) error {
 }
 
 func (m *RunManager) download(ctx context.Context, url, target string) error {
-	c := &http.Client{Timeout: 10 * time.Minute}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("Не удалось скачать архив скрипта: %w", err)
 	}
-	resp, err := c.Do(req)
+	resp, err := m.httpc.Do(req)
 	if err != nil {
 		return fmt.Errorf("Не удалось скачать архив скрипта: %w", err)
 	}
@@ -445,9 +489,12 @@ func (m *RunManager) download(ctx context.Context, url, target string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	_, copyErr := io.Copy(f, resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 // ------------------------------------------------------------------ запуск k6
@@ -463,7 +510,7 @@ func (m *RunManager) launch(r *Run) {
 	p := r.prep
 	summary := filepath.Join(r.dir, "summary.json")
 	var stdout, stderr io.ReadCloser
-	port, err := freePort(p.K6ApiPort)
+	port, err := m.reservePort(p.K6ApiPort)
 	if err == nil {
 		r.mu.Lock()
 		r.apiPort = port
@@ -656,23 +703,34 @@ func (m *RunManager) poll(r *Run) {
 }
 
 func (m *RunManager) awaitExit(r *Run, cmd *exec.Cmd, wg *sync.WaitGroup, summaryFile string) {
-	wg.Wait() // вывод дочитан до EOF (процесс завершился)
+	// Сначала ждём завершения процесса k6, затем даём до 5 с на дочитывание stdout/stderr (защита от дедлока на унаследованных FD)
 	_ = cmd.Wait()
+	donePipe := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(donePipe)
+	}()
+	select {
+	case <-donePipe:
+	case <-time.After(5 * time.Second):
+		logf("run %s: таймаут закрытия stdout/stderr после завершения k6", r.id)
+	}
 	code, sig := exitInfo(cmd)
 	r.mu.Lock()
 	if r.pollStop != nil {
 		close(r.pollStop)
 	}
 	proxy := r.proxy
+	r.proxy = nil
 	r.exitCode = &code
 	logs := r.logs
 	aborted, stopReq := r.aborted, r.stopRequested
 	r.mu.Unlock()
 	if proxy != nil {
-		time.Sleep(6 * time.Second) // k6 досылает последние метрики при завершении
+		// Graceful shutdown прокси (до 20 с) сам дождётся активных запросов в Prometheus и сразу вернётся, если их нет
+		proxy.Close()
 		logf("run %s: приёмник метрик: гистограмм преобразовано %d, запросов в Prometheus %d, ошибок %d", r.id,
 			proxy.Converted.Load(), proxy.Forwarded.Load(), proxy.Failed.Load())
-		proxy.Close()
 	}
 	if logs != nil {
 		logs.Close()
@@ -901,8 +959,29 @@ func resolveSecrets(env, secrets map[string]string) (map[string]string, error) {
 
 // ------------------------------------------------------------------ утилиты
 
-// freePort - свободный порт на loopback, начиная с желаемого со случайным смещением (несколько агентов на одном
-// хосте одновременно проверяют порты и не должны выбрать один и тот же).
+// reservePort выбирает свободный порт на loopback и резервирует его под m.mu до завершения запуска,
+// исключая TOCTOU-коллизию между двумя одновременно стартующими тестами на одном агенте.
+func (m *RunManager) reservePort(preferred int) (int, error) {
+	if preferred < 1024 {
+		preferred = 1024
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	base := preferred + rand.Intn(200)
+	for port := base; port < base+500 && port < 65535; port++ {
+		if m.usedPorts[port] {
+			continue
+		}
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			l.Close()
+			m.usedPorts[port] = true
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("Не нашёлся свободный порт для REST API k6 начиная с %d", preferred)
+}
+
 func freePort(preferred int) (int, error) {
 	if preferred < 1024 {
 		preferred = 1024

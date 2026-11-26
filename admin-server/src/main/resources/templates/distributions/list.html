@@ -13,7 +13,8 @@
     <div class="card mb-3"><div class="card-body">
         <details class="k6-disclosure" th:open="${items.isEmpty()}">
             <summary class="fw-semibold"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-cloud-arrow-up text-primary"></i>Загрузить версию</summary>
-            <form class="row g-3 mt-1" th:action="@{/distributions}" method="post" enctype="multipart/form-data">
+            <form class="row g-3 mt-1" th:action="@{/distributions}" method="post" enctype="multipart/form-data"
+                  data-ajax="#dist-section" data-ajax-reset="true">
                 <div class="col-md-3"><label class="form-label" for="d-kind">Что загружаем</label>
                     <select class="form-select" id="d-kind" name="kind"><option th:each="k : ${kinds}" th:value="${k}" th:text="${k.title}"></option></select></div>
                 <div class="col-md-2"><label class="form-label" for="d-ver">Версия</label><input class="form-control" id="d-ver" name="version" required placeholder="1.7.1"></div>
@@ -32,13 +33,14 @@
         </details>
     </div></div>
 
+    <div id="dist-section">
     <div class="gen-toolbar" th:if="${!items.isEmpty()}">
         <div class="status-chips" role="group" aria-label="Фильтр по типу">
             <button type="button" class="chip-btn on" data-dist-chip data-chip-val="">Все <b th:text="${items.size()}"></b></button>
             <button type="button" class="chip-btn" data-dist-chip th:each="k : ${kinds}" th:attr="data-chip-val=${k.name()}" th:text="${k.title}"></button>
         </div>
         <div class="d-flex align-items-center gap-2 ms-auto flex-wrap">
-            <input type="search" class="form-control form-control-sm" placeholder="Поиск по версии, файлу, метке…" aria-label="Поиск дистрибутивов"
+            <input type="search" class="form-control form-control-sm" id="dist-search" placeholder="Поиск по версии, файлу, метке…" aria-label="Поиск дистрибутивов"
                    style="min-width:210px;max-width:290px"
                    data-table-filter="#dist-tbody tr[data-filter-val]"
                    data-chip-group="[data-dist-chip]"
@@ -64,13 +66,14 @@
             <td class="text-nowrap"><code class="small" th:text="${#strings.substring(a.sha256, 0, 12)} + '…'" th:title="${a.sha256}"></code>
                 <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1 k6-copy-btn" th:attr="data-copy=${a.sha256}" title="Копировать полный SHA256" aria-label="Копировать SHA256"><i class="bi bi-clipboard"></i></button></td>
             <td class="text-end text-nowrap row-actions">
-                <form class="d-inline" th:if="${!a.default and a.kind.name() != 'XK6'}" th:action="@{/distributions/{id}/default(id=${a.id})}" method="post">
+                <form class="d-inline" th:if="${!a.default and a.kind.name() != 'XK6'}" th:action="@{/distributions/{id}/default(id=${a.id})}" method="post" data-ajax="#dist-section">
                     <button class="btn btn-sm btn-outline-success" title="Использовать для новых установок и обновлений">По умолчанию</button></form>
-                <form class="d-inline" th:action="@{/distributions/{id}/delete(id=${a.id})}" method="post" data-confirm="Удалить версию?">
+                <form class="d-inline" th:action="@{/distributions/{id}/delete(id=${a.id})}" method="post" data-ajax="#dist-section" data-confirm="Удалить версию?">
                     <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
             </td>
         </tr></tbody>
     </table></div></div>
+    </div>
 </th:block>
 <th:block layout:fragment="scripts">
     <script th:inline="none">

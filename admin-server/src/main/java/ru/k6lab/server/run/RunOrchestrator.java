@@ -74,11 +74,13 @@ public class RunOrchestrator implements AgentEventListener {
         boolean offline;
         Instant offlineSince;
         boolean exitSeen;
+        boolean startSent;
     }
 
     static final class Ctx {
         long runId;
         String scriptName;
+        volatile RunStatus status;
         Run.FailurePolicy policy;
         int gracefulStopSec;
         int totalSec;
@@ -121,6 +123,11 @@ public class RunOrchestrator implements AgentEventListener {
         t.setDaemon(true);
         return t;
     });
+    private final java.util.concurrent.ExecutorService clockPool = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "run-clock-sync");
+        t.setDaemon(true);
+        return t;
+    });
 
     public RunOrchestrator(RunService runService, RunReservation reservation, RunArtifactService artifacts,
                            AgentSessionRegistry registry, RunLogService logs, RunEventBroadcaster broadcaster,
@@ -141,6 +148,7 @@ public class RunOrchestrator implements AgentEventListener {
     @PreDestroy
     void shutdown() {
         scheduler.shutdownNow();
+        clockPool.shutdownNow();
     }
 
     /** Результат завершения run - для анализа результатов и отчётов. */
@@ -152,19 +160,28 @@ public class RunOrchestrator implements AgentEventListener {
     /** Начало исполнения захваченного run (статус уже PREPARING). */
     public void begin(Long runId) {
         Run run = runService.get(runId);
+        if (run.getStatus().isTerminal()) {
+            return;
+        }
         RunSnapshot snap = runService.snapshot(run);
         Ctx ctx = newCtx(run, snap);
-        for (RunGenerator rg : runService.generatorsOf(runId)) {
+        List<RunGenerator> gens = runService.generatorsOf(runId);
+        for (RunGenerator rg : gens) {
             ctx.gens.put(rg.getGeneratorId(), genCtx(rg));
         }
-        contexts.put(runId, ctx);
+        // Захватываем монитор ctx ДО публикации в contexts, чтобы stop/abort/onEvent не вклинились до PREPARE
         synchronized (ctx) {
+            contexts.put(runId, ctx);
             MDC.put("run_id", String.valueOf(runId));
             try {
+                if (ctx.finalized || runService.get(runId).getStatus().isTerminal()) {
+                    contexts.remove(runId, ctx);
+                    return;
+                }
                 logs.addSystem(runId, "INFO", "Run " + runId + ": подготовка на " + ctx.gens.size() + " генераторах");
                 Map<String, String> secretValues = secrets.resolve(SecretService.referencedNames(snap.env()));
                 RunArtifactService.Artifact artifact = artifacts.forVersion(runService.versionOf(run));
-                for (RunGenerator rg : runService.generatorsOf(runId)) {
+                for (RunGenerator rg : gens) {
                     sendPrepare(ctx, run, snap, rg, artifact, secretValues);
                 }
                 if (!ctx.finalized) {
@@ -186,13 +203,14 @@ public class RunOrchestrator implements AgentEventListener {
         Ctx ctx = new Ctx();
         ctx.runId = run.getId();
         ctx.scriptName = run.getScriptName();
+        ctx.status = run.getStatus();
         ctx.policy = run.getFailurePolicy();
         // плановый конец - по самому долгому сценарию конфига k6, а не только по профилю: у constant-vus, stages, startTime и т.п. своя длительность,
         // иначе сторож принял бы нормально идущий тест за зависший и прервал его
         var span = ru.k6lab.core.k6config.ConfigDuration.of(run.getK6Config());
         ctx.gracefulStopSec = (int) Math.max(snap.gracefulStopSec(), span.gracefulStopSec());
         ctx.totalSec = (int) Math.max(snap.steps().stream().mapToInt(s -> s.rampSec() + s.holdSec()).sum(), span.totalSec());
-        ctx.externallyControlled = run.getK6Config() != null && run.getK6Config().toString().contains("externally-controlled");
+        ctx.externallyControlled = RunService.hasExecutor(run.getK6Config(), "externally-controlled");
         ctx.plannedStart = run.getPlannedStartAt();
         ctx.anchored = run.getInitSec() != null;
         ctx.startSent = run.getPlannedStartAt() != null;
@@ -274,11 +292,7 @@ public class RunOrchestrator implements AgentEventListener {
      */
     public List<String> keptHistograms() {
         ru.k6lab.core.prom.PromQueries.Names n = metricNames.names();
-        List<String> keep = new java.util.ArrayList<>(List.of(n.opDuration(), n.iterationDuration()));
-        if (n.iterationDuration().contains("iteration_duration")) {
-            keep.add(n.iterationDuration().replace("iteration_duration", "http_req_duration"));
-        }
-        return keep.stream().distinct().toList();
+        return java.util.stream.Stream.of(n.opDuration(), n.iterationDuration(), n.httpReqDuration()).distinct().toList();
     }
 
     /** ws://host:port/agent/ws -> http://host:port/agent/artifact/{run}/{token}: агент качает архив с тем же сервером. */
@@ -457,23 +471,34 @@ public class RunOrchestrator implements AgentEventListener {
             }
             Map<Long, Long> offsets = new HashMap<>();
             String problem = null;
-            for (GenCtx g : gens) {
-                AgentSession s = registry.get(g.genId).orElse(null);
-                if (s == null) {
-                    problem = "Генератор " + g.name + " отключился перед стартом";
+            // Замеряем расхождение часов по всем генераторам параллельно, не блокируя 4-поточный scheduler последовательно
+            record ClockResult(GenCtx gen, boolean disconnected, Long offset) {
+            }
+            List<java.util.concurrent.CompletableFuture<ClockResult>> futs = gens.stream()
+                    .map(g -> java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        AgentSession s = registry.get(g.genId).orElse(null);
+                        if (s == null) {
+                            return new ClockResult(g, true, null);
+                        }
+                        return new ClockResult(g, false, freshClockOffset(s));
+                    }, clockPool))
+                    .toList();
+            for (var fut : futs) {
+                ClockResult r = fut.join();
+                if (r.disconnected()) {
+                    problem = "Генератор " + r.gen().name + " отключился перед стартом";
                     break;
                 }
-                Long off = freshClockOffset(s);
-                if (off == null) {
-                    problem = "Не измерено расхождение часов генератора " + g.name + " - синхронный старт невозможен";
+                if (r.offset() == null) {
+                    problem = "Не измерено расхождение часов генератора " + r.gen().name + " - синхронный старт невозможен";
                     break;
                 }
-                if (Math.abs(off) > MAX_CLOCK_SKEW_MS) {
-                    problem = "Часы генератора " + g.name + " расходятся с сервером на " + off + " мс (> " + MAX_CLOCK_SKEW_MS
+                if (Math.abs(r.offset()) > MAX_CLOCK_SKEW_MS) {
+                    problem = "Часы генератора " + r.gen().name + " расходятся с сервером на " + r.offset() + " мс (> " + MAX_CLOCK_SKEW_MS
                             + " мс): синхронный старт заблокирован. Настройте chrony/NTP на генераторе.";
                     break;
                 }
-                offsets.put(g.genId, off);
+                offsets.put(r.gen().genId, r.offset());
             }
             synchronized (ctx) {
                 if (ctx.finalized || ctx.startSent || ctx.stopRequested) {
@@ -505,13 +530,15 @@ public class RunOrchestrator implements AgentEventListener {
             try {
                 // время старта переводим в шкалу часов конкретного агента
                 registry.get(g.genId).orElseThrow().send(new Messages.Start(cmdId, String.valueOf(ctx.runId), startAt + offsets.get(g.genId)));
+                g.startSent = true;
             } catch (RuntimeException e) {
+                pendingCmds.remove(cmdId);
                 fail(ctx, "Не удалось отправить START генератору " + g.name + ": " + e.getMessage());
                 return;
             }
         }
         ctx.startSent = true;
-        Run run = runService.update(ctx.runId, r -> r.setPlannedStartAt(ctx.plannedStart));
+        Run run = runService.get(ctx.runId);
         List<StepWindow> windows = StepWindow.of(runService.snapshot(run).steps().stream()
                 .map(s -> new ru.k6lab.core.profile.StepPlan(s.no(), s.levelPct(), s.rampSec(), s.holdSec(), s.label())).toList());
         List<RunStep> steps = new ArrayList<>();
@@ -526,7 +553,7 @@ public class RunOrchestrator implements AgentEventListener {
             rs.setHoldEndAt(ctx.plannedStart.plusSeconds(w.holdEndSec()));
             steps.add(rs);
         }
-        runService.saveSteps(ctx.runId, steps);
+        runService.updatePlannedStartAndSteps(ctx.runId, ctx.plannedStart, null, steps);
         logs.addSystem(ctx.runId, "INFO", "START отправлен всем генераторам, общий старт через " + (START_DELAY_MS / 1000) + " с");
         ctx.startTimer = scheduler.schedule(() -> onStartTime(ctx.runId), START_DELAY_MS, TimeUnit.MILLISECONDS);
         broadcaster.publishStatus(ctx.runId, RunStatus.PREPARING.name());
@@ -547,6 +574,7 @@ public class RunOrchestrator implements AgentEventListener {
                     r.transitionTo(RunStatus.RUNNING);
                     r.setStartedAt(Instant.now());
                 });
+                ctx.status = RunStatus.RUNNING;
                 logs.addSystem(runId, "INFO", "Тест запущен");
                 broadcaster.publishStatus(runId, RunStatus.RUNNING.name());
             }
@@ -703,10 +731,11 @@ public class RunOrchestrator implements AgentEventListener {
             }
         });
         for (GenCtx g : ctx.gens.values()) {
-            sendQuietly(g.genId, ctx.runId, g.status == RunGenerator.Status.RUNNING || g.status == RunGenerator.Status.STOPPING
-                    ? "ABORT" : "CANCEL_PREPARE");
+            boolean needsAbort = g.startSent || ctx.startSent
+                    || g.status == RunGenerator.Status.RUNNING || g.status == RunGenerator.Status.STOPPING;
+            sendQuietly(g.genId, ctx.runId, needsAbort ? "ABORT" : "CANCEL_PREPARE");
             if (!g.status.isDone()) {
-                g.status = g.status == RunGenerator.Status.FAILED ? g.status : RunGenerator.Status.FAILED;
+                g.status = RunGenerator.Status.FAILED;
                 runService.updateGenerator(g.rgId, x -> {
                     if (!x.getStatus().isDone()) {
                         x.setStatus(RunGenerator.Status.FAILED);
@@ -714,6 +743,7 @@ public class RunOrchestrator implements AgentEventListener {
                 });
             }
         }
+        ctx.status = RunStatus.FAILED;
         ctx.finalized = true;
         cancel(ctx.prepareTimeout);
         cancel(ctx.startTimer);
@@ -755,17 +785,24 @@ public class RunOrchestrator implements AgentEventListener {
     public void stop(Long runId, String reason) {
         Ctx ctx = contexts.get(runId);
         if (ctx == null) {
-            // run в очереди: просто отменяем
-            Run run = runService.get(runId);
-            if (run.getStatus() == RunStatus.QUEUED) {
-                runService.update(runId, r -> {
+            // run в очереди: отменяем только если внутри транзакции он по-прежнему QUEUED (иначе он успел занять генераторы)
+            var cancelledQueued = new java.util.concurrent.atomic.AtomicBoolean();
+            Run after = runService.update(runId, r -> {
+                if (r.getStatus() == RunStatus.QUEUED) {
                     r.setStopReason(reason);
                     r.transitionTo(RunStatus.ABORTED);
-                });
+                    cancelledQueued.set(true);
+                }
+            });
+            if (cancelledQueued.get()) {
                 publisher.publishEvent(new RunFinished(runId, RunStatus.ABORTED));
                 return;
             }
-            throw new IllegalStateException("Run " + runId + " не выполняется (статус " + run.getStatus() + ")");
+            // run успел перейти в PREPARING за время проверки — перепроверяем contexts
+            ctx = contexts.get(runId);
+            if (ctx == null) {
+                throw new IllegalStateException("Run " + runId + " не выполняется (статус " + after.getStatus() + ")");
+            }
         }
         synchronized (ctx) {
             if (ctx.finalized || ctx.stopRequested) {
@@ -787,6 +824,7 @@ public class RunOrchestrator implements AgentEventListener {
                     r.setStopReason(reason);
                     r.transitionTo(RunStatus.ABORTED);
                 });
+                ctx.status = RunStatus.ABORTED;
                 ctx.finalized = true;
                 cancel(ctx.prepareTimeout);
                 reservation.release(ctx.gens.values().stream().map(g -> g.genId).toList());
@@ -803,6 +841,7 @@ public class RunOrchestrator implements AgentEventListener {
                     r.transitionTo(RunStatus.STOPPING);
                 }
             });
+            ctx.status = RunStatus.STOPPING;
             for (GenCtx g : ctx.gens.values()) {
                 if (!g.status.isDone()) {
                     sendQuietly(g.genId, runId, "STOP");
@@ -902,25 +941,37 @@ public class RunOrchestrator implements AgentEventListener {
         if (ctx == null) {
             throw new IllegalStateException("Run не выполняется");
         }
-        if (!ctx.externallyControlled) {
-            throw new IllegalStateException("k6 поддерживает pause/resume и смену VU только для executor externally-controlled "
-                    + "(в экспертном режиме); для arrival-rate и ramping-vus - нет");
-        }
-        for (GenCtx g : ctx.gens.values()) {
-            if (g.status != RunGenerator.Status.RUNNING) {
-                continue;
+        synchronized (ctx) {
+            if (ctx.finalized) {
+                throw new IllegalStateException("Run уже завершён");
             }
-            String cmdId = UUID.randomUUID().toString();
-            pendingCmds.put(cmdId, new CmdRef(runId, g.genId, action));
-            Message cmd = switch (action) {
-                case "PAUSE" -> new Messages.Pause(cmdId, String.valueOf(runId));
-                case "RESUME" -> new Messages.Resume(cmdId, String.valueOf(runId));
-                case "SCALE_VUS" -> new Messages.ScaleVus(cmdId, String.valueOf(runId), vus == null ? 1 : vus);
-                default -> throw new IllegalArgumentException("Неизвестное действие " + action);
-            };
-            registry.get(g.genId).orElseThrow(() -> new IllegalStateException("Генератор не подключён")).send(cmd);
+            if (!ctx.externallyControlled) {
+                throw new IllegalStateException("k6 поддерживает pause/resume и смену VU только для executor externally-controlled "
+                        + "(в экспертном режиме); для arrival-rate и ramping-vus - нет");
+            }
+            for (GenCtx g : ctx.gens.values()) {
+                if (g.status != RunGenerator.Status.RUNNING) {
+                    continue;
+                }
+                String cmdId = UUID.randomUUID().toString();
+                Message cmd = switch (action) {
+                    case "PAUSE" -> new Messages.Pause(cmdId, String.valueOf(runId));
+                    case "RESUME" -> new Messages.Resume(cmdId, String.valueOf(runId));
+                    case "SCALE_VUS" -> new Messages.ScaleVus(cmdId, String.valueOf(runId), vus == null ? 1 : vus);
+                    default -> throw new IllegalArgumentException("Неизвестное действие " + action);
+                };
+                AgentSession session = registry.get(g.genId)
+                        .orElseThrow(() -> new IllegalStateException("Генератор не подключён"));
+                pendingCmds.put(cmdId, new CmdRef(runId, g.genId, action));
+                try {
+                    session.send(cmd);
+                } catch (RuntimeException e) {
+                    pendingCmds.remove(cmdId);
+                    throw e;
+                }
+            }
+            logs.addSystem(runId, "INFO", "Команда " + action + (vus != null ? " " + vus : "") + " отправлена");
         }
-        logs.addSystem(runId, "INFO", "Команда " + action + (vus != null ? " " + vus : "") + " отправлена");
     }
 
     private void sendQuietly(long generatorId, long runId, String kind) {
@@ -1116,11 +1167,7 @@ public class RunOrchestrator implements AgentEventListener {
                 n.setReliable(s.isReliable());
                 shifted.add(n);
             }
-            runService.update(runId, r -> {
-                r.setPlannedStartAt(newStart);
-                r.setInitSec((int) delta);
-            });
-            runService.saveSteps(runId, shifted);
+            runService.updatePlannedStartAndSteps(runId, newStart, (int) delta, shifted);
             ctx.plannedStart = newStart;
             ctx.anchored = true;
             logs.addSystem(runId, "INFO", "Инициализация скрипта k6 заняла " + delta + " с: шкала запуска сдвинута на реальное начало нагрузки");
@@ -1163,32 +1210,44 @@ public class RunOrchestrator implements AgentEventListener {
                 return null;
             }
             Ctx ctx = newCtx(run, runService.snapshot(run));
+            Instant recoveredAt = Instant.now();
             for (RunGenerator rg : runService.generatorsOf(runId)) {
                 if (rg.getGeneratorId() != null) {
                     GenCtx g = genCtx(rg);
-                    g.offline = !registry.isConnected(rg.getGeneratorId());
-                    g.offlineSince = g.offline ? Instant.now() : null;
+                    g.offline = !g.status.isDone() && !registry.isConnected(rg.getGeneratorId());
+                    g.offlineSince = g.offline ? recoveredAt : null;
+                    if (g.offline) {
+                        // фиксируем открытый offline-интервал в БД, чтобы StepResultService.reliable() видел простой после рестарта
+                        runService.updateGenerator(g.rgId, x -> {
+                            List<RunGenerator.Interval> l = new ArrayList<>(x.getOfflineIntervals());
+                            boolean hasOpen = l.stream().anyMatch(iv -> iv.to() == null);
+                            if (!hasOpen) {
+                                l.add(new RunGenerator.Interval(recoveredAt, null));
+                                x.setOfflineIntervals(l);
+                            }
+                        });
+                    }
                     ctx.gens.put(rg.getGeneratorId(), g);
                 }
             }
-            contexts.put(runId, ctx);
-            if (run.getStatus() == RunStatus.PREPARING && !ctx.startSent) {
-                // подготовка была прервана рестартом: безопаснее провалить, чем гадать
-                ctx.prepareTimeout = scheduler.schedule(() -> onPrepareTimeout(runId), 60, TimeUnit.SECONDS);
-            } else if (run.getStatus() == RunStatus.PREPARING && run.getPlannedStartAt() != null) {
-                ctx.startTimer = scheduler.schedule(() -> onStartTime(runId), Math.max(0, Duration.between(Instant.now(), run.getPlannedStartAt()).toMillis()), TimeUnit.MILLISECONDS);
-            } else if (run.getStatus() == RunStatus.STOPPING) {
-                ctx.stopRequested = true;
-                ctx.stopRequestedAt = Instant.now();
-                for (GenCtx g : ctx.gens.values()) {
-                    if (!g.status.isDone() && !g.offline) {
-                        sendQuietly(g.genId, runId, "STOP");
-                    }
-                }
-                ctx.escalation = scheduler.schedule(() -> escalate(runId), ctx.gracefulStopSec + 60L, TimeUnit.SECONDS);
-            }
-            // сверка с агентами, которые успели переподключиться до recoverAll()
             synchronized (ctx) {
+                contexts.put(runId, ctx);
+                if (run.getStatus() == RunStatus.PREPARING && !ctx.startSent) {
+                    // подготовка была прервана рестартом: безопаснее провалить, чем гадать
+                    ctx.prepareTimeout = scheduler.schedule(() -> onPrepareTimeout(runId), 60, TimeUnit.SECONDS);
+                } else if (run.getStatus() == RunStatus.PREPARING && run.getPlannedStartAt() != null) {
+                    ctx.startTimer = scheduler.schedule(() -> onStartTime(runId), Math.max(0, Duration.between(Instant.now(), run.getPlannedStartAt()).toMillis()), TimeUnit.MILLISECONDS);
+                } else if (run.getStatus() == RunStatus.STOPPING) {
+                    ctx.stopRequested = true;
+                    ctx.stopRequestedAt = Instant.now();
+                    for (GenCtx g : ctx.gens.values()) {
+                        if (!g.status.isDone() && !g.offline) {
+                            sendQuietly(g.genId, runId, "STOP");
+                        }
+                    }
+                    ctx.escalation = scheduler.schedule(() -> escalate(runId), ctx.gracefulStopSec + 60L, TimeUnit.SECONDS);
+                }
+                // сверка с агентами, которые успели переподключиться до recoverAll()
                 if (!ctx.finalized) {
                     boolean changed = false;
                     for (GenCtx g : ctx.gens.values()) {
@@ -1240,6 +1299,10 @@ public class RunOrchestrator implements AgentEventListener {
     // ================================================================== вспомогательное
 
     private String runStatusName(Ctx ctx) {
+        RunStatus st = ctx.status;
+        if (st != null) {
+            return st.name();
+        }
         try {
             return runService.get(ctx.runId).getStatus().name();
         } catch (RuntimeException e) {
@@ -1265,11 +1328,13 @@ public class RunOrchestrator implements AgentEventListener {
         if (ctx == null) {
             return List.of();
         }
-        List<LiveGen> out = new ArrayList<>();
-        for (GenCtx g : ctx.gens.values()) {
-            out.add(new LiveGen(g.genId, g.name, g.status.name(), g.vus, g.vusMax, g.iterations, g.dropped, g.k6Status, g.offline));
+        synchronized (ctx) {
+            List<LiveGen> out = new ArrayList<>();
+            for (GenCtx g : ctx.gens.values()) {
+                out.add(new LiveGen(g.genId, g.name, g.status.name(), g.vus, g.vusMax, g.iterations, g.dropped, g.k6Status, g.offline));
+            }
+            return out;
         }
-        return out;
     }
 
     public boolean isActive(long runId) {

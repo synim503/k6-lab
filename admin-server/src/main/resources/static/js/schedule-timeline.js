@@ -2,44 +2,14 @@
 // Используется на форме планирования (interactive: выбор времени кликом/перетаскиванием и проверка «хватит ли свободных») и на странице расписания (только просмотр).
 // Разметка: .tl-root[data-url, data-run-url, data-schedule-url] с .tl-body, .tl-note, .tl-detail, .tl-range, .tl-next.
 (function () {
-    var CSS = ''
-        + '.tl { --tl-lbl-w: clamp(115px, 26vw, 220px); border: 1px solid var(--k6-border, var(--bs-border-color)); border-radius: 10px; padding: .25rem; font-size: .8rem; user-select: none; background: var(--k6-surface, #fff); }'
-        + '.tl-body { position: relative; max-height: 560px; overflow-y: auto; }'
-        + '.tl-body.pick { cursor: crosshair; touch-action: none; }'
-        + '.tl-axis, .tl-row { display: flex; align-items: stretch; height: 26px; }'
-        + '.tl-axis { position: sticky; top: 0; z-index: 3; background: var(--k6-surface, #fff); }'
-        + '.tl-lbl { width: var(--tl-lbl-w); flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 8px 0 4px; color: var(--k6-muted, var(--bs-secondary-color)); }'
-        + '.tl-trk { position: relative; flex: 1; min-width: 0; }'
-        + '.tl-row .tl-trk { background: var(--k6-surface-subtle, var(--bs-tertiary-bg)); border-bottom: 2px solid var(--k6-surface, #fff); }'
-        + '.tl-row.off .tl-trk { background: repeating-linear-gradient(45deg, #f1f3f9, #f1f3f9 6px, #e5e8f2 6px, #e5e8f2 12px); }'
-        + '.tl-row.off .tl-lbl { opacity: .6; }'
-        + '.tl-row.pool .tl-lbl { color: #b45309; font-weight: 600; }'
-        + '.tl-tick { position: absolute; top: 4px; transform: translateX(-50%); font-size: .72rem; color: var(--k6-muted, var(--bs-secondary-color)); white-space: nowrap; }'
-        + '.tl-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--k6-border, var(--bs-border-color)); opacity: .7; }'
-        + '.tl-now { position: absolute; top: 0; bottom: 0; width: 2px; background: #dc2626; opacity: .85; z-index: 1; }'
-        + '.tl-bar { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; color: #fff; padding: 0 5px; overflow: hidden; white-space: nowrap;'
-        + '  text-overflow: ellipsis; line-height: 20px; font-size: .74rem; font-weight: 500; cursor: pointer; z-index: 1; }'
-        + '.tl-bar.sel-bar { outline: 2px solid var(--k6-text, #1f2937); }'
-        + '.tl-bar.run, .tl-key.run { background: var(--k6-primary, #4f46e5); }'
-        + '.tl-bar.scheduled, .tl-key.scheduled { background: repeating-linear-gradient(45deg, #c2410c, #c2410c 6px, #9a3412 6px, #9a3412 12px); }'
-        + '.tl-ov { position: absolute; left: var(--tl-lbl-w); right: 0; top: 26px; pointer-events: none; z-index: 2; }'
-        + '.tl-sel { position: absolute; top: 0; bottom: 0; border: 2px solid; border-radius: 4px; }'
-        + '.tl-sel.ok { background: rgba(22, 163, 74, .18); border-color: #16a34a; }'
-        + '.tl-sel.bad { background: rgba(220, 38, 38, .18); border-color: #dc2626; }'
-        + '.tl-key { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }'
-        + '.tl-key.off { background: repeating-linear-gradient(45deg, #f1f3f9, #f1f3f9 3px, #e5e8f2 3px, #e5e8f2 6px); border: 1px solid var(--k6-border, #d9dce8); }'
-        + '.tl-key.sel { background: rgba(22, 163, 74, .25); border: 2px solid #16a34a; }'
-        + '.tl-key.now { background: #dc2626; width: 3px; }'
-        + '.tl-detail { font-size: .85rem; }'
-        + '.tl-detail dl { display: grid; grid-template-columns: minmax(110px, 150px) 1fr; gap: .15rem .75rem; margin: 0; }'
-        + '.tl-detail dt { color: var(--k6-muted, var(--bs-secondary-color)); font-weight: 500; }'
-        + '.tl-detail dd { margin: 0; word-break: break-word; }';
-
     function pad(n) { return n < 10 ? '0' + n : '' + n; }
     function hm(ms) { var d = new Date(ms); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
     function dm(ms) { var d = new Date(ms); return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + ' ' + hm(ms); }
     function localVal(ms) { var d = new Date(ms); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + hm(ms); }
-    function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function esc(s) {
+        return window.K6 && window.K6.escapeHtml ? window.K6.escapeHtml(s)
+            : String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
     function minutes(sec) { return Math.round(sec / 60); }
 
     function init(root, opts) {
@@ -99,7 +69,7 @@
                 + ' <b>' + esc(b.script) + '</b>';
             row('Профиль нагрузки', b.profile ? esc(b.profile) : 'нагрузка скрипта');
             row(b.kind === 'run' ? 'Идёт' : 'Старт', dm(b.from) + ' — ' + dm(b.to) + ' (занимает генераторы, ~' + minutes((b.to - b.from) / 1000) + ' мин с запасом)');
-            row('Статус', b.status === 'STARTING' ? 'запускается' : b.status === 'PENDING' ? 'ожидает назначенного времени' : b.status);
+            row('Статус', b.status === 'STARTING' ? 'запускается' : b.status === 'PENDING' ? 'ожидает назначенного времени' : esc(b.status));
             row('Генераторов', b.genCount ? b.genCount + (b.genNames ? ': ' + esc(b.genNames) : ' (любые свободные на момент старта)') : '');
             row('Интенсивность', b.intensity ? esc(b.intensity) : '');
             row('Переменные', b.env ? esc(b.env) : '');
@@ -192,7 +162,7 @@
                     + esc(g.name) + '</div><div class="tl-trk">' + lines + nowLine + bars + '</div></div>';
             });
             if (!data.generators.length) { html += '<div class="text-muted small p-2">Серверов нет.</div>'; }
-            html += '<div class="tl-ov" id="tl-ov" style="height:' + (rows * ROW) + 'px"></div>';
+            html += '<div class="tl-ov" style="height:' + (rows * ROW) + 'px"></div>';
             var st = body.scrollTop;
             body.innerHTML = html;
             body.scrollTop = st;
@@ -304,18 +274,32 @@
             });
         }
 
+        var loadCtrl = null, loadSeq = 0, pollId = null;
         function load() {
+            if (!root.isConnected) {
+                if (pollId) { clearInterval(pollId); pollId = null; }
+                return;
+            }
+            if (loadCtrl) { try { loadCtrl.abort(); } catch (_) {} }
+            loadCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            var mySeq = ++loadSeq;
             var q = [];
             if (prof && prof.value) { q.push('profile=' + encodeURIComponent(prof.value)); }
             if (cnt && cnt.value) { q.push('count=' + encodeURIComponent(cnt.value)); }
-            fetch(root.dataset.url + (q.length ? '?' + q.join('&') : ''), {credentials: 'same-origin'})
+            fetch(root.dataset.url + (q.length ? '?' + q.join('&') : ''), {
+                credentials: 'same-origin',
+                signal: loadCtrl ? loadCtrl.signal : undefined
+            })
                 .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
                 .then(function (d) {
+                    if (mySeq !== loadSeq || !root.isConnected) { return; }
                     data = d;
                     w0 = Math.floor(d.nowMs / 60000) * 60000 - (opts.past || 0);
                     render();
                 })
-                .catch(function () {
+                .catch(function (err) {
+                    if (err && err.name === 'AbortError') { return; }
+                    if (mySeq !== loadSeq || !root.isConnected) { return; }
                     note.className = 'tl-note small mt-1 text-danger';
                     note.textContent = 'Не удалось загрузить занятость генераторов.';
                 });
@@ -331,17 +315,22 @@
             });
         }
         load();
-        setInterval(load, 30000);
+        pollId = setInterval(function () {
+            if (document.hidden) { return; }
+            load();
+        }, 30000);
+        var onReload = function () {
+            if (root.isConnected) { load(); }
+        };
+        document.addEventListener('k6:timeline-reload', onReload);
+        window.addEventListener('beforeunload', function () {
+            if (pollId) { clearInterval(pollId); pollId = null; }
+            if (loadCtrl) { try { loadCtrl.abort(); } catch (_) {} }
+        });
     }
 
     window.K6Timeline = {
         init: function (root, opts) {
-            if (!document.getElementById('tl-css')) {
-                var st = document.createElement('style');
-                st.id = 'tl-css';
-                st.textContent = CSS;
-                document.head.appendChild(st);
-            }
             init(root, opts);
         }
     };

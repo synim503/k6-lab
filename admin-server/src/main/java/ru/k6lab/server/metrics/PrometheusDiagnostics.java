@@ -122,6 +122,7 @@ public class PrometheusDiagnostics implements AgentEventListener {
                 return new Result(n.path("ok").asBoolean(), Instant.parse(n.path("at").asText()), n.path("fingerprint").asText(),
                         n.path("generator").asText(), steps, n.path("summary").asText());
             } catch (Exception e) {
+                log.warn("Не удалось разобрать сохранённый результат диагностики Prometheus: {}", e.toString());
                 return null;
             }
         });
@@ -237,7 +238,6 @@ public class PrometheusDiagnostics implements AgentEventListener {
 
     private void runSmoke(List<Step> steps, AgentSession session, String runId, Pending pend, SettingsService.Prometheus p,
                           String target) throws Exception {
-        String url = props.getPublicUrl().replaceAll("/+$", "");
         // тот же хост:порт, что и у WebSocket агента, - гарантированно доступен с генератора
         java.net.URI ws = java.net.URI.create(generators.findById(pend.generatorId).orElseThrow().getServerUrl());
         String scheme = "wss".equals(ws.getScheme()) ? "https" : "http";
@@ -258,11 +258,16 @@ public class PrometheusDiagnostics implements AgentEventListener {
         Map<String, String> env = Map.of("TARGET", target);
         Messages.PrometheusParams promParams = new Messages.PrometheusParams(p.rwUrl(), p.authHeaders(), "2s", true, settings.classicHistograms());
         String cmdId = UUID.randomUUID().toString();
+        // Используем отдельный порт диагностики (6665), чтобы не конфликтовать с активными тестами (6565+)
         session.send(new Messages.Prepare(cmdId, runId, artifactUrl, pend.sha, cfg, env, Map.of(), "0:1", null, tags, List.of(),
-                promParams, 6565, ConfigInput.SYSTEM_TAGS, "script.js", 50));
+                promParams, 6665, ConfigInput.SYSTEM_TAGS, "script.js", 50));
         try {
             pend.prepared.get(45, TimeUnit.SECONDS);
         } catch (java.util.concurrent.TimeoutException e) {
+            try {
+                session.send(new Messages.CancelPrepare(UUID.randomUUID().toString(), runId));
+            } catch (RuntimeException ignored) {
+            }
             step(steps, "Подготовка на генераторе", false, "Генератор не подтвердил PREPARE за 45 с");
             return;
         } catch (java.util.concurrent.ExecutionException e) {
@@ -282,9 +287,6 @@ public class PrometheusDiagnostics implements AgentEventListener {
         } catch (java.util.concurrent.TimeoutException e) {
             session.send(new Messages.Abort(UUID.randomUUID().toString(), runId));
             step(steps, "Smoke-тест k6", false, "k6 не завершился вовремя" + tail(pend));
-        }
-        if (url.isEmpty()) {
-            log.debug("publicUrl не задан");
         }
     }
 

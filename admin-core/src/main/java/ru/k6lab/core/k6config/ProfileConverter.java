@@ -9,9 +9,6 @@ import java.util.Map;
  */
 public final class ProfileConverter {
 
-    /** Интервалы, в которых целое rate даёт интенсивность с ошибкой не более 1% (как у k6: rate - целое за timeUnit). */
-    private static final int[] UNITS_SEC = {1, 2, 5, 10, 30, 60, 120, 300, 600, 3600};
-
     private ProfileConverter() {
     }
 
@@ -22,16 +19,15 @@ public final class ProfileConverter {
     public static Converted toConstantArrivalRate(double ratePerSec, double levelPct, int holdSec, double expectedDurationSec,
                                                   Map<String, Object> extras) {
         double r = Math.max(0, ratePerSec) * Math.max(0, levelPct) / 100.0;
-        int unit = UNITS_SEC[UNITS_SEC.length - 1];
-        long rate = Math.max(1, Math.round(r * unit));
-        for (int u : UNITS_SEC) {
-            double v = r * u;
-            long rounded = Math.round(v);
-            if (rounded >= 1 && Math.abs(v - rounded) <= 0.01 * v) {
-                unit = u;
-                rate = rounded;
-                break;
-            }
+        int unit;
+        long rate;
+        if (r <= 0) {
+            unit = 1;
+            rate = 0;
+        } else {
+            TimeUnitSelector.Selection sel = TimeUnitSelector.select(new double[]{r});
+            unit = sel.unitSec();
+            rate = Math.max(1, sel.targets()[0]);
         }
         long pre = Math.max(1, (long) Math.ceil(r * Math.max(0.001, expectedDurationSec) * 1.5 - 1e-9));
         Map<String, Object> sc = new LinkedHashMap<>();
@@ -42,6 +38,10 @@ public final class ProfileConverter {
         sc.put("maxVUs", pre * 3);
         if (extras != null) {
             sc.putAll(extras); // свои значения (VU, startTime, env, теги) важнее расчётных
+        }
+        if (sc.get("preAllocatedVUs") instanceof Number pr && sc.get("maxVUs") instanceof Number mx
+                && mx.longValue() < pr.longValue()) {
+            sc.put("maxVUs", pr.longValue());
         }
         return new Converted(sc, (double) rate / unit);
     }

@@ -14,7 +14,7 @@ public final class ProtocolCodec {
     }
 
     public static ObjectMapper mapper() {
-        return MAPPER;
+        return MAPPER.copy();
     }
 
     public static String encode(Message message) {

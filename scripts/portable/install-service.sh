@@ -21,7 +21,7 @@ Wants=network-online.target
 [Service]
 User=$USER_NAME
 WorkingDirectory=$DIR
-ExecStart=$JAVA -Xmx1g -jar $DIR/k6-lab-admin.jar
+ExecStart="$JAVA" -Xmx1g -jar "$DIR/k6-lab-admin.jar"
 Restart=always
 RestartSec=5
 SuccessExitStatus=143

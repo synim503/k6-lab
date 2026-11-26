@@ -43,13 +43,16 @@ public class RunMonitor {
     /** Задержка после разгона: первые секунды удержания не оцениваются (система выходит на режим). */
     public static final int SETTLE_SEC = 20;
     public static final int MIN_WINDOW_SEC = 15;
+    /** Интервал проверок автостопа и пересчёта сводных метрик за весь тест по реальному времени (секунд). */
+    public static final long STOP_CHECK_INTERVAL_SEC = ru.k6lab.server.result.StepResultService.CHECK_INTERVAL_SEC;
     /** Задержка метрик, если измерить её не удалось (данных ещё нет): интервал отправки k6 + приём Prometheus. */
     static final long DEFAULT_LAG_SEC = 15;
     static final long MAX_LAG_SEC = 120;
 
     static final class State {
         StopCriteriaEvaluator evaluator;
-        int tick;
+        Instant lastStopCheckAt;
+        Instant lastWholeAt;
         int lastStep = -1;
         /** Строки таблицы за весь тест: пересчитываются реже live-строк (запросы по длинному диапазону дороже). */
         List<LiveRow> wholeRows;
@@ -60,6 +63,10 @@ public class RunMonitor {
         String pendingStopReason;
         Instant pendingStopAt;
         boolean stopDispatched;
+    }
+
+    static boolean intervalElapsed(Instant last, Instant now, long intervalSec) {
+        return last == null || now.isBefore(last) || java.time.Duration.between(last, now).getSeconds() >= intervalSec;
     }
 
     /** Строка live-таблицы по операции. */
@@ -108,8 +115,10 @@ public class RunMonitor {
             MDC.put("run_id", String.valueOf(run.getId()));
             try {
                 monitor(run, p);
-            } catch (IOException | RuntimeException e) {
+            } catch (IOException e) {
                 log.debug("Live-метрики run {}: {}", run.getId(), e.toString());
+            } catch (RuntimeException e) {
+                log.warn("Ошибка live-мониторинга run {}", run.getId(), e);
             } finally {
                 MDC.remove("run_id");
             }
@@ -129,6 +138,12 @@ public class RunMonitor {
             }
             long since = Math.max(0, wall.getEpochSecond() - run.getPlannedStartAt().getEpochSecond());
             boolean loadSeen = orchestrator.liveGenerators(run.getId()).stream().anyMatch(l -> l.vus() > 0 || l.iterations() > 0);
+            if (since >= 60 && loadSeen) {
+                // Цель могла зависнуть (VU работают, но ни одна итерация не завершилась): привязываемся к plannedStartAt,
+                // чтобы не ослепить live-мониторинг и автостоп
+                orchestrator.reanchor(run.getId(), run.getPlannedStartAt());
+                return;
+            }
             if (since >= 15 && !loadSeen) {
                 ObjectNode init = MAPPER.createObjectNode();
                 init.put("ts", wall.toEpochMilli());
@@ -162,8 +177,13 @@ public class RunMonitor {
         }
         int stepNo = current == null ? 0 : current.getStepNo();
         if (stepNo != st.lastStep) {
+            boolean resetNeeded = st.lastStep <= 0 || stepNo <= 0;
             st.lastStep = stepNo;
-            st.evaluator.reset(); // новая ступень - счётчики нарушений начинаем заново
+            // Между активными ступенями (например, 3 -> 4 в поиске максимума) серию нарушений не сбрасываем:
+            // если деградация началась в конце ступени N и продолжилась на N+1, счётчик consecutive должен дойти до срабатывания.
+            if (resetNeeded) {
+                st.evaluator.reset();
+            }
         }
 
         // сверку с целью делаем, только когда окно целиком лежит после стабилизации ступени (как и в итогах по ступеням):
@@ -175,11 +195,12 @@ public class RunMonitor {
         Instant wholeFrom = !steps.isEmpty() && !now.isBefore(steps.get(0).getHoldStartAt())
                 ? steps.get(0).getHoldStartAt() : run.getPlannedStartAt();
         long whole = Math.max(0, now.getEpochSecond() - wholeFrom.getEpochSecond());
-        if (whole >= minWindow && (st.wholeRows == null || st.tick % 3 == 0)) {
+        if (whole >= minWindow && (st.wholeRows == null || intervalElapsed(st.lastWholeAt, wall, STOP_CHECK_INTERVAL_SEC))) {
             try {
                 st.wholeRows = liveRows(snap, current, hold ? current.getLevelPct() : null, run.getId(), whole, now, p,
                         run.getK6Config(), run.getPlannedStartAt(), true);
                 st.wholeSec = whole;
+                st.lastWholeAt = wall;
             } catch (IOException | RuntimeException e) {
                 log.debug("Run {}: показатели за весь тест: {}", run.getId(), e.toString());
             }
@@ -191,7 +212,7 @@ public class RunMonitor {
         json.put("step", stepNo);
         // полоса «Прогрев» на графиках - ровно до конца прогрева по плану. Нарушения не отмечаются ещё одно окно расчёта после него
         // (inWarmup): в скользящее окно пока попадают данные прогрева, но на выделение это не влияет
-        json.put("phase", current == null ? "" : hold ? "hold" : snap.warmup() != null ? "warmup" : "ramp");
+        json.put("phase", current == null ? "" : hold ? "hold" : (snap.warmup() != null && current.getStepNo() == 1) ? "warmup" : "ramp");
         // системные метрики: VU задействованные и максимум по всем генераторам (вкладка «Системные метрики»)
         PromQueries.Names n0 = names.names();
         putD(json, "vus", scalar(prom.query(p, PromQueries.totalVus(n0, run.getId()), now)));
@@ -204,8 +225,10 @@ public class RunMonitor {
             putRows(json.putArray("rowsAll"), st.wholeRows);
         }
         boolean warm = inWarmup(snap, current, now);
+        long stopWindow = Math.max(15L, st.evaluator.config().windowSec());
+        long customWindow = Math.max(15L, Math.min(stopWindow, hold ? Math.max(15L, intoHold) : Math.max(15L, elapsed)));
         List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval =
-                evaluateAndPutCustomChecks(json, run, snap, now.minusSeconds(window), now, window, warm, p);
+                evaluateAndPutCustomChecks(json, run, snap, now.minusSeconds(customWindow), now, customWindow, warm, p);
         evaluateStop(run, snap, st, steps, current, hold, intoHold, minWindow, window, rows, customEval, now, wall, p, stepNo);
         if (st.pendingStopAt != null && !st.stopDispatched) {
             ObjectNode pending = json.putObject("autoStopPending");
@@ -226,7 +249,7 @@ public class RunMonitor {
         }
         Map<String, String> vars = stepResults.varsForRun(run, snap);
         List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval =
-                stepResults.evaluateCustomChecks(customRules, run.getId(), winStart, winEnd, windowSec, vars, p);
+                stepResults.evaluateCustomChecksLive(customRules, run.getId(), winEnd, windowSec, vars, p);
         ArrayNode ca = json.putArray("customChecks");
         for (var cr : customEval) {
             ObjectNode co = ca.addObject();
@@ -274,7 +297,6 @@ public class RunMonitor {
                       long minWindow, long window, List<LiveRow> rows,
                       List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval,
                       Instant now, Instant wall, SettingsService.Prometheus p, int stepNo) throws IOException {
-        st.tick++;
         if (st.pendingStopAt != null) {
             if (!st.stopDispatched && run.getStatus() == RunStatus.RUNNING && !wall.isBefore(st.pendingStopAt)) {
                 String tail = st.pendingStopAfterStep > st.pendingStopTriggerStep
@@ -295,16 +317,26 @@ public class RunMonitor {
         }
         StopCriteriaEvaluator.Config cfg = st.evaluator.config();
         boolean hasCustomAutoStop = customEval != null && customEval.stream().anyMatch(cr -> cr.check().autoStop());
-        if ((cfg.anyEnabled() || hasCustomAutoStop) && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && run.getStatus() == RunStatus.RUNNING) {
-            long w = Math.max(minWindow, Math.min(cfg.windowSec(), intoHold - SETTLE_SEC));
-            List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p, run.getK6Config(), run.getPlannedStartAt(), false);
+        boolean warm = snap != null && inWarmup(snap, current, now);
+        boolean k6Ready = cfg.anyEnabled() && hold && intoHold - SETTLE_SEC >= minWindow;
+        boolean customReady = hasCustomAutoStop && hold && !warm && intoHold >= SETTLE_SEC;
+        if ((k6Ready || customReady)
+                && intervalElapsed(st.lastStopCheckAt, wall, STOP_CHECK_INTERVAL_SEC)
+                && run.getStatus() == RunStatus.RUNNING) {
+            st.lastStopCheckAt = wall;
             List<StopCriteriaEvaluator.Sample> samples = new ArrayList<>();
-            for (LiveRow r : evalRows) {
-                samples.add(new StopCriteriaEvaluator.Sample(r.operation(), r.percentileMs(), r.slaThresholdMs(), r.errorPct(),
-                        r.maxErrorPct(), r.actualRatePerSec(), r.targetRatePerSec(), r.dropped()));
+            long evalWindowSec = cfg.windowSec();
+            if (k6Ready) {
+                long w = Math.max(minWindow, Math.min(cfg.windowSec(), intoHold - SETTLE_SEC));
+                evalWindowSec = w;
+                List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p, run.getK6Config(), run.getPlannedStartAt(), false);
+                for (LiveRow r : evalRows) {
+                    samples.add(new StopCriteriaEvaluator.Sample(r.operation(), r.percentileMs(), r.slaThresholdMs(), r.errorPct(),
+                            r.maxErrorPct(), r.actualRatePerSec(), r.targetRatePerSec(), r.dropped()));
+                }
             }
             List<StopCriteriaEvaluator.CustomSample> customSamples = new ArrayList<>();
-            if (customEval != null) {
+            if (customReady && customEval != null) {
                 int idx = 0;
                 for (var cr : customEval) {
                     idx++;
@@ -315,7 +347,7 @@ public class RunMonitor {
                     }
                 }
             }
-            Optional<String> reason = st.evaluator.evaluate(samples, customSamples);
+            Optional<String> reason = st.evaluator.evaluate(samples, customSamples, evalWindowSec);
             if (reason.isPresent()) {
                 boolean isMaxSearch = steps != null && steps.size() >= 2;
                 if (isMaxSearch && cfg.extraStepOnMaxSearch() && current != null) {
@@ -396,7 +428,7 @@ public class RunMonitor {
      * полоса «Прогрев» заканчивалась раньше, чем менялась линия.
      */
     boolean inWarmup(RunSnapshot snap, RunStep step, Instant at) {
-        return snap.warmup() != null && step != null
+        return snap.warmup() != null && step != null && step.getStepNo() == 1
                 && at.isBefore(step.getHoldStartAt().plusSeconds(Math.max(60, minWindowSec())));
     }
 
@@ -432,8 +464,8 @@ public class RunMonitor {
         Map<String, Double> errHelper = helper ? byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HELPER, runId, windowSec), at)) : Map.of();
         Map<String, Double> errHttp = Map.of();
         Map<String, Double> errChecks = Map.of();
-        boolean anyHttp = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("HTTP"));
-        boolean anyChecks = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && o.failureSource().equals("CHECKS"));
+        boolean anyHttp = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && !"CHECKS".equals(o.failureSource()));
+        boolean anyChecks = !helper && snap.operations().stream().anyMatch(o -> o.enabled() && "CHECKS".equals(o.failureSource()));
         if (anyHttp) {
             errHttp = byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HTTP, runId, windowSec), at));
         }
@@ -441,9 +473,11 @@ public class RunMonitor {
             errChecks = byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.CHECKS, runId, windowSec), at));
         }
 
-        // прогрев: пока он идёт, цель - заданная интенсивность прогрева (оп/с), нарушения не отмечаем
-        boolean warm = !average && inWarmup(snap, step, at) || average && snap.warmup() != null && step != null && at.isBefore(step.getHoldStartAt());
+        // прогрев: пока он идёт (только ступень 1), цель - заданная интенсивность прогрева (оп/с), нарушения не отмечаем
+        boolean warm = !average && inWarmup(snap, step, at)
+                || average && snap.warmup() != null && step != null && step.getStepNo() == 1 && at.isBefore(step.getHoldStartAt());
         boolean warmNow = warm && at.isBefore(step.getHoldStartAt());
+        var criteria = LoadCriteria.success(snap.successCriteria());
         List<LiveRow> rows = new ArrayList<>();
         for (RunSnapshot.OpInfo o : snap.operations()) {
             if (!o.enabled()) {
@@ -466,7 +500,7 @@ public class RunMonitor {
             boolean steady = average || planned == null || (plannedBefore != null && Math.abs(planned - plannedBefore) <= 0.01 * Math.max(planned, plannedBefore));
             Double actual = rate.get(o.name());
             Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
-            Double err = (helper ? errHelper : o.failureSource().equals("CHECKS") ? errChecks : errHttp).get(o.name());
+            Double err = (helper ? errHelper : "CHECKS".equals(o.failureSource()) ? errChecks : errHttp).get(o.name());
             Double drop = dropped.get(o.name());
             List<String> reasons = new ArrayList<>();
             if (!warm) {
@@ -476,10 +510,10 @@ public class RunMonitor {
                 if (err != null && err > o.maxErrorPct()) {
                     reasons.add("ошибки > порога");
                 }
-                if (actual != null && target > 0 && levelOrNull != null && steady && actual < target * 0.95) {
-                    reasons.add("интенсивность < 95% цели");
+                if (actual != null && target > 0 && levelOrNull != null && steady && actual < target * criteria.minRatePct() / 100.0) {
+                    reasons.add(String.format(java.util.Locale.ROOT, "интенсивность < %.0f%% цели", criteria.minRatePct()));
                 }
-                if (drop != null && drop > 0) {
+                if (drop != null && drop > criteria.maxDropped()) {
                     reasons.add("dropped_iterations");
                 }
             }

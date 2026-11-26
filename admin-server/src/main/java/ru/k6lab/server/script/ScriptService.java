@@ -57,10 +57,12 @@ public class ScriptService {
     private final AuditService audit;
     private final GitClient git;
     private final GitRepoService gitRepos;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final org.springframework.transaction.support.TransactionTemplate tx;
 
     public ScriptService(ScriptRepository scripts, ScriptVersionRepository versions, StorageService storage, K6Tool k6,
                          AdminHelper helper, AuditService audit, GitClient git, GitRepoService gitRepos,
+                         org.springframework.jdbc.core.JdbcTemplate jdbc,
                          org.springframework.transaction.PlatformTransactionManager txm) {
         this.scripts = scripts;
         this.versions = versions;
@@ -70,6 +72,7 @@ public class ScriptService {
         this.audit = audit;
         this.git = git;
         this.gitRepos = gitRepos;
+        this.jdbc = jdbc;
         this.tx = new org.springframework.transaction.support.TransactionTemplate(txm);
     }
 
@@ -87,9 +90,8 @@ public class ScriptService {
         return versions.findByScriptIdOrderByNumberDesc(scriptId);
     }
 
-    /** Запоминает число генераторов последнего запуска как значение по умолчанию для формы запуска. */
-    @org.springframework.transaction.annotation.Transactional
     /** Переменные окружения скрипта (то, что подставляется в запуск): сохранение из режима отладки переносит их в нагрузку. */
+    @org.springframework.transaction.annotation.Transactional
     public void updateEnv(Long scriptId, java.util.Map<String, String> env) {
         Script script = get(scriptId);
         script.setEnv(env == null ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(env));
@@ -97,6 +99,8 @@ public class ScriptService {
         audit.record("script.env", "script", scriptId, java.util.Map.of("vars", script.getEnv().size()));
     }
 
+    /** Запоминает число генераторов последнего запуска как значение по умолчанию для формы запуска. */
+    @org.springframework.transaction.annotation.Transactional
     public void rememberGeneratorCount(Long scriptId, int count) {
         Script script = get(scriptId);
         if (script.getGeneratorCount() != count && count >= 1 && count <= 200) {
@@ -323,6 +327,12 @@ public class ScriptService {
     }
 
     public void delete(Long scriptId) {
+        Integer active = jdbc.queryForObject(
+                "select count(*) from run where script_id = ? and status in ('QUEUED','PREPARING','RUNNING','STOPPING')",
+                Integer.class, scriptId);
+        if (active != null && active > 0) {
+            throw new IllegalStateException("Нельзя удалить скрипт: есть активные или ожидающие запуски (" + active + ")");
+        }
         List<ScriptVersion> vs = versions.findByScriptIdOrderByNumberDesc(scriptId);
         tx.executeWithoutResult(st -> scripts.deleteById(scriptId));
         for (ScriptVersion v : vs) {
@@ -498,7 +508,11 @@ public class ScriptService {
                 }
             }
         } catch (RuntimeException e) {
-            storage.delete(stored.key());
+            try {
+                storage.delete(stored.key());
+            } catch (IOException cleanupEx) {
+                log.warn("Не удалось удалить осиротевший архив {}: {}", stored.key(), cleanupEx.toString());
+            }
             throw e;
         }
     }

@@ -776,8 +776,7 @@ public class DeployEngine {
                         r.priv("rm -rf " + q(d + "/jre.new") + " && mkdir -p " + q(d + "/jre.new")
                                 + " && tar -xzf " + q(stg + "/jre.tar.gz") + " -C " + q(d + "/jre.new") + " --strip-components=1"
                                 + " && echo " + arts.jre().getSha256() + " > " + q(d + "/jre.new/.archive-sha256")
-                                + " && rm -rf " + q(d + "/jre") + " && mv " + q(d + "/jre.new") + " " + q(d + "/jre")
-                                + (target.system() ? " && chown -R " + Units.SYSTEM_USER + ":" + Units.SYSTEM_USER + " " + q(d + "/jre") : ""),
+                                + (target.system() ? " && chown -R " + Units.SYSTEM_USER + ":" + Units.SYSTEM_USER + " " + q(d + "/jre.new") : ""),
                                 MEDIUM);
                         changed[2] = true;
                     }
@@ -787,12 +786,19 @@ public class DeployEngine {
                 }
             });
 
-            Instant since = Instant.now().minusSeconds(1);
+            Instant[] since = new Instant[]{Instant.now()};
             boolean[] replaced = new boolean[1];
             try {
                 run.stage("Остановка, замена файлов, запуск", () -> {
                     stopService(r, target);
+                    // фиксируем границу регистрации ПОСЛЕ остановки, чтобы не принять старую сессию за новую
+                    since[0] = Instant.now();
                     replaced[0] = true;
+                    if (changed[2]) {
+                        r.priv("rm -rf " + q(d + "/jre.bak")
+                                + " && ([ ! -d " + q(d + "/jre") + " ] || mv " + q(d + "/jre") + " " + q(d + "/jre.bak") + ")"
+                                + " && mv " + q(d + "/jre.new") + " " + q(d + "/jre"), MEDIUM);
+                    }
                     if (changed[0]) {
                         r.priv("cp -a " + q(d + "/" + agentFile) + " " + q(d + "/" + agentFile + ".bak") + " 2>/dev/null; "
                                 + "install -m " + agentMode + " " + own + q(stg + "/" + agentFile) + " " + q(d + "/" + agentFile), SHORT);
@@ -807,12 +813,20 @@ public class DeployEngine {
                         startOnly(r, target);
                     }
                 });
-                run.stage("Ожидание переподключения агента", () -> awaitRegistration(r, target, since));
+                run.stage("Ожидание переподключения агента", () -> awaitRegistration(r, target, since[0]));
+                if (switchedType) {
+                    // После успешного перехода удаляем устаревший бинарь другого типа, чтобы последующие update не считали его активным
+                    String oldFile = r.nativeAgent ? "agent.jar" : "k6-agent";
+                    r.trySudo("rm -f " + q(d + "/" + oldFile) + " " + q(d + "/" + oldFile + ".bak"), SHORT);
+                }
             } catch (Exception e) {
                 if (replaced[0]) {
                     log.line("⟲ Откат: возвращаем предыдущие файлы");
                     try {
                         stopService(r, target);
+                        if (changed[2]) {
+                            r.trySudo("[ -d " + q(d + "/jre.bak") + " ] && rm -rf " + q(d + "/jre") + " && mv " + q(d + "/jre.bak") + " " + q(d + "/jre"), MEDIUM);
+                        }
                         if (changed[0]) {
                             r.trySudo("[ -f " + q(d + "/" + agentFile + ".bak") + " ] && cp -a " + q(d + "/" + agentFile + ".bak") + " " + q(d + "/" + agentFile), SHORT);
                         }

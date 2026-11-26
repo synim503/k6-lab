@@ -34,6 +34,8 @@ public class RunLogService {
     private static final Logger log = LoggerFactory.getLogger(RunLogService.class);
     private static final Pattern LEVEL = Pattern.compile("level=(debug|info|warn|warning|error|fatal)", Pattern.CASE_INSENSITIVE);
     private static final DateTimeFormatter PART = DateTimeFormatter.ofPattern("yyyyMMdd");
+    /** Верхняя граница буфера логов в памяти для защиты от OOM при сбое БД. */
+    private static final int MAX_QUEUED = 100_000;
 
     public record Row(long runId, Long generatorId, Instant ts, String level, String line) {
     }
@@ -41,7 +43,10 @@ public class RunLogService {
     private final JdbcTemplate jdbc;
     private final SettingsService settings;
     private final org.springframework.transaction.support.TransactionTemplate readOnlyTx;
+    private final org.springframework.transaction.support.TransactionTemplate writeTx;
     private final Queue<Row> queue = new ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.atomic.AtomicInteger queueSize = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicLong droppedOnOverflow = new java.util.concurrent.atomic.AtomicLong();
 
     public RunLogService(JdbcTemplate jdbc, SettingsService settings,
                          org.springframework.transaction.PlatformTransactionManager txm) {
@@ -49,6 +54,21 @@ public class RunLogService {
         this.settings = settings;
         this.readOnlyTx = new org.springframework.transaction.support.TransactionTemplate(txm);
         this.readOnlyTx.setReadOnly(true);
+        this.writeTx = new org.springframework.transaction.support.TransactionTemplate(txm);
+    }
+
+    private void enqueue(Row r) {
+        if (queueSize.get() >= MAX_QUEUED) {
+            if (queue.poll() != null) {
+                queueSize.decrementAndGet();
+            }
+            long dropped = droppedOnOverflow.incrementAndGet();
+            if (dropped == 1 || dropped % 5000 == 0) {
+                log.warn("Буфер run_log переполнен (>{}), отброшено {} старых строк", MAX_QUEUED, dropped);
+            }
+        }
+        queue.add(r);
+        queueSize.incrementAndGet();
     }
 
     /** Преобразует строки агента в записи лога (уровень определяется по k6-формату level=...). */
@@ -63,7 +83,7 @@ public class RunLogService {
             }
             String text = l.line() == null ? "" : l.line();
             Row r = new Row(runId, generatorId, Instant.ofEpochMilli(l.ts()), level(text), text);
-            queue.add(r);
+            enqueue(r);
             rows.add(r);
         }
         return rows;
@@ -71,7 +91,7 @@ public class RunLogService {
 
     public Row addSystem(long runId, String level, String line) {
         Row r = new Row(runId, null, Instant.now(), level, line);
-        queue.add(r);
+        enqueue(r);
         return r;
     }
 
@@ -93,11 +113,17 @@ public class RunLogService {
         return "INFO";
     }
 
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        flush();
+    }
+
     @Scheduled(fixedDelay = 1000)
     public void flush() {
         List<Row> batch = new ArrayList<>();
         Row r;
         while (batch.size() < 10_000 && (r = queue.poll()) != null) {
+            queueSize.decrementAndGet();
             batch.add(r);
         }
         if (batch.isEmpty()) {
@@ -117,7 +143,10 @@ public class RunLogService {
                         ps.setString(5, row.line().replace("\u0000", ""));
                     });
         } catch (RuntimeException e) {
-            log.warn("Не удалось записать {} строк лога: {}", batch.size(), e.toString());
+            log.warn("Не удалось записать {} строк лога (вернём в буфер для повтора): {}", batch.size(), e.toString());
+            for (Row row : batch) {
+                enqueue(row);
+            }
         }
     }
 
@@ -155,11 +184,17 @@ public class RunLogService {
 
     // ------------------------------------------------------------------ партиции и retention
 
-    /** Создаёт партиции на ближайшие дни и удаляет старше retention. */
+    /** Создаёт партиции на ближайшие дни и удаляет старше retention (под advisory lock, чтобы не пересекаться с onStart). */
     @Scheduled(cron = "0 5 0 * * *")
     public void maintainPartitions() {
-        ensurePartitions(LocalDate.now(ZoneOffset.UTC).minusDays(1), 14);
-        dropOld(settings.logRetentionDays());
+        writeTx.executeWithoutResult(st -> {
+            Boolean locked = jdbc.queryForObject("select pg_try_advisory_xact_lock(73819201)", Boolean.class);
+            if (!Boolean.TRUE.equals(locked)) {
+                return;
+            }
+            ensurePartitions(LocalDate.now(ZoneOffset.UTC).minusDays(1), 14);
+            dropOld(settings.logRetentionDays());
+        });
     }
 
     @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)

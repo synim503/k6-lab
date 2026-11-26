@@ -2,7 +2,7 @@
 <html lang="ru" xmlns:th="http://www.thymeleaf.org">
 <body>
 <div th:fragment="panel" id="diag-panel"
-     th:attr="hx-get=${diagRunning} ? @{/settings/diagnostics/panel} : null, hx-trigger=${diagRunning} ? 'every 2s' : null, hx-swap=${diagRunning} ? 'outerHTML' : null">
+     th:attr="data-diag-running=${diagRunning}, hx-get=${diagRunning} ? @{/settings/diagnostics/panel} : null, hx-trigger=${diagRunning} ? 'every 2s' : null, hx-swap=${diagRunning} ? 'outerHTML' : null">
     <div th:if="${diagRunning}">
         <div class="spinner-border spinner-border-sm me-2"></div>Выполняется…
         <ul class="list-unstyled mt-2 mb-0 small">

@@ -21,12 +21,42 @@ public final class DocxBuilder {
         if (s == null) {
             return "";
         }
-        return s.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&apos;")
-                .replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "");
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            // фильтруем недопустимые символы XML 1.0 (включая суррогаты и U+FFFE/U+FFFF), чтобы .docx не повреждался
+            boolean validXml = cp == 0x9 || cp == 0xA || cp == 0xD
+                    || (cp >= 0x20 && cp <= 0xD7FF)
+                    || (cp >= 0xE000 && cp <= 0xFFFD)
+                    || (cp >= 0x10000 && cp <= 0x10FFFF);
+            if (!validXml) {
+                continue;
+            }
+            switch (cp) {
+                case '&' -> sb.append("&amp;");
+                case '<' -> sb.append("&lt;");
+                case '>' -> sb.append("&gt;");
+                case '"' -> sb.append("&quot;");
+                case '\'' -> sb.append("&apos;");
+                default -> sb.appendCodePoint(cp);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static void appendTextRuns(StringBuilder sb, String text) {
+        if (text == null || text.isEmpty()) {
+            sb.append("<w:t xml:space=\"preserve\"></w:t>");
+            return;
+        }
+        String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) {
+                sb.append("<w:br/>");
+            }
+            sb.append("<w:t xml:space=\"preserve\">").append(esc(lines[i])).append("</w:t>");
+        }
     }
 
     public DocxBuilder title(String text) {
@@ -62,7 +92,8 @@ public final class DocxBuilder {
         if (bold || color != null) {
             body.append("<w:rPr>").append(bold ? "<w:b/>" : "").append(color != null ? "<w:color w:val=\"" + color + "\"/>" : "").append("</w:rPr>");
         }
-        body.append("<w:t xml:space=\"preserve\">").append(esc(text)).append("</w:t></w:r></w:p>");
+        appendTextRuns(body, text);
+        body.append("</w:r></w:p>");
         return this;
     }
 

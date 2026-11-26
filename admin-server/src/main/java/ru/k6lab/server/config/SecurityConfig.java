@@ -29,6 +29,12 @@ public class SecurityConfig {
         return new SessionRegistryImpl();
     }
 
+    /** Публикует события уничтожения HTTP-сессий Tomcat, чтобы SessionRegistryImpl не тёк памятью. */
+    @Bean
+    org.springframework.security.web.session.HttpSessionEventPublisher httpSessionEventPublisher() {
+        return new org.springframework.security.web.session.HttpSessionEventPublisher();
+    }
+
     /** Порт агентов: аутентификация токеном выполняется в handshake WebSocket, CSRF и сессии не нужны. */
     @Bean
     @Order(1)

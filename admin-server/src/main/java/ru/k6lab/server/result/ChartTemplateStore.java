@@ -126,6 +126,7 @@ public class ChartTemplateStore {
      * Если overwriteExisting=false и график с таким именем уже есть в целевом скрипте, к имени добавляется суффикс « (2)», « (3)» и т.д.
      * Если overwriteExisting=true, одноимённый график в целевом скрипте обновляется.
      */
+    @org.springframework.transaction.annotation.Transactional
     public List<Template> copyFromScript(long sourceScriptId, long targetScriptId, List<Long> templateIds,
                                          boolean overwriteExisting, String user) {
         if (sourceScriptId == targetScriptId) {
@@ -170,6 +171,7 @@ public class ChartTemplateStore {
     }
 
     /** Сохранение графика: при заданном id — обновление (включая переименование и локальные переменные), иначе — создание или обновление по имени. */
+    @org.springframework.transaction.annotation.Transactional
     public Template save(long scriptId, Long id, String name, List<Query> queries, String unit, Boolean enabled,
                          Map<String, String> variables, String user) {
         String first = queries.get(0).promql();
@@ -214,10 +216,14 @@ public class ChartTemplateStore {
             return get(scriptId, newId).orElseThrow();
         }
         List<Template> found = jdbc.query("select * from chart_template where script_id = ? and name = ?", ROWS, scriptId, name);
+        if (found.isEmpty()) {
+            throw new IllegalArgumentException("График не найден (возможно, был удалён)");
+        }
         return found.get(0);
     }
 
     /** Создаёт копию существующего графика сразу после оригинала (вместе с его локальными переменными). */
+    @org.springframework.transaction.annotation.Transactional
     public Template duplicate(long scriptId, long id, String user) {
         Template src = get(scriptId, id).orElseThrow(() -> new IllegalArgumentException("График не найден"));
         java.util.Set<String> existing = new java.util.HashSet<>();
@@ -241,6 +247,7 @@ public class ChartTemplateStore {
     }
 
     /** Сохраняет порядок графиков отчёта (position = 1..N). */
+    @org.springframework.transaction.annotation.Transactional
     public void reorder(long scriptId, List<Long> orderedIds) {
         if (orderedIds == null || orderedIds.isEmpty()) {
             return;

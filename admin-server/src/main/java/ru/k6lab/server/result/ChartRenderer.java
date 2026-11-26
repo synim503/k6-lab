@@ -44,7 +44,11 @@ public final class ChartRenderer {
         try {
             return body.get();
         } finally {
-            STYLE.set(prev);
+            if (prev == ChartStyle.DEFAULT) {
+                STYLE.remove();
+            } else {
+                STYLE.set(prev);
+            }
         }
     }
 
@@ -61,7 +65,11 @@ public final class ChartRenderer {
         try {
             return body.get();
         } finally {
-            TIME.set(prev);
+            if (prev == null) {
+                TIME.remove();
+            } else {
+                TIME.set(prev);
+            }
         }
     }
 
@@ -315,8 +323,9 @@ public final class ChartRenderer {
         if (baseRegular == null) {
             synchronized (ChartRenderer.class) {
                 if (baseRegular == null) {
-                    baseRegular = loadFontResource("/fonts/DejaVuSans.ttf", Font.PLAIN);
+                    // Записываем baseBold ДО volatile baseRegular, чтобы первый параллельный поток не увидел baseBold == null
                     baseBold = loadFontResource("/fonts/DejaVuSans-Bold.ttf", Font.BOLD);
+                    baseRegular = loadFontResource("/fonts/DejaVuSans.ttf", Font.PLAIN);
                 }
             }
         }
@@ -887,38 +896,40 @@ public final class ChartRenderer {
         java.awt.image.BufferedImage plot = BitmapEncoder.getBufferedImage(c);
         java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(outW, outH, java.awt.image.BufferedImage.TYPE_INT_RGB);
         java.awt.Graphics2D g = out.createGraphics();
-        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING, java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        g.setRenderingHint(java.awt.RenderingHints.KEY_FRACTIONALMETRICS, java.awt.RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+        try {
+            g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING, java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g.setRenderingHint(java.awt.RenderingHints.KEY_FRACTIONALMETRICS, java.awt.RenderingHints.VALUE_FRACTIONALMETRICS_ON);
 
-        // внешний фон темы (в т.ч. углы (1,1) и (2,2))
-        g.setColor(bg());
-        g.fillRect(0, 0, outW, outH);
+            // внешний фон темы (в т.ч. углы (1,1) и (2,2))
+            g.setColor(bg());
+            g.fillRect(0, 0, outW, outH);
 
-        int cardW = outW - 2 * OUTER_PAD;
-        int cardH = outH - 2 * OUTER_PAD;
-        Color cardBorder = dark() ? new Color(0x2D333D) : new Color(0xD8DFE9);
+            int cardW = outW - 2 * OUTER_PAD;
+            int cardH = outH - 2 * OUTER_PAD;
+            Color cardBorder = dark() ? new Color(0x2D333D) : new Color(0xD8DFE9);
 
-        // тело карточки и график
-        g.drawImage(plot, plotX, plotY, null);
+            // тело карточки и график
+            g.drawImage(plot, plotX, plotY, null);
 
-        // единая шапка панели Grafana
-        String unitBadge = (c instanceof SizedChart sc) ? sc.unitBadge : "";
-        drawPanelHeader(g, title == null ? "" : title, unitBadge, rows.size(), totalSeries, cs,
-                cardX, cardY, cardW, HEADER_H, fTitle, fBadge, fmTitle, fmBadge, cardBorder);
+            // единая шапка панели Grafana
+            String unitBadge = (c instanceof SizedChart sc) ? sc.unitBadge : "";
+            drawPanelHeader(g, title == null ? "" : title, unitBadge, rows.size(), totalSeries, cs,
+                    cardX, cardY, cardW, HEADER_H, fTitle, fBadge, fmTitle, fmBadge, cardBorder);
 
-        // табличная легенда
-        if (showLegend) {
-            drawLegendTable(g, rows, totalSeries, cs, hasStats, hLast, hMean, hMax, tblX, tblY, tblW, tableH,
-                    fHead, fRow, fFoot, fmHead, fmRow, fmFoot, swatchW, swatchGap, cellPadX, colGap, wLast, wMean, wMax);
+            // табличная легенда
+            if (showLegend) {
+                drawLegendTable(g, rows, totalSeries, cs, hasStats, hLast, hMean, hMax, tblX, tblY, tblW, tableH,
+                        fHead, fRow, fFoot, fmHead, fmRow, fmFoot, swatchW, swatchGap, cellPadX, colGap, wLast, wMean, wMax);
+            }
+
+            // внешняя рамка всей карточки графика
+            g.setColor(cardBorder);
+            g.setStroke(new java.awt.BasicStroke(1f));
+            g.drawRoundRect(cardX, cardY, cardW - 1, cardH - 1, 8, 8);
+        } finally {
+            g.dispose();
         }
-
-        // внешняя рамка всей карточки графика
-        g.setColor(cardBorder);
-        g.setStroke(new java.awt.BasicStroke(1f));
-        g.drawRoundRect(cardX, cardY, cardW - 1, cardH - 1, 8, 8);
-
-        g.dispose();
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
         javax.imageio.ImageIO.write(out, "png", bos);
         return bos.toByteArray();

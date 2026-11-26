@@ -59,7 +59,8 @@
         });
     }
     function esc(v) {
-        return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        return window.K6 && window.K6.escapeHtml ? window.K6.escapeHtml(v)
+            : String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
     function fmt(v, d) { return v === undefined || v === null || !isFinite(v) ? '—' : Number(v).toFixed(d === undefined ? 1 : d); }
 
@@ -367,11 +368,27 @@
     }
 
     // сначала вся история с начала теста (одним куском), затем live-поток (только для идущего теста)
+    var metricsEs = null;
+    function closeMetricsStream() {
+        if (metricsEs) {
+            metricsEs.close();
+            metricsEs = null;
+        }
+    }
+    window.addEventListener('k6:run-final', function () {
+        closeMetricsStream();
+        if (lastMsg) { renderCurrent(lastMsg, lastT); }
+    });
+    window.addEventListener('beforeunload', closeMetricsStream);
+
     function startLive() {
-        if (root.dataset.final === 'true') { return; }
-        var es = new EventSource(root.dataset.metricsStream);
-        es.addEventListener('metrics', function (ev) { onMetrics(JSON.parse(ev.data)); });
-        window.addEventListener('beforeunload', function () { es.close(); });
+        if (root.dataset.final === 'true' || metricsEs) { return; }
+        metricsEs = new EventSource(root.dataset.metricsStream);
+        metricsEs.addEventListener('metrics', function (ev) { onMetrics(JSON.parse(ev.data)); });
+        metricsEs.addEventListener('done', closeMetricsStream);
+        metricsEs.onerror = function () {
+            if (root.dataset.final === 'true') { closeMetricsStream(); }
+        };
     }
     var historyUrl = root.dataset.metricsHistory;
     if (!historyUrl) { startLive(); return; }

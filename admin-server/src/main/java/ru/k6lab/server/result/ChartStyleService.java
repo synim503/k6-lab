@@ -49,6 +49,7 @@ public class ChartStyleService {
         return save(theme, width, height, legend, stats, maxLegend, absoluteTime, autoWidth, sortBy, sortDir, false);
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public ChartStyle save(String theme, int width, int height, String legend, boolean stats, int maxLegend, boolean absoluteTime, boolean autoWidth,
                            String sortBy, String sortDir, boolean skipWarmup) {
         settings.set(TIME_AXIS, absoluteTime ? "abs" : "rel");
@@ -66,6 +67,7 @@ public class ChartStyleService {
         return s;
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public void reset() {
         for (String k : new String[]{THEME, WIDTH, HEIGHT, LEGEND, STATS, MAX_LEGEND, TIME_AXIS, AUTO_WIDTH, SORT_BY, SORT_DIR, SKIP_WARMUP}) {
             settings.delete(k);

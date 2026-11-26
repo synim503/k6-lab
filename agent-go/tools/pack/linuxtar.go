@@ -11,12 +11,21 @@ import (
 )
 
 // buildLinuxTar собирает tar.gz для Linux с встроенной JRE: админка запускается без установленной Java (start.sh берёт jre/bin/java).
-func buildLinuxTar(root, jreTgz, out string) error {
+func buildLinuxTar(root, jreTgz, out string) (retErr error) {
 	f, err := os.Create(out)
 	if err != nil {
 		return err
 	}
-	gz, _ := gzip.NewWriterLevel(f, gzip.BestSpeed)
+	defer func() {
+		if retErr != nil {
+			_ = f.Close()
+			_ = os.Remove(out)
+		}
+	}()
+	gz, err := gzip.NewWriterLevel(f, gzip.BestSpeed)
+	if err != nil {
+		return err
+	}
 	tw := tar.NewWriter(gz)
 	base := filepath.Join(root, "k6-lab")
 	err = filepath.Walk(base, func(p string, info os.FileInfo, err error) error {
@@ -55,6 +64,7 @@ func buildLinuxTar(root, jreTgz, out string) error {
 	if err != nil {
 		return err
 	}
+	defer jg.Close()
 	tr := tar.NewReader(jg)
 	for {
 		h, err := tr.Next()
@@ -64,15 +74,17 @@ func buildLinuxTar(root, jreTgz, out string) error {
 		if err != nil {
 			return err
 		}
-		i := strings.Index(h.Name, "/")
+		cleanName := strings.TrimPrefix(h.Name, "./")
+		i := strings.Index(cleanName, "/")
 		if i < 0 {
 			continue
 		}
-		h.Name = "k6-lab/jre/" + h.Name[i+1:]
+		h.Name = "k6-lab/jre/" + cleanName[i+1:]
 		if h.Typeflag == tar.TypeSymlink || h.Typeflag == tar.TypeLink {
 			if h.Typeflag == tar.TypeLink {
-				if j := strings.Index(h.Linkname, "/"); j >= 0 {
-					h.Linkname = "k6-lab/jre/" + h.Linkname[j+1:]
+				cleanLink := strings.TrimPrefix(h.Linkname, "./")
+				if j := strings.Index(cleanLink, "/"); j >= 0 {
+					h.Linkname = "k6-lab/jre/" + cleanLink[j+1:]
 				}
 			}
 		}

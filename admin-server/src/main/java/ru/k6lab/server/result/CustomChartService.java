@@ -283,7 +283,7 @@ public class CustomChartService {
             int mins = minutes == null ? 30 : Math.max(5, Math.min(1440, minutes));
             end = Instant.now();
             start = end.minusSeconds(mins * 60L);
-            List<Run> recent = runs.findByScriptIdOrderByIdDesc(scriptId);
+            List<Run> recent = runs.findTop20ByScriptIdOrderByIdDesc(scriptId);
             if (!recent.isEmpty()) {
                 effectiveRunId = recent.get(0).getId();
             }

@@ -55,44 +55,44 @@ public final class DataSplitter {
 
     /**
      * Записывает в {@code dst} заголовок (если есть) и строки данных своего сегмента. {@code dst} может совпадать
-     * с {@code src}: тогда файл подменяется атомарно.
+     * с {@code src}: тогда файл подменяется атомарно. Потоковая запись без буферизации строк в памяти.
      */
     public static Result split(Path src, Path dst, Fraction start, Fraction end, boolean header) throws IOException {
         long rows = countRows(src, header);
         Range range = range(rows, start, end);
-        Path tmp = dst.resolveSibling(dst.getFileName() + ".split.tmp");
-        try (InputStream in = new BufferedInputStream(Files.newInputStream(src), 1 << 16);
-             OutputStream out = new BufferedOutputStream(Files.newOutputStream(tmp), 1 << 16)) {
-            long dataIdx = 0;
-            boolean first = true;
-            ByteArrayOutputStream line = new ByteArrayOutputStream(256);
-            int b;
-            while (true) {
-                b = in.read();
-                if (b >= 0) {
-                    line.write(b);
-                    if (b != '\n') {
-                        continue;
+        Path parent = dst.toAbsolutePath().getParent();
+        Path tmp = Files.createTempFile(parent, dst.getFileName().toString() + ".", ".split.tmp");
+        try {
+            try (InputStream in = new BufferedInputStream(Files.newInputStream(src), 1 << 16);
+                 OutputStream out = new BufferedOutputStream(Files.newOutputStream(tmp), 1 << 16)) {
+                long dataIdx = 0;
+                boolean first = true;
+                boolean writing = header || (dataIdx >= range.from() && dataIdx < range.toExclusive());
+                int b;
+                while ((b = in.read()) >= 0) {
+                    if (writing) {
+                        out.write(b);
                     }
-                } else if (line.size() == 0) {
-                    break;
-                }
-                if (first && header) {
-                    line.writeTo(out);
-                } else {
-                    if (dataIdx >= range.from() && dataIdx < range.toExclusive()) {
-                        line.writeTo(out);
+                    if (b == '\n') {
+                        if (first && header) {
+                            first = false;
+                        } else {
+                            first = false;
+                            dataIdx++;
+                        }
+                        writing = dataIdx >= range.from() && dataIdx < range.toExclusive();
                     }
-                    dataIdx++;
-                }
-                first = false;
-                line.reset();
-                if (b < 0) {
-                    break;
                 }
             }
+            try {
+                Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return new Result(rows, range);
+        } catch (IOException | RuntimeException e) {
+            Files.deleteIfExists(tmp);
+            throw e;
         }
-        Files.move(tmp, dst, StandardCopyOption.REPLACE_EXISTING);
-        return new Result(rows, range);
     }
 }

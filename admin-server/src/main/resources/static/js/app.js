@@ -1,7 +1,96 @@
+// Общие утилиты k6-lab (экранирование HTML, CSRF, безопасный fetch HTML, учёт активных AJAX-целей).
+window.K6 = (function () {
+    var busyTargets = Object.create(null);
+
+    function escapeHtml(v) {
+        return String(v == null ? '' : v)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function getCsrf() {
+        var meta = document.querySelector('meta[name="_csrf"]');
+        var hdr = document.querySelector('meta[name="_csrf_header"]');
+        return {
+            token: meta && meta.content ? meta.content : '',
+            header: hdr && hdr.content ? hdr.content : 'X-CSRF-TOKEN'
+        };
+    }
+
+    function syncCsrf(doc) {
+        if (!doc || !doc.querySelector) { return; }
+        var fresh = doc.querySelector('meta[name="_csrf"]');
+        var cur = document.querySelector('meta[name="_csrf"]');
+        if (fresh && cur && fresh.content) { cur.content = fresh.content; }
+    }
+
+    function setBtnSpinner(btn, labelText) {
+        btn.textContent = '';
+        var sp = document.createElement('span');
+        sp.className = 'spinner-border spinner-border-sm' + (labelText ? ' me-1' : '');
+        sp.setAttribute('role', 'status');
+        sp.setAttribute('aria-hidden', 'true');
+        btn.appendChild(sp);
+        if (labelText) { btn.appendChild(document.createTextNode(labelText)); }
+    }
+
+    function markBusy(selectors, delta) {
+        (selectors || []).forEach(function (sel) {
+            var next = (busyTargets[sel] || 0) + delta;
+            if (next <= 0) { delete busyTargets[sel]; } else { busyTargets[sel] = next; }
+        });
+    }
+
+    function isAjaxBusy(selector) {
+        return !!(selector && busyTargets[selector] > 0);
+    }
+
+    function fetchHtml(url, opts) {
+        opts = opts || {};
+        var method = (opts.method || 'GET').toUpperCase();
+        var headers = Object.assign({'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'}, opts.headers || {});
+        if (method !== 'GET' && method !== 'HEAD') {
+            var csrf = getCsrf();
+            if (csrf.token && !headers[csrf.header]) { headers[csrf.header] = csrf.token; }
+        }
+        return fetch(url, Object.assign({
+            method: method,
+            credentials: 'same-origin',
+            redirect: 'follow'
+        }, opts, {headers: headers})).then(function (res) {
+            return res.text().then(function (html) {
+                var finalUrl = new URL(res.url || url, location.origin);
+                if (finalUrl.pathname === '/login') {
+                    location.href = finalUrl.href;
+                    var err = new Error('Требуется авторизация');
+                    err.redirectedToLogin = true;
+                    throw err;
+                }
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+                syncCsrf(doc);
+                return {res: res, html: html, doc: doc, url: finalUrl.href, finalUrl: finalUrl};
+            });
+        });
+    }
+
+    return {
+        escapeHtml: escapeHtml,
+        getCsrf: getCsrf,
+        syncCsrf: syncCsrf,
+        setBtnSpinner: setBtnSpinner,
+        markBusy: markBusy,
+        isAjaxBusy: isAjaxBusy,
+        fetchHtml: fetchHtml
+    };
+})();
+
 // CSRF для htmx: токен берётся из <meta name="_csrf">, уходит заголовком X-CSRF-TOKEN.
 document.body.addEventListener('htmx:configRequest', function (e) {
-    var meta = document.querySelector('meta[name="_csrf"]');
-    if (meta) { e.detail.headers['X-CSRF-TOKEN'] = meta.content; }
+    var csrf = window.K6.getCsrf();
+    if (csrf.token) { e.detail.headers[csrf.header] = csrf.token; }
 });
 
 // Сохранение горизонтального скролла таблиц при htmx-обновлении (например, #gen-table).
@@ -148,6 +237,9 @@ document.addEventListener('click', function (ev) {
     var downBtn = document.getElementById('deploy-log-down');
     var badge = document.getElementById('deploy-sse-badge');
     var done = false;
+    var hasLines = pre.textContent.length > 0;
+    var errCount = 0;
+    var MAX_ERR = 5;
     function syncDown() {
         if (downBtn) { downBtn.classList.toggle('d-none', autoscroll); }
     }
@@ -164,14 +256,20 @@ document.addEventListener('click', function (ev) {
     }
     var es = new EventSource(pre.dataset.stream);
     function append(text) {
-        pre.textContent += (pre.textContent ? '\n' : '') + text;
+        pre.appendChild(document.createTextNode((hasLines ? '\n' : '') + text));
+        hasLines = true;
         if (autoscroll) { pre.scrollTop = pre.scrollHeight; }
     }
     function refresh() {
+        if (document.hidden || (window.K6 && window.K6.isAjaxBusy('#deploy-status'))) { return; }
         var st = document.getElementById('deploy-status');
         if (st && window.htmx) { htmx.trigger(st, 'refresh'); }
     }
-    es.addEventListener('log', function (ev) { append(ev.data); });
+    es.onopen = function () {
+        errCount = 0;
+        if (!done && badge) { badge.className = 'badge text-bg-success'; badge.textContent = 'подключено'; }
+    };
+    es.addEventListener('log', function (ev) { errCount = 0; append(ev.data); });
     // страховка: смена статуса без события step (например, ожидание подтверждения ключа хоста) тоже должна обновить страницу
     var poll = setInterval(refresh, 3000);
     es.addEventListener('step', refresh);
@@ -183,19 +281,23 @@ document.addEventListener('click', function (ev) {
         refresh();
     });
     es.onerror = function () {
+        if (done) { es.close(); clearInterval(poll); return; }
+        errCount++;
+        if (errCount >= MAX_ERR) {
+            es.close();
+            clearInterval(poll);
+            if (badge) { badge.className = 'badge text-bg-warning'; badge.textContent = 'поток остановлен'; }
+            refresh();
+        } else if (badge) {
+            badge.className = 'badge text-bg-warning';
+            badge.textContent = 'переподключение…';
+        }
+    };
+    window.addEventListener('beforeunload', function () {
         es.close();
         clearInterval(poll);
-        if (!done && badge) { badge.className = 'badge text-bg-warning'; badge.textContent = 'поток остановлен'; }
-        refresh();
-    };
+    });
 })();
-
-// Индекс для новой строки в динамических таблицах форм (операции модели, метрики SUT): max(data-i) + 1.
-function nextRowIndex(selector) {
-    var max = -1;
-    document.querySelectorAll(selector).forEach(function (r) { max = Math.max(max, +r.dataset.i); });
-    return max + 1;
-}
 
 // Подсветка текущего раздела в верхнем меню (включая пункты внутри «Ещё» и /tuning).
 (function () {
@@ -244,9 +346,10 @@ function nextRowIndex(selector) {
     });
 })();
 
-// Автоматическая кнопка «показать/скрыть» для полей паролей.
-(function () {
-    document.querySelectorAll('input[type="password"]:not([data-no-pw-toggle])').forEach(function (inp) {
+// Автоматическая кнопка «показать/скрыть» для полей паролей + фильтры таблиц (переиспользуется после AJAX-swap).
+window.k6InitSubtree = function (root) {
+    var scope = root || document;
+    scope.querySelectorAll('input[type="password"]:not([data-no-pw-toggle])').forEach(function (inp) {
         if (inp.closest('.k6-pw-wrap') || inp.closest('.input-group')) { return; }
         var wrap = document.createElement('div');
         wrap.className = 'k6-pw-wrap';
@@ -267,7 +370,64 @@ function nextRowIndex(selector) {
         });
         wrap.appendChild(btn);
     });
-})();
+
+    scope.querySelectorAll('[data-table-filter]').forEach(function (input) {
+        if (input.dataset.k6FilterBound === '1') { return; }
+        input.dataset.k6FilterBound = '1';
+        var sel = input.dataset.tableFilter;
+        var chipSel = input.dataset.chipGroup;
+        var emptySel = input.dataset.emptyTarget;
+        var countSel = input.dataset.countTarget;
+        var activeChip = '';
+        if (chipSel) {
+            var onBtn = document.querySelector(chipSel + '.on');
+            if (onBtn) { activeChip = onBtn.dataset.chipVal || ''; }
+        }
+
+        function apply() {
+            var q = (input.value || '').trim().toLowerCase();
+            var rows = document.querySelectorAll(sel);
+            var visible = 0;
+            rows.forEach(function (row) {
+                var text = (row.dataset.search || row.textContent || '').toLowerCase();
+                var chipVal = row.dataset.filterVal || '';
+                var okQ = !q || text.indexOf(q) >= 0;
+                var okC = !activeChip || chipVal === activeChip;
+                var show = okQ && okC;
+                row.classList.toggle('d-none', !show);
+                if (show) { visible++; }
+            });
+            if (emptySel) {
+                var emp = document.querySelector(emptySel);
+                if (emp) { emp.classList.toggle('d-none', visible > 0 || rows.length === 0); }
+            }
+            if (countSel) {
+                var cnt = document.querySelector(countSel);
+                if (cnt) { cnt.textContent = (q || activeChip) ? ('Показано ' + visible + ' из ' + rows.length) : ''; }
+            }
+        }
+
+        input._k6ApplyFilter = apply;
+        input.addEventListener('input', apply);
+        if (chipSel) {
+            document.querySelectorAll(chipSel).forEach(function (btn) {
+                if (btn.dataset.k6ChipBound === '1') { return; }
+                btn.dataset.k6ChipBound = '1';
+                btn.addEventListener('click', function () {
+                    activeChip = btn.dataset.chipVal || '';
+                    document.querySelectorAll(chipSel).forEach(function (b) { b.classList.toggle('on', b === btn); });
+                    apply();
+                });
+            });
+        }
+        apply();
+    });
+
+    if (root && root !== document && window.htmx && typeof window.htmx.process === 'function') {
+        window.htmx.process(root);
+    }
+};
+window.k6InitSubtree(document);
 
 // Быстрый переход по разделам (Ctrl+K / Cmd+K).
 (function () {
@@ -367,69 +527,24 @@ function nextRowIndex(selector) {
     });
 })();
 
-// Универсальная фильтрация таблиц/списков по поиску [data-table-filter] и чипам [data-chip-filter].
-(function () {
-    document.querySelectorAll('[data-table-filter]').forEach(function (input) {
-        var sel = input.dataset.tableFilter;
-        var chipSel = input.dataset.chipGroup;
-        var emptySel = input.dataset.emptyTarget;
-        var countSel = input.dataset.countTarget;
-        var activeChip = '';
-
-        function apply() {
-            var q = (input.value || '').trim().toLowerCase();
-            var rows = document.querySelectorAll(sel);
-            var visible = 0;
-            rows.forEach(function (row) {
-                var text = (row.dataset.search || row.textContent || '').toLowerCase();
-                var chipVal = row.dataset.filterVal || '';
-                var okQ = !q || text.indexOf(q) >= 0;
-                var okC = !activeChip || chipVal === activeChip;
-                var show = okQ && okC;
-                row.classList.toggle('d-none', !show);
-                if (show) { visible++; }
-            });
-            if (emptySel) {
-                var emp = document.querySelector(emptySel);
-                if (emp) { emp.classList.toggle('d-none', visible > 0 || rows.length === 0); }
-            }
-            if (countSel) {
-                var cnt = document.querySelector(countSel);
-                if (cnt) { cnt.textContent = (q || activeChip) ? ('Показано ' + visible + ' из ' + rows.length) : ''; }
-            }
-        }
-
-        input.addEventListener('input', apply);
-        if (chipSel) {
-            document.querySelectorAll(chipSel).forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    activeChip = btn.dataset.chipVal || '';
-                    document.querySelectorAll(chipSel).forEach(function (b) { b.classList.toggle('on', b === btn); });
-                    apply();
-                });
-            });
-        }
-    });
-})();
-
-// Защита от двойного сабмита обычных POST-форм со спиннером на кнопке.
+// Защита от двойного сабмита обычных POST-форм со спиннером на кнопке (для data-ajax спиннер управляется движком AJAX).
 (function () {
     var lockedBtns = [];
     document.addEventListener('submit', function (ev) {
         var form = ev.target;
         if (!form || form.tagName !== 'FORM' || ev.defaultPrevented) { return; }
         if ((form.method || '').toLowerCase() !== 'post') { return; }
+        var sub = ev.submitter || null;
+        if ((sub && sub.dataset && sub.dataset.ajax) || (form.dataset && form.dataset.ajax)) { return; }
         if (form.dataset.noLoading === 'true' || form.getAttribute('hx-post') || form.target === '_blank') { return; }
-        var btn = ev.submitter || form.querySelector('button[type="submit"]:not(:disabled)');
+        var btn = sub || form.querySelector('button[type="submit"]:not(:disabled)');
         if (!btn || btn.disabled || btn.dataset.noLoading === 'true') { return; }
         setTimeout(function () {
             if (ev.defaultPrevented || btn.disabled) { return; }
             btn.dataset.k6OrigHtml = btn.innerHTML;
             btn.disabled = true;
             lockedBtns.push(btn);
-            var iconOnly = !btn.textContent.trim();
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm' + (iconOnly ? '' : ' me-1') + '" role="status" aria-hidden="true"></span>'
-                + (iconOnly ? '' : btn.textContent.trim());
+            window.K6.setBtnSpinner(btn, btn.textContent.trim());
         }, 0);
     });
     window.addEventListener('pageshow', function () {
@@ -464,13 +579,20 @@ function nextRowIndex(selector) {
         return variant === 'danger' ? 'Подтвердить' : 'Продолжить';
     }
 
+    // Очередь модальных окон: следующий k6Confirm/k6Prompt ждёт завершения hidden.bs.modal предыдущего,
+    // чтобы не попадать в Bootstrap _isTransitioning deadlock и не наслаивать обработчики.
+    var modalQueue = Promise.resolve();
+    function enqueueModal(fn) {
+        var run = modalQueue.then(fn, fn);
+        modalQueue = run.then(function () {}, function () {});
+        return run;
+    }
+
     function raiseTopBackdrop() {
-        setTimeout(function () {
-            var backs = document.querySelectorAll('.modal-backdrop');
-            if (backs.length > 1) {
-                backs[backs.length - 1].classList.add('k6-top-backdrop');
-            }
-        }, 0);
+        var backs = document.querySelectorAll('.modal-backdrop');
+        if (backs.length > 1) {
+            backs[backs.length - 1].classList.add('k6-top-backdrop');
+        }
     }
 
     function restoreBodyModalState() {
@@ -485,80 +607,85 @@ function nextRowIndex(selector) {
         if (!modalEl || !window.bootstrap || !bootstrap.Modal) {
             return Promise.resolve(window.confirm(opts.message || 'Подтвердите действие'));
         }
-        var titleEl = document.getElementById('k6-confirm-title');
-        var msgEl = document.getElementById('k6-confirm-msg');
-        var listEl = document.getElementById('k6-confirm-list');
-        var iconEl = document.getElementById('k6-confirm-icon');
-        var okBtn = document.getElementById('k6-confirm-ok');
-        var cancelBtn = document.getElementById('k6-confirm-cancel');
+        return enqueueModal(function () {
+            var titleEl = document.getElementById('k6-confirm-title');
+            var msgEl = document.getElementById('k6-confirm-msg');
+            var listEl = document.getElementById('k6-confirm-list');
+            var iconEl = document.getElementById('k6-confirm-icon');
+            var okBtn = document.getElementById('k6-confirm-ok');
+            var cancelBtn = document.getElementById('k6-confirm-cancel');
 
-        var variant = detectVariant(opts.message, opts.variant);
-        var title = opts.title || (variant === 'danger' ? 'Подтвердите действие' : 'Подтверждение');
-        var okText = detectOkLabel(opts.message, variant, opts.confirmText);
-        var cancelText = opts.cancelText || 'Отмена';
+            var variant = detectVariant(opts.message, opts.variant);
+            var title = opts.title || (variant === 'danger' ? 'Подтвердите действие' : 'Подтверждение');
+            var okText = detectOkLabel(opts.message, variant, opts.confirmText);
+            var cancelText = opts.cancelText || 'Отмена';
 
-        titleEl.textContent = title;
-        msgEl.textContent = opts.message || '';
-        okBtn.textContent = okText;
-        cancelBtn.textContent = cancelText;
-        cancelBtn.classList.toggle('d-none', !!opts.hideCancel);
+            titleEl.textContent = title;
+            msgEl.textContent = opts.message || '';
+            okBtn.textContent = okText;
+            cancelBtn.textContent = cancelText;
+            cancelBtn.classList.toggle('d-none', !!opts.hideCancel);
 
-        iconEl.className = 'k6-confirm-icon is-' + variant;
-        iconEl.innerHTML = variant === 'danger'
-            ? '<i class="bi bi-exclamation-triangle-fill"></i>'
-            : (variant === 'warning' ? '<i class="bi bi-question-circle-fill"></i>' : '<i class="bi bi-info-circle-fill"></i>');
-        okBtn.className = 'btn btn-sm px-3 ' + (variant === 'danger' ? 'btn-danger' : (variant === 'warning' ? 'btn-warning' : 'btn-primary'));
+            iconEl.className = 'k6-confirm-icon is-' + variant;
+            iconEl.innerHTML = variant === 'danger'
+                ? '<i class="bi bi-exclamation-triangle-fill"></i>'
+                : (variant === 'warning' ? '<i class="bi bi-question-circle-fill"></i>' : '<i class="bi bi-info-circle-fill"></i>');
+            okBtn.className = 'btn btn-sm px-3 ' + (variant === 'danger' ? 'btn-danger' : (variant === 'warning' ? 'btn-warning' : 'btn-primary'));
 
-        if (Array.isArray(opts.items) && opts.items.length > 0) {
-            listEl.innerHTML = '';
-            var maxShow = 8;
-            opts.items.slice(0, maxShow).forEach(function (it) {
-                var li = document.createElement('li');
-                li.textContent = String(it);
-                listEl.appendChild(li);
-            });
-            if (opts.items.length > maxShow) {
-                var more = document.createElement('li');
-                more.className = 'text-muted fst-italic';
-                more.textContent = '… и ещё ' + (opts.items.length - maxShow);
-                listEl.appendChild(more);
-            }
-            listEl.classList.remove('d-none');
-        } else {
-            listEl.innerHTML = '';
-            listEl.classList.add('d-none');
-        }
-
-        return new Promise(function (resolve) {
-            var settled = false;
-            var result = false;
-            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-
-            function onOk() {
-                result = true;
-                modal.hide();
-            }
-            function onHidden() {
-                if (settled) { return; }
-                settled = true;
-                okBtn.removeEventListener('click', onOk);
-                modalEl.removeEventListener('hidden.bs.modal', onHidden);
-                restoreBodyModalState();
-                resolve(result);
-            }
-
-            okBtn.addEventListener('click', onOk);
-            modalEl.addEventListener('hidden.bs.modal', onHidden);
-            modal.show();
-            raiseTopBackdrop();
-            modalEl.addEventListener('shown.bs.modal', function () {
-                // Для опасных действий фокусируем «Отмену», чтобы случайный Enter не удалил данные
-                if (variant === 'danger' && !opts.hideCancel) {
-                    cancelBtn.focus();
-                } else {
-                    okBtn.focus();
+            if (Array.isArray(opts.items) && opts.items.length > 0) {
+                listEl.innerHTML = '';
+                var maxShow = 8;
+                opts.items.slice(0, maxShow).forEach(function (it) {
+                    var li = document.createElement('li');
+                    li.textContent = String(it);
+                    listEl.appendChild(li);
+                });
+                if (opts.items.length > maxShow) {
+                    var more = document.createElement('li');
+                    more.className = 'text-muted fst-italic';
+                    more.textContent = '… и ещё ' + (opts.items.length - maxShow);
+                    listEl.appendChild(more);
                 }
-            }, {once: true});
+                listEl.classList.remove('d-none');
+            } else {
+                listEl.innerHTML = '';
+                listEl.classList.add('d-none');
+            }
+
+            return new Promise(function (resolve) {
+                var settled = false;
+                var result = false;
+                var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
+                function onOk() {
+                    result = true;
+                    modal.hide();
+                }
+                function onShown() {
+                    raiseTopBackdrop();
+                    // Для опасных действий фокусируем «Отмену», чтобы случайный Enter не удалил данные
+                    if (variant === 'danger' && !opts.hideCancel) {
+                        cancelBtn.focus();
+                    } else {
+                        okBtn.focus();
+                    }
+                }
+                function onHidden() {
+                    if (settled) { return; }
+                    settled = true;
+                    okBtn.removeEventListener('click', onOk);
+                    modalEl.removeEventListener('shown.bs.modal', onShown);
+                    modalEl.removeEventListener('hidden.bs.modal', onHidden);
+                    restoreBodyModalState();
+                    resolve(result);
+                }
+
+                okBtn.addEventListener('click', onOk);
+                modalEl.addEventListener('shown.bs.modal', onShown, {once: true});
+                modalEl.addEventListener('hidden.bs.modal', onHidden);
+                modal.show();
+                raiseTopBackdrop();
+            });
         });
     };
 
@@ -568,48 +695,53 @@ function nextRowIndex(selector) {
         if (!modalEl || !window.bootstrap || !bootstrap.Modal) {
             return Promise.resolve(window.prompt(opts.label || opts.title || 'Введите значение', opts.value || ''));
         }
-        var formEl = document.getElementById('k6-prompt-form');
-        var titleEl = document.getElementById('k6-prompt-title');
-        var labelEl = document.getElementById('k6-prompt-label');
-        var inputEl = document.getElementById('k6-prompt-input');
-        var okBtn = document.getElementById('k6-prompt-ok');
+        return enqueueModal(function () {
+            var formEl = document.getElementById('k6-prompt-form');
+            var titleEl = document.getElementById('k6-prompt-title');
+            var labelEl = document.getElementById('k6-prompt-label');
+            var inputEl = document.getElementById('k6-prompt-input');
+            var okBtn = document.getElementById('k6-prompt-ok');
 
-        titleEl.innerHTML = '<i class="bi bi-pencil-square me-2 text-primary"></i>' + (opts.title || 'Введите значение').replace(/</g, '&lt;');
-        labelEl.textContent = opts.label || '';
-        inputEl.value = opts.value || '';
-        inputEl.placeholder = opts.placeholder || '';
-        inputEl.classList.remove('is-invalid');
-        okBtn.textContent = opts.confirmText || 'Сохранить';
+            titleEl.innerHTML = '<i class="bi bi-pencil-square me-2 text-primary"></i>' + window.K6.escapeHtml(opts.title || 'Введите значение');
+            labelEl.textContent = opts.label || '';
+            inputEl.value = opts.value || '';
+            inputEl.placeholder = opts.placeholder || '';
+            inputEl.classList.remove('is-invalid');
+            okBtn.textContent = opts.confirmText || 'Сохранить';
 
-        return new Promise(function (resolve) {
-            var settled = false;
-            var result = null;
-            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            return new Promise(function (resolve) {
+                var settled = false;
+                var result = null;
+                var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
 
-            function onSubmit(e) {
-                e.preventDefault();
-                var v = inputEl.value.trim();
-                if (!v) { inputEl.classList.add('is-invalid'); inputEl.focus(); return; }
-                result = v;
-                modal.hide();
-            }
-            function onHidden() {
-                if (settled) { return; }
-                settled = true;
-                formEl.removeEventListener('submit', onSubmit);
-                modalEl.removeEventListener('hidden.bs.modal', onHidden);
-                restoreBodyModalState();
-                resolve(result);
-            }
+                function onSubmit(e) {
+                    e.preventDefault();
+                    var v = inputEl.value.trim();
+                    if (!v) { inputEl.classList.add('is-invalid'); inputEl.focus(); return; }
+                    result = v;
+                    modal.hide();
+                }
+                function onShown() {
+                    raiseTopBackdrop();
+                    inputEl.focus();
+                    inputEl.select();
+                }
+                function onHidden() {
+                    if (settled) { return; }
+                    settled = true;
+                    formEl.removeEventListener('submit', onSubmit);
+                    modalEl.removeEventListener('shown.bs.modal', onShown);
+                    modalEl.removeEventListener('hidden.bs.modal', onHidden);
+                    restoreBodyModalState();
+                    resolve(result);
+                }
 
-            formEl.addEventListener('submit', onSubmit);
-            modalEl.addEventListener('hidden.bs.modal', onHidden);
-            modal.show();
-            raiseTopBackdrop();
-            modalEl.addEventListener('shown.bs.modal', function () {
-                inputEl.focus();
-                inputEl.select();
-            }, {once: true});
+                formEl.addEventListener('submit', onSubmit);
+                modalEl.addEventListener('shown.bs.modal', onShown, {once: true});
+                modalEl.addEventListener('hidden.bs.modal', onHidden);
+                modal.show();
+                raiseTopBackdrop();
+            });
         });
     };
 
@@ -622,21 +754,31 @@ function nextRowIndex(selector) {
     });
 
     function submitWithSubmitter(form, submitter) {
+        var tempAppended = false;
         if (!form.isConnected) {
             form.style.display = 'none';
             document.body.appendChild(form);
+            tempAppended = true;
         }
         form.dataset.k6Confirmed = '1';
-        if (submitter && form.requestSubmit && form.contains(submitter)) {
-            submitter.dataset.k6Confirmed = '1';
-            form.requestSubmit(submitter);
-        } else if (submitter && submitter.getAttribute('formaction')) {
-            var prevAction = form.getAttribute('action');
-            form.setAttribute('action', submitter.getAttribute('formaction'));
-            form.submit();
-            if (prevAction != null) { form.setAttribute('action', prevAction); }
-        } else {
-            form.submit();
+        try {
+            if (submitter && form.requestSubmit && form.contains(submitter)) {
+                submitter.dataset.k6Confirmed = '1';
+                form.requestSubmit(submitter);
+            } else if (!submitter && form.requestSubmit) {
+                form.requestSubmit();
+            } else if (submitter && submitter.getAttribute('formaction')) {
+                var prevAction = form.getAttribute('action');
+                form.setAttribute('action', submitter.getAttribute('formaction'));
+                if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+                if (prevAction != null) { form.setAttribute('action', prevAction); }
+            } else {
+                form.submit();
+            }
+        } finally {
+            if (tempAppended) {
+                setTimeout(function () { if (form.isConnected) { form.remove(); } }, 0);
+            }
         }
     }
 
@@ -691,6 +833,355 @@ function nextRowIndex(selector) {
                 el.dataset.k6Confirmed = '1';
                 el.click();
             }
+        });
+    });
+})();
+
+// ==================== Интерактивные AJAX-действия без перезагрузки страницы (data-ajax) ====================
+(function () {
+    var activeCount = 0;
+
+    function setBar(delta) {
+        activeCount = Math.max(0, activeCount + delta);
+        var bar = document.getElementById('k6-ajax-bar');
+        if (!bar && activeCount > 0) {
+            bar = document.createElement('div');
+            bar.id = 'k6-ajax-bar';
+            document.body.appendChild(bar);
+        }
+        if (bar) { bar.classList.toggle('is-active', activeCount > 0); }
+    }
+
+    function parseSelectors(spec) {
+        if (!spec || spec === 'toast' || spec === 'none') { return []; }
+        return String(spec).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+
+    function buildFormData(form, submitter) {
+        var fd;
+        if (submitter && form.contains(submitter)) {
+            try { fd = new FormData(form, submitter); }
+            catch (_) {
+                fd = new FormData(form);
+                if (submitter.name) { fd.append(submitter.name, submitter.value || ''); }
+            }
+        } else {
+            fd = new FormData(form);
+            if (submitter && submitter.name) { fd.append(submitter.name, submitter.value || ''); }
+        }
+        if (!fd.has('_csrf')) {
+            var meta = document.querySelector('meta[name="_csrf"]');
+            if (meta && meta.content) { fd.append('_csrf', meta.content); }
+        }
+        return fd;
+    }
+
+    function lockBtn(btn) {
+        if (!btn || btn.disabled || btn.dataset.noLoading === 'true') { return null; }
+        var orig = btn.innerHTML;
+        btn.disabled = true;
+        window.K6.setBtnSpinner(btn, btn.textContent.trim());
+        return function unlock() {
+            if (!btn.isConnected) { return; }
+            btn.disabled = false;
+            btn.innerHTML = orig;
+        };
+    }
+
+    function closeDropdownsIn(el) {
+        if (!el || !window.bootstrap || !bootstrap.Dropdown) { return; }
+        el.querySelectorAll('[data-bs-toggle="dropdown"].show').forEach(function (t) {
+            try { bootstrap.Dropdown.getOrCreateInstance(t).hide(); } catch (_) {}
+        });
+    }
+
+    function captureState(el) {
+        var st = {details: {}, scrolls: [], activeTab: null, filters: {}};
+        if (!el) { return st; }
+        el.querySelectorAll('details[id]').forEach(function (d) { st.details[d.id] = !!d.open; });
+        el.querySelectorAll('.table-responsive').forEach(function (w, i) { st.scrolls[i] = w.scrollLeft; });
+        var tab = el.querySelector('.nav-link.active[data-bs-target]');
+        if (tab) { st.activeTab = tab.getAttribute('data-bs-target'); }
+        el.querySelectorAll('[data-table-filter][id]').forEach(function (inp) {
+            var chipVal = '';
+            if (inp.dataset.chipGroup) {
+                var on = document.querySelector(inp.dataset.chipGroup + '.on');
+                if (on) { chipVal = on.dataset.chipVal || ''; }
+            }
+            st.filters[inp.id] = {value: inp.value, chipVal: chipVal};
+        });
+        return st;
+    }
+
+    function restoreState(el, st) {
+        if (!el || !st) { return; }
+        Object.keys(st.details).forEach(function (id) {
+            var d = el.querySelector('#' + CSS.escape(id));
+            if (d && d.tagName === 'DETAILS' && d.dataset.forceOpen !== 'true') {
+                d.open = st.details[id];
+            }
+        });
+        el.querySelectorAll('.table-responsive').forEach(function (w, i) {
+            if (st.scrolls[i] != null) { w.scrollLeft = st.scrolls[i]; }
+        });
+        if (st.activeTab && window.bootstrap && bootstrap.Tab) {
+            var tab = el.querySelector('.nav-link[data-bs-target="' + st.activeTab + '"]');
+            if (tab) { try { bootstrap.Tab.getOrCreateInstance(tab).show(); } catch (_) {} }
+        }
+        Object.keys(st.filters).forEach(function (id) {
+            var inp = el.querySelector('#' + CSS.escape(id));
+            if (!inp) { return; }
+            inp.value = st.filters[id].value || '';
+            if (inp.dataset.chipGroup && st.filters[id].chipVal) {
+                document.querySelectorAll(inp.dataset.chipGroup).forEach(function (b) {
+                    b.classList.toggle('on', (b.dataset.chipVal || '') === st.filters[id].chipVal);
+                });
+            }
+        });
+    }
+
+    function extractAndToastFlashes(doc) {
+        var hasError = false;
+        var count = 0;
+        doc.querySelectorAll('main > .alert.alert-dismissible[role="alert"]').forEach(function (al) {
+            var span = al.querySelector('span.flex-grow-1') || al;
+            var text = (span.textContent || '').trim();
+            if (!text) { return; }
+            var kind = al.classList.contains('alert-danger') ? 'err'
+                : (al.classList.contains('alert-warning') ? 'warn'
+                    : (al.classList.contains('alert-success') ? 'ok' : 'info'));
+            if (kind === 'err') { hasError = true; }
+            window.k6Toast(text, kind);
+            count++;
+        });
+        return {hasError: hasError, count: count};
+    }
+
+    function syncCsrf(doc) {
+        var fresh = doc.querySelector('meta[name="_csrf"]');
+        var cur = document.querySelector('meta[name="_csrf"]');
+        if (fresh && cur && fresh.content) { cur.content = fresh.content; }
+    }
+
+    function applyDocSwap(doc, selectors, meta) {
+        syncCsrf(doc);
+        var swapped = [];
+        selectors.forEach(function (sel) {
+            var oldEl = document.querySelector(sel);
+            var newEl = doc.querySelector(sel);
+            if (!oldEl) { return; }
+            if (!newEl) {
+                // Если элемент исчез в новом HTML (например, снят баннер паузы), скрываем его содержимое, сохраняя якорь
+                if (oldEl.dataset.ajaxKeepAnchor === 'true') { oldEl.innerHTML = ''; }
+                return;
+            }
+            closeDropdownsIn(oldEl);
+            var st = captureState(oldEl);
+            var imported = document.importNode(newEl, true);
+            oldEl.replaceWith(imported);
+            restoreState(imported, st);
+            if (window.k6InitSubtree) { window.k6InitSubtree(imported); }
+            swapped.push(imported);
+        });
+        // Переприменяем внешние фильтры таблиц к обновлённым строкам
+        document.querySelectorAll('[data-table-filter]').forEach(function (inp) {
+            if (typeof inp._k6ApplyFilter === 'function') { inp._k6ApplyFilter(); }
+        });
+        document.dispatchEvent(new CustomEvent('k6:swapped', {
+            detail: {
+                targets: swapped,
+                url: meta && meta.url ? meta.url : location.href,
+                doc: doc,
+                form: meta ? meta.form : null,
+                hasError: !!(meta && meta.hasError)
+            }
+        }));
+        return swapped;
+    }
+
+    var refreshInflight = Object.create(null);
+
+    window.k6AjaxRefresh = function (selectorSpec, url) {
+        var key = String(selectorSpec || '');
+        var prev = refreshInflight[key];
+        if (prev && prev.ctrl) {
+            try { prev.ctrl.abort(); } catch (_) {}
+        }
+        var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        var seq = (prev ? prev.seq : 0) + 1;
+        refreshInflight[key] = {ctrl: ctrl, seq: seq};
+
+        var selectors = parseSelectors(selectorSpec);
+        var targets = selectors.map(function (s) { return document.querySelector(s); }).filter(Boolean);
+        targets.forEach(function (el) { el.classList.add('k6-ajax-busy'); });
+        setBar(1);
+        return fetch(url || location.href, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
+            signal: ctrl ? ctrl.signal : undefined
+        }).then(function (res) {
+            if (!res.ok) { throw new Error('HTTP ' + res.status); }
+            return res.text().then(function (html) { return {html: html, url: res.url}; });
+        }).then(function (r) {
+            if (refreshInflight[key] && refreshInflight[key].seq !== seq) {
+                var staleErr = new Error('stale');
+                staleErr.aborted = true;
+                throw staleErr;
+            }
+            var finalUrl = new URL(r.url || url || location.href, location.origin);
+            if (finalUrl.pathname === '/login') {
+                location.href = finalUrl.href;
+                return [];
+            }
+            var doc = new DOMParser().parseFromString(r.html, 'text/html');
+            return applyDocSwap(doc, selectors, {url: finalUrl.href, form: null, hasError: false});
+        }).catch(function (err) {
+            if (err && (err.name === 'AbortError' || err.aborted)) {
+                var e = new Error('aborted');
+                e.aborted = true;
+                throw e;
+            }
+            throw err;
+        }).finally(function () {
+            if (refreshInflight[key] && refreshInflight[key].seq === seq) {
+                delete refreshInflight[key];
+                targets.forEach(function (el) { if (el.isConnected) { el.classList.remove('k6-ajax-busy'); } });
+            }
+            setBar(-1);
+        });
+    };
+
+    window.k6AjaxSubmit = function (form, submitter) {
+        var spec = (submitter && submitter.dataset && submitter.dataset.ajax) || (form.dataset && form.dataset.ajax);
+        var selectors = parseSelectors(spec);
+        var url = (submitter && submitter.getAttribute('formaction')) || form.getAttribute('action') || location.href;
+        var fd = buildFormData(form, submitter);
+        var dd = form.closest && form.closest('.dropdown');
+        if (dd) { closeDropdownsIn(dd); }
+        var unlock = lockBtn(submitter || form.querySelector('button[type="submit"]:not(:disabled)'));
+        var busyEls = selectors.map(function (s) { return document.querySelector(s); }).filter(Boolean);
+        busyEls.forEach(function (el) { el.classList.add('k6-ajax-busy'); });
+        window.K6.markBusy(selectors, 1);
+        setBar(1);
+
+        return fetch(url, {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
+            redirect: 'follow'
+        }).then(function (res) {
+            return res.text().then(function (html) { return {res: res, html: html}; });
+        }).then(function (r) {
+            var finalUrl = new URL(r.res.url || url, location.origin);
+            if (finalUrl.pathname === '/login') {
+                location.href = finalUrl.href;
+                return;
+            }
+            var doc = new DOMParser().parseFromString(r.html, 'text/html');
+            var allowCross = (form.dataset && form.dataset.ajaxAllowRedirect) || '';
+            if (spec !== 'toast' && finalUrl.pathname !== location.pathname && !allowCross) {
+                location.href = finalUrl.href;
+                return;
+            }
+            var flash = extractAndToastFlashes(doc);
+            if (!r.res.ok && flash.count === 0) {
+                flash.hasError = true;
+                window.k6Toast('Ошибка выполнения запроса (HTTP ' + r.res.status + ')', 'err');
+            }
+            if (!flash.hasError && flash.count === 0 && form.dataset && form.dataset.ajaxSuccess) {
+                window.k6Toast(form.dataset.ajaxSuccess, 'ok');
+            }
+            if (selectors.length > 0) {
+                applyDocSwap(doc, selectors, {url: finalUrl.href, form: form, hasError: flash.hasError});
+            } else {
+                syncCsrf(doc);
+                document.dispatchEvent(new CustomEvent('k6:swapped', {
+                    detail: {targets: [], url: finalUrl.href, doc: doc, form: form, hasError: flash.hasError}
+                }));
+            }
+            if (!flash.hasError && form.dataset && form.dataset.ajaxReset === 'true' && form.isConnected) {
+                form.reset();
+                form.querySelectorAll('.dropzone [data-dz-default]').forEach(function (lbl) {
+                    lbl.innerHTML = lbl.dataset.dzDefault;
+                });
+            }
+            var modalEl = form.closest && form.closest('.modal.show');
+            if (modalEl && (!flash.hasError || form.dataset.ajaxCloseModal === 'always') && window.bootstrap && bootstrap.Modal) {
+                try { bootstrap.Modal.getOrCreateInstance(modalEl).hide(); } catch (_) {}
+            }
+        }).catch(function () {
+            window.k6Toast('Не удалось выполнить запрос — проверьте связь с сервером', 'err');
+        }).finally(function () {
+            if (unlock) { unlock(); }
+            busyEls.forEach(function (el) { if (el.isConnected) { el.classList.remove('k6-ajax-busy'); } });
+            window.K6.markBusy(selectors, -1);
+            setBar(-1);
+            document.dispatchEvent(new CustomEvent('k6:ajax-done', {detail: {form: form}}));
+        });
+    };
+
+    document.addEventListener('submit', function (ev) {
+        var form = ev.target;
+        if (!form || form.tagName !== 'FORM' || ev.defaultPrevented) { return; }
+        var method = (form.method || 'get').toLowerCase();
+        if (method === 'get' && form.dataset && form.dataset.ajaxGet) {
+            ev.preventDefault();
+            var base = new URL(form.getAttribute('action') || location.href, location.origin);
+            var params = new URLSearchParams(new FormData(form));
+            var fullUrl = base.pathname + (params.toString() ? '?' + params.toString() : '') + (base.hash || '');
+            window.k6AjaxRefresh(form.dataset.ajaxGet, fullUrl).then(function () {
+                history.replaceState(null, '', fullUrl);
+            }).catch(function (err) {
+                if (err && err.aborted) { return; }
+                window.k6Toast('Не удалось обновить данные', 'err');
+            });
+            return;
+        }
+        if (method !== 'post') { return; }
+        var sub = ev.submitter || null;
+        if (sub && sub.dataset && sub.dataset.noAjax === 'true') { return; }
+        if (form.dataset && form.dataset.noAjax === 'true') { return; }
+        var spec = (sub && sub.dataset && sub.dataset.ajax) || (form.dataset && form.dataset.ajax);
+        if (!spec) { return; }
+        ev.preventDefault();
+        window.k6AjaxSubmit(form, sub);
+    });
+
+    document.addEventListener('click', function (ev) {
+        var a = ev.target && ev.target.closest ? ev.target.closest('a[data-ajax-get]') : null;
+        if (!a || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey || ev.button !== 0) { return; }
+        if (a.closest('.disabled')) { ev.preventDefault(); return; }
+        ev.preventDefault();
+        var href = a.getAttribute('href');
+        if (!href) { return; }
+        window.k6AjaxRefresh(a.dataset.ajaxGet, href).then(function () {
+            history.replaceState(null, '', href);
+        }).catch(function (err) {
+            if (err && err.aborted) { return; }
+            location.href = href;
+        });
+    });
+
+    document.addEventListener('change', function (ev) {
+        var el = ev.target;
+        if (!el || !el.dataset) { return; }
+        if (el.dataset.autoSubmit === 'change' && el.form) {
+            if (typeof el.form.requestSubmit === 'function') { el.form.requestSubmit(); } else { el.form.submit(); }
+            return;
+        }
+        if (el.tagName !== 'SELECT' || !el.dataset.ajaxGet) { return; }
+        var param = el.dataset.ajaxParam || el.name;
+        if (!param) { return; }
+        var u = new URL(location.href);
+        if (el.value) { u.searchParams.set(param, el.value); } else { u.searchParams.delete(param); }
+        var nextUrl = u.pathname + (u.search ? u.search : '') + (u.hash || '');
+        window.k6AjaxRefresh(el.dataset.ajaxGet, nextUrl).then(function () {
+            history.replaceState(null, '', nextUrl);
+        }).catch(function (err) {
+            if (err && err.aborted) { return; }
+            location.href = nextUrl;
         });
     });
 })();

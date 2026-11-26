@@ -483,7 +483,7 @@ public class ChartTemplateController {
 
     private List<RunOption> recentRuns(long scriptId) {
         List<RunOption> out = new ArrayList<>();
-        for (Run r : runs.findByScriptIdOrderByIdDesc(scriptId)) {
+        for (Run r : runs.findTop20ByScriptIdOrderByIdDesc(scriptId)) {
             Instant start = r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getStartedAt();
             if (start == null) {
                 continue;

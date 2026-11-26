@@ -215,7 +215,17 @@
                 if (current === p) { current = null; var k = Object.keys(files)[0]; if (k) { open(k); } else { showEmpty(); } }
                 renderFiles(); refreshFns();
             }
-            function showEmpty() { $('sb-cur').textContent = '—'; if (editor) { editor.setModel(monaco.editor.createModel('', 'plaintext')); editor.updateOptions({readOnly: true}); } }
+            var emptyModel = null;
+            function showEmpty() {
+                $('sb-cur').textContent = '—';
+                if (editor) {
+                    if (!emptyModel || emptyModel.isDisposed()) {
+                        emptyModel = monaco.editor.createModel('', 'plaintext');
+                    }
+                    editor.setModel(emptyModel);
+                    editor.updateOptions({readOnly: true});
+                }
+            }
             function open(p) {
                 if (!editor || !files[p]) { return; }
                 current = p; $('sb-cur').textContent = p;
@@ -230,7 +240,7 @@
             }
             function addFile(path, text, b64, size) {
                 path = path.replace(/^\/+/, '');
-                dirty = true;
+                setDirty(true);
                 if (models[path]) { models[path].dispose(); delete models[path]; }
                 files[path] = {text: text, b64: b64, size: size};
                 if (!entry || !files[entry]) { entry = isJs(path) ? path : entry; }
@@ -473,26 +483,46 @@
                 $('sb-run').disabled = on; $('sb-stop').disabled = !on;
             }
             function setStatus(text, cls) { var s = $('sb-status'); s.textContent = text; s.className = 'badge ' + cls; }
+            var pollTimer = null, pollErrors = 0, unloading = false, MAX_POLL_ERRORS = 5;
             function poll(from) {
+                if (unloading) { polling = false; return; }
                 polling = true;
-                fetch('/scripts/sandbox/' + sid + '/log?from=' + from).then(function (r) { return r.json(); }).then(function (c) {
+                fetch('/scripts/sandbox/' + sid + '/log?from=' + from, {credentials: 'same-origin'}).then(function (r) {
+                    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+                    return r.json();
+                }).then(function (c) {
+                    pollErrors = 0;
                     if (c.error) { showErr(c.error); polling = false; setRunning(false); return; }
-                    c.lines.forEach(logLine);
+                    (c.lines || []).forEach(logLine);
                     if (c.done) {
                         polling = false; setRunning(false);
                         var ok = c.exitCode === 0;
                         if (c.note) { logLine({t: Date.now(), level: 'WARN', text: c.note}); }
                         setStatus(ok ? 'завершён (код 0)' : 'код выхода ' + c.exitCode, ok ? 'text-bg-success' : 'text-bg-danger');
-                    } else { setTimeout(function () { poll(c.next); }, 600); }
-                }).catch(function () { setTimeout(function () { poll(from); }, 1500); });
+                    } else if (!unloading) {
+                        pollTimer = setTimeout(function () { poll(c.next); }, 600);
+                    }
+                }).catch(function (err) {
+                    if (unloading) { polling = false; return; }
+                    pollErrors++;
+                    if (pollErrors >= MAX_POLL_ERRORS) {
+                        polling = false;
+                        setRunning(false);
+                        setStatus('потеряна связь', 'text-bg-warning');
+                        showErr('Не удалось получить лог отладчика (' + (err && err.message ? err.message : 'ошибка сети') + ')');
+                        return;
+                    }
+                    pollTimer = setTimeout(function () { poll(from); }, 1500);
+                });
             }
             function run() {
                 if (polling) { return; }
                 showErr('');
                 if (!entry) { showErr('Выберите основной файл (звёздочка) среди .js-файлов'); return; }
                 $('sb-log').textContent = '';
+                pollErrors = 0;
                 setRunning(true); setStatus('выполняется…', 'text-bg-primary');
-                fetch('/scripts/sandbox/run', {method: 'POST', headers: headers(true), body: JSON.stringify({
+                fetch('/scripts/sandbox/run', {method: 'POST', credentials: 'same-origin', headers: headers(true), body: JSON.stringify({
                     files: payloadFiles(), entrypoint: entry, exec: $('sb-exec').value === 'default' ? '' : $('sb-exec').value, vus: +$('sb-vus').value || 1,
                     iterations: +$('sb-iter').value || 1, maxDurationSec: +$('sb-max').value || 300, env: envMap(), flags: flagList()})})
                     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
@@ -503,18 +533,28 @@
                     .catch(function (e) { showErr('Ошибка запроса: ' + e); setRunning(false); setStatus('не запущено', 'text-bg-secondary'); });
             }
             $('sb-run').onclick = run;
-            $('sb-stop').onclick = function () { if (sid) { fetch('/scripts/sandbox/' + sid + '/stop', {method: 'POST', headers: headers(false)}); } };
+            $('sb-stop').onclick = function () { if (sid) { fetch('/scripts/sandbox/' + sid + '/stop', {method: 'POST', credentials: 'same-origin', headers: headers(false)}); } };
+            var saving = false;
             $('sb-save').onclick = function () {
+                if (saving) { return; }
                 showErr('');
                 var name = existing ? existing.name : $('sb-name').value.trim();
                 if (!name) { showErr('Введите имя скрипта'); $('sb-name').focus(); return; }
                 if (!entry) { showErr('Выберите основной файл (звёздочка) среди .js-файлов'); return; }
-                fetch('/scripts/sandbox/save', {method: 'POST', headers: headers(true),
+                saving = true;
+                var saveBtn = $('sb-save');
+                var origHtml = saveBtn.innerHTML;
+                saveBtn.disabled = true;
+                if (window.K6 && window.K6.setBtnSpinner) { window.K6.setBtnSpinner(saveBtn, 'Сохранение…'); }
+                fetch('/scripts/sandbox/save', {method: 'POST', credentials: 'same-origin', headers: headers(true),
                     body: JSON.stringify({name: name, description: '', entrypoint: entry, files: payloadFiles(),
                         scriptId: existing ? existing.id : null, comment: existing ? $('sb-comment').value : '', env: envMap()})})
                     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
-                    .then(function (res) { if (res.ok) { dirty = false; location.href = res.j.redirect; } else { showErr(res.j.error || 'Не удалось сохранить'); } })
-                    .catch(function (e) { showErr('Ошибка запроса: ' + e); });
+                    .then(function (res) {
+                        if (res.ok) { setDirty(false); location.href = res.j.redirect; }
+                        else { showErr(res.j.error || 'Не удалось сохранить'); saving = false; saveBtn.disabled = false; saveBtn.innerHTML = origHtml; }
+                    })
+                    .catch(function (e) { showErr('Ошибка запроса: ' + e); saving = false; saveBtn.disabled = false; saveBtn.innerHTML = origHtml; });
             };
             $('sb-env').addEventListener('input', function () { setDirty(true); });
             document.addEventListener('keydown', function (e) {
@@ -523,6 +563,9 @@
                 else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); $('sb-save').click(); }
             });
             window.addEventListener('beforeunload', function (e) {
+                unloading = true;
+                clearTimeout(pollTimer);
+                clearTimeout(fnTimer);
                 if (dirty) { e.preventDefault(); e.returnValue = ''; }
             });
 

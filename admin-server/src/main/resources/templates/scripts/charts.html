@@ -133,7 +133,8 @@
                                 <li><button type="button" class="dropdown-item small" id="cb-disable-all"><i class="bi bi-eye-slash me-2"></i>Скрыть все из отчёта</button></li>
                                 <li><hr class="dropdown-divider"></li>
                                 <li>
-                                    <form th:action="@{/scripts/{id}/charts/delete-all(id=${script.id})}" method="post" class="m-0"
+                                    <form id="cb-delete-all-form" th:action="@{/scripts/{id}/charts/delete-all(id=${script.id})}" method="post" class="m-0"
+                                          data-ajax="toast"
                                           data-confirm="Удалить ВСЕ свои графики этого скрипта? Это действие нельзя отменить.">
                                         <button type="submit" class="dropdown-item small text-danger"><i class="bi bi-trash me-2"></i>Удалить все графики</button>
                                     </form>
@@ -360,7 +361,8 @@
     <!-- Модальное окно импорта дашборда Grafana -->
     <div class="modal fade" id="cb-grafana-modal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-centered">
-            <form class="modal-content" th:action="@{/scripts/{id}/charts/import-grafana(id=${script.id})}" method="post" enctype="multipart/form-data">
+            <form class="modal-content" id="cb-grafana-form" th:action="@{/scripts/{id}/charts/import-grafana(id=${script.id})}" method="post" enctype="multipart/form-data"
+                  data-ajax="#cb-init-templates,#cb-init-variables" data-ajax-reset="true">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-upload me-2 text-primary"></i>Импорт дашборда Grafana</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
@@ -372,7 +374,7 @@
                     </div>
                     <div class="dropzone mb-3" id="cb-grafana-dz">
                         <i class="bi bi-filetype-json"></i>
-                        <div id="cb-grafana-dz-lbl">Перетащите JSON-файл дашборда сюда или <u>выберите на компьютере</u></div>
+                        <div id="cb-grafana-dz-lbl" data-dz-default="Перетащите JSON-файл дашборда сюда или <u>выберите на компьютере</u>">Перетащите JSON-файл дашборда сюда или <u>выберите на компьютере</u></div>
                         <input class="d-none" type="file" name="file" id="cb-grafana-file" accept=".json,application/json">
                     </div>
                     <label class="form-label small mb-1" for="cb-grafana-json">Или вставьте JSON-текст</label>

@@ -15,6 +15,13 @@ public final class ExecutionSegments {
     /** Разбиение отрезка [0,1] на сегменты. */
     public record Plan(List<Fraction> boundaries) {
 
+        public Plan {
+            boundaries = boundaries == null ? List.of() : List.copyOf(boundaries);
+            if (boundaries.size() < 2) {
+                throw new IllegalArgumentException("План сегментов должен содержать минимум две границы");
+            }
+        }
+
         public int size() {
             return boundaries.size() - 1;
         }
@@ -85,7 +92,7 @@ public final class ExecutionSegments {
     /** Разбор sequence «0,1/3,1» обратно в план (для восстановления из snapshot). */
     public static Plan parseSequence(String sequence) {
         List<Fraction> b = new ArrayList<>();
-        for (String p : sequence.split(",")) {
+        for (String p : sequence.split(",", -1)) {
             b.add(Fraction.parse(p));
         }
         for (int i = 1; i < b.size(); i++) {
@@ -101,7 +108,7 @@ public final class ExecutionSegments {
 
     /** Разбор «a:b» в пару дробей. */
     public static Fraction[] parseSegment(String segment) {
-        String[] p = segment.split(":");
+        String[] p = segment.split(":", -1);
         if (p.length != 2) {
             throw new IllegalArgumentException("Сегмент должен иметь вид a:b");
         }

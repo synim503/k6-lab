@@ -47,9 +47,16 @@ public final class IterationEstimator {
         if (scenarios == null || !scenarios.isObject()) {
             return total(fallbackCfg, fallbackSteps);
         }
+        java.util.Map<String, GeneratedConfig.OpPlan> byName = new java.util.HashMap<>();
+        if (fallbackCfg != null) {
+            for (GeneratedConfig.OpPlan p : fallbackCfg.operations()) {
+                byName.put(p.name(), p);
+            }
+        }
         double sum = 0;
         for (var it = scenarios.fields(); it.hasNext(); ) {
-            JsonNode sc = it.next().getValue();
+            var entry = it.next();
+            JsonNode sc = entry.getValue();
             List<ScenarioPlan.Pt> poly = ScenarioPlan.polyline(sc);
             if (!poly.isEmpty()) {
                 for (int i = 0; i + 1 < poly.size(); i++) {
@@ -64,6 +71,8 @@ public final class IterationEstimator {
                     sum += sc.path("iterations").asDouble(0);
                 } else if ("per-vu-iterations".equals(ex)) {
                     sum += sc.path("vus").asDouble(0) * sc.path("iterations").asDouble(0);
+                } else if (byName.containsKey(entry.getKey())) {
+                    sum += iterations(byName.get(entry.getKey()).ratesPerSec(), fallbackSteps);
                 }
             }
         }

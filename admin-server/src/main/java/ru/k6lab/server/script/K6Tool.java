@@ -48,6 +48,14 @@ public class K6Tool {
     private final StorageService storage;
     private volatile Path cached;
     private volatile long cachedAt;
+    private volatile String cachedVersion;
+    private volatile Path cachedVersionPath;
+    private static final int MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+    private static final java.util.concurrent.ExecutorService STREAM_READER = java.util.concurrent.Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "k6tool-io");
+        t.setDaemon(true);
+        return t;
+    });
 
     public K6Tool(AppProperties props, DistributionService distributions, StorageService storage) {
         this.props = props;
@@ -157,9 +165,18 @@ public class K6Tool {
 
     public Optional<String> version() {
         return locate().map(p -> {
+            if (p.equals(cachedVersionPath) && cachedVersion != null) {
+                return cachedVersion;
+            }
             try {
                 Result r = exec(List.of(p.toString(), "version"), null, Duration.ofSeconds(10));
-                return r.ok() ? r.stdout().lines().findFirst().orElse("") : null;
+                if (r.ok()) {
+                    String v = r.stdout().lines().findFirst().orElse("");
+                    cachedVersionPath = p;
+                    cachedVersion = v;
+                    return v;
+                }
+                return null;
             } catch (IOException e) {
                 return null;
             }
@@ -234,27 +251,42 @@ public class K6Tool {
         env.put("K6_AUTO_EXTENSION_RESOLUTION", "false");
         Process p = pb.start();
         p.getOutputStream().close();
-        var out = java.util.concurrent.CompletableFuture.supplyAsync(() -> read(p.getInputStream()));
-        var err = java.util.concurrent.CompletableFuture.supplyAsync(() -> read(p.getErrorStream()));
+        var out = java.util.concurrent.CompletableFuture.supplyAsync(() -> read(p.getInputStream()), STREAM_READER);
+        var err = java.util.concurrent.CompletableFuture.supplyAsync(() -> read(p.getErrorStream()), STREAM_READER);
         try {
             if (!p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                 p.destroyForcibly();
+                out.cancel(true);
+                err.cancel(true);
                 return new Result(-1, "", "", true);
             }
             return new Result(p.exitValue(), out.get(5, TimeUnit.SECONDS), err.get(5, TimeUnit.SECONDS), false);
         } catch (InterruptedException e) {
             p.destroyForcibly();
+            out.cancel(true);
+            err.cancel(true);
             Thread.currentThread().interrupt();
             throw new IOException("Прервано", e);
         } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
             p.destroyForcibly();
+            out.cancel(true);
+            err.cancel(true);
             throw new IOException("Не удалось прочитать вывод k6", e);
         }
     }
 
     private static String read(InputStream in) {
         try (in) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                int remaining = MAX_OUTPUT_BYTES - bos.size();
+                if (remaining > 0) {
+                    bos.write(buf, 0, Math.min(n, remaining));
+                }
+            }
+            return bos.toString(StandardCharsets.UTF_8);
         } catch (IOException e) {
             return "";
         }

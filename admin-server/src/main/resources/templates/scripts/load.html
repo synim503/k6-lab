@@ -6,19 +6,22 @@
 <th:block layout:fragment="content">
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='load')}"></th:block>
 
-    <div class="alert alert-danger py-2" th:each="e : ${plan.errors}" th:text="${e}"></div>
-    <div class="alert alert-info py-2 small d-flex flex-wrap align-items-center justify-content-between gap-2"
-         th:if="${!baseDefined and hasReadyProfile and loadedProfileId == null}">
-        <span><i class="bi bi-collection me-1"></i>Базовая нагрузка скрипта не задана, но у скрипта есть готовые профили (<b th:text="${profiles.size()}"></b>) — можно запускать тест прямо по любому профилю или выбрать профиль ниже, чтобы посмотреть его конфиг k6.</span>
-        <a class="btn btn-sm btn-success" th:href="@{/scripts/{id}/run(id=${script.id})}"><i class="bi bi-play-fill me-1"></i>Запустить по профилю</a>
-    </div>
-    <div class="alert alert-warning py-2 small" th:if="${!staleOps.isEmpty()}">
-        <i class="bi bi-info-circle me-1"></i>В последней версии скрипта нет функций операций:
-        <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
-        Они убраны из списка и не участвуют в запуске. Если вернуть версию с этими функциями (откат), их нагрузка вернётся, пока вы не сохранили форму.
+    <div id="ld-alerts-wrap">
+        <div class="alert alert-danger py-2" th:each="e : ${plan.errors}" th:text="${e}"></div>
+        <div class="alert alert-info py-2 small d-flex flex-wrap align-items-center justify-content-between gap-2"
+             th:if="${!baseDefined and hasReadyProfile and loadedProfileId == null}">
+            <span><i class="bi bi-collection me-1"></i>Базовая нагрузка скрипта не задана, но у скрипта есть готовые профили (<b th:text="${profiles.size()}"></b>) — можно запускать тест прямо по любому профилю или выбрать профиль ниже, чтобы посмотреть его конфиг k6.</span>
+            <a class="btn btn-sm btn-success" th:href="@{/scripts/{id}/run(id=${script.id})}"><i class="bi bi-play-fill me-1"></i>Запустить по профилю</a>
+        </div>
+        <div class="alert alert-warning py-2 small" th:if="${!staleOps.isEmpty()}">
+            <i class="bi bi-info-circle me-1"></i>В последней версии скрипта нет функций операций:
+            <code th:each="n : ${staleOps}" th:text="${n}" class="me-2"></code>
+            Они убраны из списка и не участвуют в запуске. Если вернуть версию с этими функциями (откат), их нагрузка вернётся, пока вы не сохранили форму.
+        </div>
     </div>
 
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post"
+          data-ajax="#ld-alerts-wrap,#ld-prof-init,#ld-prof-switcher-btn,#ld-base-wrap,#ld-sticky-actions,#ld-prof-base-row,#adv-summary-badges,#t-config,#t-req"
           th:attr="data-from-profile=${formDirty != null ? 'true' : null}">
 
         <!-- Верхняя панель профилей нагрузки (единый переключатель + быстрое сохранение) -->
@@ -57,6 +60,7 @@
         </div>
 
         <!-- Разовая ручная отправка параметров из базового профиля в остальные профили (сворачиваемая, чтобы не загораживать график) -->
+        <div id="ld-base-wrap">
         <div class="card mb-3 border-primary-subtle bg-light-subtle" id="ld-base-profile-box"
              th:if="${loadedProfileId == null and !profiles.isEmpty()}">
             <div class="card-body py-2 px-3">
@@ -105,6 +109,7 @@
                     </div>
                 </details>
             </div>
+        </div>
         </div>
         <input type="hidden" id="ld-base-warmup-dur" name="baseWarmupDuration" th:value="${form.baseWarmupDuration}">
         <div class="d-none" id="ld-prof-init" th:text="${profilesJson}">[]</div>
@@ -466,6 +471,7 @@
                     <div class="small text-muted mb-2">
                         В PromQL доступны подстановки <code>{range}</code> (окно ступени/автостопа, например <code>60s</code>), <code>{run_id}</code> и переменные скрипта (<code>$instance</code>).
                         Если запрос возвращает несколько серий (несколько серверов), проверяется наихудшая серия и её имя выводится в отчёте.
+                        Разовые короткие всплески игнорируются: ступень считается нарушенной и срабатывает автостоп, только если порог превышен устойчиво (подряд не меньше заданного числа проверок).
                     </div>
                     <div id="ld-cc-rows" class="d-flex flex-column gap-2">
                         <div class="ld-cc-row ld-cc-card" th:each="cc, st : *{stop.customChecks}">
@@ -557,7 +563,7 @@
         </div>
 
         <!-- Липкая панель сохранения -->
-        <div class="sticky-actions">
+        <div class="sticky-actions" id="ld-sticky-actions">
             <th:block th:if="${loadedProfileId != null}">
                 <button type="submit" class="btn btn-primary" id="ld-primary-save" formnovalidate
                         th:formaction="@{/scripts/{id}/load/profile(id=${script.id})}"
@@ -594,11 +600,11 @@
                 <div class="modal-header py-2 px-3">
                     <h5 class="modal-title fs-6 fw-bold">
                         <i class="bi bi-collection me-2 text-primary"></i>Профили нагрузки
-                        <span class="badge text-bg-light border ms-1" th:text="${profiles.size()}">0</span>
+                        <span class="badge text-bg-light border ms-1" id="ld-prof-modal-cnt" th:text="${profiles.size()}">0</span>
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
                 </div>
-                <div class="ld-prof-modal-toolbar" th:if="${!profiles.isEmpty()}">
+                <div class="ld-prof-modal-toolbar" id="ld-prof-modal-toolbar" th:classappend="${profiles.isEmpty()} ? ' d-none'">
                     <div class="input-group input-group-sm" style="max-width:300px">
                         <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
                         <input class="form-control" type="search" id="ld-prof-search" placeholder="Поиск профиля…" aria-label="Поиск профиля">
@@ -632,7 +638,7 @@
                     <div class="text-center text-muted py-4 small d-none" id="ld-prof-empty-filter">
                         <i class="bi bi-search me-1"></i>По запросу профили не найдены.
                     </div>
-                    <div class="text-center text-muted py-4 small" th:if="${profiles.isEmpty()}">
+                    <div class="text-center text-muted py-4 small" id="ld-prof-empty-all" th:classappend="${!profiles.isEmpty()} ? ' d-none'">
                         <i class="bi bi-inbox me-1"></i>У скрипта пока нет сохранённых профилей — задайте имя вверху и нажмите «Сохранить профиль» или воспользуйтесь импортом JSON.
                     </div>
                 </div>
@@ -648,7 +654,8 @@
     <div class="modal fade" id="ld-import-modal" tabindex="-1" aria-hidden="true"
          th:attr="data-auto-open=${importJson != null}">
         <div class="modal-dialog modal-lg modal-dialog-centered">
-            <form class="modal-content" th:action="@{/scripts/{id}/load/profiles/import(id=${script.id})}" method="post" enctype="multipart/form-data">
+            <form class="modal-content" th:action="@{/scripts/{id}/load/profiles/import(id=${script.id})}" method="post" enctype="multipart/form-data"
+                  data-ajax="#ld-alerts-wrap,#ld-prof-init,#ld-prof-switcher-btn,#ld-base-wrap,#ld-sticky-actions" data-ajax-reset="true">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-upload me-2 text-primary"></i>Импорт и экспорт профилей (JSON)</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
@@ -660,7 +667,7 @@
                     </div>
                     <div class="dropzone mb-3" id="ld-import-dz">
                         <i class="bi bi-filetype-json"></i>
-                        <div id="ld-import-dz-lbl">Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u></div>
+                        <div id="ld-import-dz-lbl" data-dz-default="Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u>">Перетащите JSON-файл профилей сюда или <u>выберите на компьютере</u></div>
                         <input class="d-none" type="file" name="file" id="ld-import-file" accept=".json,application/json">
                     </div>
                     <label class="form-label small mb-1" for="ld-import-json">Или вставьте JSON-текст</label>
@@ -819,9 +826,11 @@
     <!-- Для опытных: итоговый конфиг k6 и ресурсы -->
     <details class="adv-box mt-4" id="adv-box" th:attr="data-open=${configTabOpen != null}">
         <summary><i class="bi bi-sliders2 me-1"></i>Для опытных: конфиг k6 и ресурсы
-            <span class="badge text-bg-info ms-2" th:if="${planFromProfile and loadedProfile != null}" th:text="'профиль: ' + ${loadedProfile}"></span>
-            <span class="badge text-bg-warning ms-2" th:if="${!plan.warnings.isEmpty()}" th:text="${plan.warnings.size()} + ' ' + (${plan.warnings.size() == 1} ? 'замечание' : 'замечаний')"></span>
-            <span class="badge text-bg-primary ms-2" th:if="${!overridePaths.isEmpty()}">есть ручные правки</span></summary>
+            <span id="adv-summary-badges">
+                <span class="badge text-bg-info ms-2" th:if="${planFromProfile and loadedProfile != null}" th:text="'профиль: ' + ${loadedProfile}"></span>
+                <span class="badge text-bg-warning ms-2" th:if="${!plan.warnings.isEmpty()}" th:text="${plan.warnings.size()} + ' ' + (${plan.warnings.size() == 1} ? 'замечание' : 'замечаний')"></span>
+                <span class="badge text-bg-primary ms-2" th:if="${!overridePaths.isEmpty()}">есть ручные правки</span>
+            </span></summary>
         <div class="pt-3">
             <div class="alert alert-warning py-2 small" th:each="w : ${plan.warnings}" th:text="${w}"></div>
             <ul class="nav nav-tabs mb-3" id="adv-tabs">
@@ -837,7 +846,9 @@
                     </div>
                     <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!planFromProfile and !overridePaths.isEmpty()}">
                         <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
-                        <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" data-confirm="Сбросить ручные правки и вернуть расчётный конфиг?">
+                        <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0"
+                              data-ajax="#adv-summary-badges,#t-config"
+                              data-confirm="Сбросить ручные правки и вернуть расчётный конфиг?">
                             <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button>
                         </form>
                     </div>
@@ -850,7 +861,8 @@
                     </div>
                     <th:block th:if="${editedConfig != null or plan.configJson != null}">
                         <div class="small text-muted mb-2" th:unless="${planFromProfile}">Итоговый конфиг k6, который уйдёт на генераторы. Правится только то, чего нет в конструкторе: сохраняется лишь отличие от расчётного конфига, поэтому правки остаются при изменении операций. Конфиг проверяет сам k6.</div>
-                        <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post">
+                        <form id="cfg-form" th:action="@{/scripts/{id}/k6-config(id=${script.id})}" method="post"
+                              data-ajax="#adv-summary-badges,#t-config">
                             <input type="hidden" name="config" id="cfg-value" th:value="${editedConfig != null ? editedConfig : plan.configJson}">
                             <div id="config-editor" style="height: 55vh; min-height: 320px; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden"
                                  th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson},
@@ -953,19 +965,38 @@
                 });
             }
 
-            if (cfgForm && cfgVal) {
-                cfgForm.addEventListener('submit', function () {
-                    if (ed) { cfgVal.value = ed.getValue(); }
-                    else if (fallbackTa) { cfgVal.value = fallbackTa.value; }
-                });
+            function bindCfgControls() {
+                box = document.getElementById('config-editor');
+                cfgForm = document.getElementById('cfg-form');
+                cfgVal = document.getElementById('cfg-value');
+                if (cfgForm && cfgVal && cfgForm.dataset.k6CfgBound !== '1') {
+                    cfgForm.dataset.k6CfgBound = '1';
+                    cfgForm.addEventListener('submit', function () {
+                        if (ed) { cfgVal.value = ed.getValue(); }
+                        else if (fallbackTa) { cfgVal.value = fallbackTa.value; }
+                    });
+                }
+                var cfgCopyBtn = document.getElementById('cfg-copy-btn');
+                if (cfgCopyBtn && cfgCopyBtn.dataset.k6CfgBound !== '1') {
+                    cfgCopyBtn.dataset.k6CfgBound = '1';
+                    cfgCopyBtn.addEventListener('click', function () {
+                        var txt = ed ? ed.getValue() : (fallbackTa ? fallbackTa.value : (cfgVal ? cfgVal.value : ''));
+                        if (window.k6Copy) { window.k6Copy(txt, cfgCopyBtn); }
+                    });
+                }
             }
-            var cfgCopyBtn = document.getElementById('cfg-copy-btn');
-            if (cfgCopyBtn) {
-                cfgCopyBtn.addEventListener('click', function () {
-                    var txt = ed ? ed.getValue() : (fallbackTa ? fallbackTa.value : (cfgVal ? cfgVal.value : ''));
-                    if (window.k6Copy) { window.k6Copy(txt, cfgCopyBtn); }
-                });
-            }
+            bindCfgControls();
+
+            document.addEventListener('k6:swapped', function (ev) {
+                var targets = (ev.detail && ev.detail.targets) || [];
+                var hit = targets.some(function (t) { return t && (t.id === 't-config' || t.querySelector('#config-editor')); });
+                if (!hit) { return; }
+                if (ed) { try { ed.dispose(); } catch (_) {} ed = null; }
+                fallbackTa = null;
+                loading = false;
+                bindCfgControls();
+                if (adv && adv.open) { ensureEditor(); }
+            });
 
             function openConfigSection() {
                 if (!adv) { return; }

@@ -88,10 +88,14 @@ public class LoadProfileStore {
         if (clash != null && clash > 0) {
             throw new IllegalArgumentException("Профиль с именем «" + n + "» уже существует");
         }
-        int upd = jdbc.update("update load_profile set name = ?, updated_at = now(), updated_by = ? where script_id = ? and id = ?",
-                n, user, scriptId, id);
-        if (upd == 0) {
-            throw new IllegalArgumentException("Профиль не найден");
+        try {
+            int upd = jdbc.update("update load_profile set name = ?, updated_at = now(), updated_by = ? where script_id = ? and id = ?",
+                    n, user, scriptId, id);
+            if (upd == 0) {
+                throw new IllegalArgumentException("Профиль не найден");
+            }
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw new IllegalArgumentException("Профиль с именем «" + n + "» уже существует");
         }
         return find(scriptId, id).orElseThrow();
     }
@@ -105,10 +109,14 @@ public class LoadProfileStore {
         for (int i = 2; names.contains(copyName); i++) {
             copyName = truncateName(src.name(), " (копия " + i + ")");
         }
-        long newId = jdbc.queryForObject(
-                "insert into load_profile (script_id, name, data, created_by, updated_by) values (?, ?, ?, ?, ?) returning id",
-                Long.class, scriptId, copyName, src.data(), user, user);
-        return find(scriptId, newId).orElseThrow();
+        try {
+            long newId = jdbc.queryForObject(
+                    "insert into load_profile (script_id, name, data, created_by, updated_by) values (?, ?, ?, ?, ?) returning id",
+                    Long.class, scriptId, copyName, src.data(), user, user);
+            return find(scriptId, newId).orElseThrow();
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw new IllegalArgumentException("Конфликт имени при копировании профиля «" + copyName + "», повторите попытку");
+        }
     }
 
     private static String truncateName(String base, String suffix) {

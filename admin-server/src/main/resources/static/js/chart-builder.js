@@ -8,8 +8,11 @@
     var baseUrl = root.dataset.baseUrl; // e.g. /scripts/5/charts
     var promConfigured = root.dataset.promConfigured === 'true';
     var isLightTheme = root.dataset.chartTheme === 'LIGHT';
-    var csrfMeta = document.querySelector('meta[name="_csrf"]');
-    var csrfToken = csrfMeta ? csrfMeta.content : '';
+    function currentCsrf() {
+        if (window.K6 && window.K6.getCsrf) { return window.K6.getCsrf().token; }
+        var m = document.querySelector('meta[name="_csrf"]');
+        return m ? m.content : '';
+    }
 
     var PALETTE = ['#73BF69', '#FADE2A', '#5794F2', '#FF9830', '#F2495C', '#B877D9', '#8AB8FF', '#FF780A'];
     var BUILTIN_VARS = { __interval: 1, __rate_interval: 1, __range: 1, __range_s: 1, __interval_ms: 1, __range_ms: 1, __all: 1 };
@@ -151,6 +154,33 @@
     var elVarNewVal = document.getElementById('cb-var-new-val');
 
     var elStudio = document.getElementById('cb-studio');
+    document.addEventListener('k6:swapped', function (ev) {
+        var f = ev.detail && ev.detail.form;
+        if (!f || ev.detail.hasError) { return; }
+        if (f.id === 'cb-delete-all-form') {
+            templates = [];
+            checkedIds.clear();
+            selectedId = null;
+            renderSummary();
+            renderList();
+            loadNew();
+        } else if (f.id === 'cb-grafana-form') {
+            templates = parseJsonEl('cb-init-templates', templates);
+            variables = parseJsonEl('cb-init-variables', variables);
+            checkedIds.clear();
+            renderSummary();
+            renderList();
+            renderVariables();
+            if (templates.length > 0 && selectedId == null) {
+                loadTemplate(templates[0].id, false);
+            } else if (selectedId != null && !isDirty() && templates.some(function (t) { return t.id === selectedId; })) {
+                loadTemplate(selectedId, false);
+            } else {
+                renderChartVars();
+                renderQueries();
+            }
+        }
+    });
     var elStudioMode = document.getElementById('cb-studio-mode');
     var elStudioEditBtns = document.getElementById('cb-studio-edit-btns');
     var elName = document.getElementById('cb-name');
@@ -213,7 +243,8 @@
             headers: { 'Accept': 'application/json' }
         };
         if (signal) { opts.signal = signal; }
-        if (csrfToken) { opts.headers['X-CSRF-TOKEN'] = csrfToken; }
+        var tok = currentCsrf();
+        if (tok) { opts.headers['X-CSRF-TOKEN'] = tok; }
         if (body !== undefined) {
             opts.headers['Content-Type'] = 'application/json';
             opts.body = JSON.stringify(body);

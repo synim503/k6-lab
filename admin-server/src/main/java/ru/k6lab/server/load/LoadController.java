@@ -115,14 +115,14 @@ public class LoadController {
             if (name.isEmpty() || name.length() > 120) {
                 throw new IllegalArgumentException("Название профиля: от 1 до 120 символов");
             }
-            java.util.Map<String, String> parsedEnv = LoadForm.parseKv(f.getEnvText());
             f.getOps().removeIf(LoadForm.OpForm::blank);
             f.getOps().forEach(LoadForm.OpForm::parseScenario); // ошибка в JSON параметров сценария - сразу понятным сообщением
             if (f.getOps().stream().noneMatch(LoadForm.OpForm::isEnabled)) {
                 throw new IllegalArgumentException("В профиле нет включённых операций");
             }
-            LoadForm toStore = LoadJson.fromJson(LoadJson.toJson(f));
-            var saved = profiles.save(id, name, LoadJson.toJson(toStore), user == null ? "system" : user.getName());
+            // Валидируем профиль (операции, исполнители, env, секреты) до сохранения, чтобы битый профиль не падал на запуске по расписанию
+            load.build(id, f);
+            var saved = profiles.save(id, name, LoadJson.toJson(f), user == null ? "system" : user.getName());
             savedProfileId = saved.id();
             String msg = saved.updated() ? "Профиль «" + name + "» обновлён" : "Профиль «" + name + "» сохранён";
             model.addAttribute("info", msg);
@@ -381,7 +381,10 @@ public class LoadController {
             Files.createDirectories(dir.resolve("__admin"));
             Files.write(dir.resolve("__admin/admin.js"), helper.content());
             K6Tool.Result r = k6.requirements(dir, plan.version().getEntrypoint(), configJson);
-            if (!r.ok() && !r.timedOut()) {
+            if (r.timedOut()) {
+                return "Проверка конфигурации через k6 inspect превысила таймаут (60 с)";
+            }
+            if (!r.ok()) {
                 String s = r.stderr().isBlank() ? r.stdout() : r.stderr();
                 return s.strip().lines().reduce((a, b) -> b).orElse("ошибка");
             }
@@ -474,7 +477,13 @@ public class LoadController {
     public ResponseEntity<String> configJson(@PathVariable Long id, @RequestParam(required = false) Long profile) {
         RunPlan plan = planFor(id, scripts.get(id).getGeneratorCount(), profile);
         if (plan.configJson() == null) {
-            return ResponseEntity.unprocessableEntity().body("{\"error\":\"" + String.join("; ", plan.errors()).replace("\"", "'") + "\"}");
+            try {
+                String body = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .writeValueAsString(java.util.Map.of("error", String.join("; ", plan.errors())));
+                return ResponseEntity.unprocessableEntity().body(body);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                return ResponseEntity.unprocessableEntity().body("{\"error\":\"Ошибка формирования конфигурации\"}");
+            }
         }
         String fname = profile == null ? "k6-config-" + id + ".json" : "k6-config-" + id + "-profile-" + profile + ".json";
         return ResponseEntity.ok()

@@ -30,9 +30,11 @@ public class GeneratorMetricsService {
     public record Row(long generatorId, Instant ts, Messages.Heartbeat hb, int activeRuns) {
     }
 
+    private static final int MAX_BUFFERED = 50_000;
     private final JdbcTemplate jdbc;
     private final ru.k6lab.server.settings.SettingsService settings;
     private final Queue<Row> buffer = new ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.atomic.AtomicInteger bufferSize = new java.util.concurrent.atomic.AtomicInteger();
     private final Map<Long, Row> latest = new ConcurrentHashMap<>();
 
     public GeneratorMetricsService(JdbcTemplate jdbc, ru.k6lab.server.settings.SettingsService settings) {
@@ -43,7 +45,11 @@ public class GeneratorMetricsService {
     public void record(long generatorId, Messages.Heartbeat hb, int activeRuns) {
         Row row = new Row(generatorId, Instant.now(), hb, activeRuns);
         latest.put(generatorId, row);
+        if (bufferSize.get() >= MAX_BUFFERED && buffer.poll() != null) {
+            bufferSize.decrementAndGet();
+        }
         buffer.add(row);
+        bufferSize.incrementAndGet();
     }
 
     public Row latest(long generatorId) {
@@ -59,6 +65,7 @@ public class GeneratorMetricsService {
         List<Row> batch = new ArrayList<>();
         Row r;
         while ((r = buffer.poll()) != null && batch.size() < 5000) {
+            bufferSize.decrementAndGet();
             batch.add(r);
         }
         if (batch.isEmpty()) {

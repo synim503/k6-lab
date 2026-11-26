@@ -118,8 +118,9 @@ public class RunPlanner {
                 gen = K6ConfigGenerator.generate(new ConfigInput(specs, steps, GRACEFUL_STOP_SEC, GRACEFUL_RAMP_DOWN_SEC,
                         generatorCount, 1.5, 3, false)); // время SLA - по http_req_duration, admin.js в расчётах не участвует
                 json = K6ConfigGenerator.toJson(gen);
-                // ручные правки конфига k6 (maxVUs и т.п.) накладываются поверх расчётного конфига
-                var applied = K6ConfigOverrides.apply(gen.config(), script.getK6Overrides());
+                // ручные правки конфига k6 (maxVUs и т.п.) применяются только к базовой нагрузке, не протекая в независимые профили
+                java.util.Map<String, Object> effectiveOverrides = built == null ? script.getK6Overrides() : java.util.Map.of();
+                var applied = K6ConfigOverrides.apply(gen.config(), effectiveOverrides);
                 finalConfig = applied.config();
                 if (!settings.urlNameTag() && (dropNameTag(gen.config()) | dropNameTag(finalConfig))) {
                     json = K6ConfigGenerator.toJson(gen);
@@ -137,7 +138,7 @@ public class RunPlanner {
                         steps = List.of(new StepPlan(1, 100, ramp, (int) Math.max(1, Math.min(Integer.MAX_VALUE, spanSec - ramp)), "100%"));
                     }
                 }
-                overridePaths = K6ConfigOverrides.paths(script.getK6Overrides());
+                overridePaths = K6ConfigOverrides.paths(effectiveOverrides);
                 if (!overridePaths.isEmpty()) {
                     json = OVERRIDE_WRITER.writeValueAsString(finalConfig);
                     warnings.add("Применены ручные правки конфига k6: " + String.join(", ", overridePaths));

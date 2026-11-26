@@ -79,9 +79,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         if (session == null) {
             return;
         }
-        // если соединение уже заменено новым, статус не трогаем
-        if (registry.unregister(session)) {
-            state.markOffline(session.generatorId());
+        // если соединение уже заменено новым (в т.ч. в окне гонки после unregister), статус не трогаем
+        if (registry.unregister(session) && state.markOfflineIfDisconnected(session.generatorId(), registry::isConnected)) {
             publisher.publishEvent(new AgentLifecycleEvents.Disconnected(session.generatorId(), session.generatorName()));
             log.info("Агент {} отключился ({})", session.generatorName(), status);
         }

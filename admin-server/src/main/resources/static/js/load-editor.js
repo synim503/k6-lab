@@ -1272,6 +1272,8 @@
         var idx = nextIndex();
         var r2 = row.cloneNode(true);
         r2.classList.remove('is-collapsed');
+        r2.querySelectorAll('.is-invalid').forEach(function (el) { el.classList.remove('is-invalid'); });
+        r2.querySelectorAll('.op-calc-hint').forEach(function (el) { el.textContent = ''; });
         r2.querySelectorAll('[name]').forEach(function (f) { f.name = f.name.replace(/ops\[\d+\]/, 'ops[' + idx + ']'); });
         var fn = row.dataset.fn;
         var names = new Set(Array.prototype.slice.call(body.querySelectorAll('input[name$=".name"]')).map(function (i) { return i.value; }));
@@ -1312,6 +1314,7 @@
 
         if (t.closest('.op-collapse-btn')) {
             row.classList.toggle('is-collapsed');
+            syncCollapseAllBtn();
             return;
         }
         if (t.closest('.op-adv-toggle')) {
@@ -1603,11 +1606,6 @@
             syncCollapseAllBtn();
         });
     }
-    body.addEventListener('click', function (e) {
-        if (e.target.closest && e.target.closest('.op-collapse-btn')) {
-            setTimeout(syncCollapseAllBtn, 0);
-        }
-    });
     body.addEventListener('change', function (e) {
         if (e.target && e.target.classList && e.target.classList.contains('op-on')) {
             applyOpFilters();
@@ -2041,10 +2039,11 @@
     if (form) { form.classList.remove('is-dirty'); }
     if (form && form.dataset.fromProfile) { markDirty(); }
 
-    // Подтверждение ручной разовой отправки выбранных разделов в остальные профили
-    var applyBaseBtn = document.getElementById('ld-apply-base-btn');
-    if (applyBaseBtn && form) {
-        applyBaseBtn.addEventListener('click', function (e) {
+    // Подтверждение ручной разовой отправки выбранных разделов в остальные профили (через делегирование для AJAX-swap)
+    if (form) {
+        document.addEventListener('click', function (e) {
+            var applyBaseBtn = e.target && e.target.closest ? e.target.closest('#ld-apply-base-btn') : null;
+            if (!applyBaseBtn) { return; }
             if (applyBaseBtn.dataset.k6Confirmed === '1') {
                 delete applyBaseBtn.dataset.k6Confirmed;
                 return;
@@ -2081,6 +2080,9 @@
                 }
             });
         });
+        document.addEventListener('k6:ajax-done', function (ev) {
+            if (ev.detail && ev.detail.form === form) { submitting = false; }
+        });
     }
 
     // ==================== Unified Profile Picker & Bulk Delete Modal ====================
@@ -2102,7 +2104,9 @@
         var bulkDelBtn = document.getElementById('ld-prof-bulk-del');
         var bulkClearBtn = document.getElementById('ld-prof-bulk-clear');
         var emptyFilterEl = document.getElementById('ld-prof-empty-filter');
-        var baseRow = document.getElementById('ld-prof-base-row');
+        var emptyAllEl = document.getElementById('ld-prof-empty-all');
+        var modalToolbarEl = document.getElementById('ld-prof-modal-toolbar');
+        var modalCntEl = document.getElementById('ld-prof-modal-cnt');
         var selectedIds = new Set();
         var lastClickedId = null;
 
@@ -2148,30 +2152,113 @@
             return {ops: ops.length, envCnt: envCnt, peakRate: peakRate, peakVu: peakVu, maxDur: maxDur, warmStr: warmStr};
         }
 
-        function postForm(action, fields) {
-            var f = document.createElement('form');
-            f.method = 'post';
-            f.action = action;
-            var meta = document.querySelector('meta[name="_csrf"]');
-            if (meta) { fields._csrf = meta.content; }
-            Object.keys(fields).forEach(function (k) {
+        function syncProfilesFromDoc(doc, finalUrl) {
+            var initEl = doc ? doc.getElementById('ld-prof-init') : document.getElementById('ld-prof-init');
+            if (initEl) {
+                try { profList = JSON.parse(initEl.textContent || '[]'); } catch (e) {}
+                var curInit = document.getElementById('ld-prof-init');
+                if (curInit && curInit !== initEl) { curInit.textContent = initEl.textContent; }
+            }
+            var validIds = new Set(profList.map(function (p) { return p.id; }));
+            Array.from(selectedIds).forEach(function (id) { if (!validIds.has(id)) { selectedIds.delete(id); } });
+            if (doc) {
+                var newSw = doc.getElementById('ld-prof-switcher-btn');
+                var curSw = document.getElementById('ld-prof-switcher-btn');
+                if (newSw && curSw) { curSw.innerHTML = newSw.innerHTML; }
+                var newBaseWrap = doc.getElementById('ld-base-wrap');
+                var curBaseWrap = document.getElementById('ld-base-wrap');
+                if (newBaseWrap && curBaseWrap) {
+                    var oldDetails = curBaseWrap.querySelector('#ld-base-push-details');
+                    var wasOpen = !!(oldDetails && oldDetails.open);
+                    curBaseWrap.innerHTML = newBaseWrap.innerHTML;
+                    var nextDetails = curBaseWrap.querySelector('#ld-base-push-details');
+                    if (nextDetails && wasOpen) { nextDetails.open = true; }
+                }
+                var newSticky = doc.getElementById('ld-sticky-actions');
+                var curSticky = document.getElementById('ld-sticky-actions');
+                if (newSticky && curSticky) { curSticky.innerHTML = newSticky.innerHTML; }
+                var newBaseRow = doc.getElementById('ld-prof-base-row');
+                var curBaseRow = document.getElementById('ld-prof-base-row');
+                if (newBaseRow && curBaseRow) {
+                    curBaseRow.className = newBaseRow.className;
+                    curBaseRow.innerHTML = newBaseRow.innerHTML;
+                }
+            }
+            if (finalUrl) {
+                try {
+                    var u = new URL(finalUrl, location.origin);
+                    var qp = u.searchParams.get('profile');
+                    loadedId = qp ? Number(qp) : null;
+                    profModalEl.dataset.loadedId = loadedId != null ? String(loadedId) : '';
+                    if (u.pathname === location.pathname && u.search !== location.search) {
+                        history.replaceState(null, '', u.pathname + u.search + location.hash);
+                    }
+                } catch (_) {}
+            }
+            renderProfiles();
+        }
+
+        function postForm(action, fields, opts) {
+            opts = opts || {};
+            var fd = new FormData();
+            var csrf = window.K6 ? window.K6.getCsrf() : {token: ''};
+            if (csrf.token) { fd.append('_csrf', csrf.token); }
+            Object.keys(fields || {}).forEach(function (k) {
                 var val = fields[k];
                 if (Array.isArray(val)) {
-                    val.forEach(function (item) {
-                        var i = document.createElement('input');
-                        i.type = 'hidden'; i.name = k; i.value = item;
-                        f.appendChild(i);
-                    });
+                    val.forEach(function (item) { fd.append(k, String(item)); });
                 } else if (val != null) {
-                    var i = document.createElement('input');
-                    i.type = 'hidden'; i.name = k; i.value = val;
-                    f.appendChild(i);
+                    fd.append(k, String(val));
                 }
             });
-            document.body.appendChild(f);
-            submitting = true;
-            f.submit();
+            profGallery.classList.add('k6-ajax-busy');
+            var req = window.K6 && window.K6.fetchHtml
+                ? window.K6.fetchHtml(action, {method: 'POST', body: fd})
+                : fetch(action, {
+                    method: 'POST',
+                    body: fd,
+                    credentials: 'same-origin',
+                    headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
+                    redirect: 'follow'
+                }).then(function (res) {
+                    return res.text().then(function (html) {
+                        return {res: res, doc: new DOMParser().parseFromString(html, 'text/html'), url: res.url};
+                    });
+                });
+            req.then(function (r) {
+                var doc = r.doc;
+                doc.querySelectorAll('main > .alert.alert-dismissible[role="alert"]').forEach(function (al) {
+                    var span = al.querySelector('span.flex-grow-1') || al;
+                    var text = (span.textContent || '').trim();
+                    if (!text) { return; }
+                    var kind = al.classList.contains('alert-danger') ? 'err'
+                        : (al.classList.contains('alert-warning') ? 'warn'
+                            : (al.classList.contains('alert-success') ? 'ok' : 'info'));
+                    if (window.k6Toast) { window.k6Toast(text, kind); }
+                });
+                if (opts.reloadIfCurrentDeleted && opts.deletedIds && loadedId != null && opts.deletedIds.indexOf(loadedId) >= 0) {
+                    dirty = false;
+                    location.href = loadUrl;
+                    return;
+                }
+                syncProfilesFromDoc(doc, opts.keepUrl ? null : r.url);
+            }).catch(function (err) {
+                if (err && err.redirectedToLogin) { return; }
+                if (window.k6Toast) { window.k6Toast('Не удалось выполнить операцию с профилями', 'err'); }
+            }).finally(function () {
+                profGallery.classList.remove('k6-ajax-busy');
+            });
         }
+
+        document.addEventListener('k6:swapped', function (ev) {
+            var d = ev.detail || {};
+            if (d.form === form && !d.hasError) {
+                dirty = false;
+                submitting = false;
+                if (form) { form.classList.remove('is-dirty'); }
+            }
+            syncProfilesFromDoc(d.doc || null, d.url || null);
+        });
 
         function visibleProfiles() {
             var q = searchIn ? searchIn.value.trim().toLowerCase() : '';
@@ -2212,6 +2299,9 @@
 
         function renderProfiles() {
             var vis = visibleProfiles();
+            if (modalCntEl) { modalCntEl.textContent = String(profList.length); }
+            if (modalToolbarEl) { modalToolbarEl.classList.toggle('d-none', profList.length === 0); }
+            if (emptyAllEl) { emptyAllEl.classList.toggle('d-none', profList.length > 0); }
             if (filterCntEl) {
                 filterCntEl.textContent = vis.length === profList.length
                     ? ('Всего: ' + profList.length)
@@ -2281,19 +2371,22 @@
         profModalEl.addEventListener('shown.bs.modal', function () {
             if (searchIn) { searchIn.focus(); }
         });
-        if (baseRow) {
-            var openBase = function () {
-                if (loadedId == null) {
-                    bootstrap.Modal.getOrCreateInstance(profModalEl).hide();
-                    return;
-                }
-                navigateWithDirtyCheck(loadUrl, 'базовому профилю');
-            };
-            baseRow.addEventListener('click', openBase);
-            baseRow.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBase(); }
-            });
-        }
+        var openBase = function () {
+            if (loadedId == null) {
+                bootstrap.Modal.getOrCreateInstance(profModalEl).hide();
+                return;
+            }
+            navigateWithDirtyCheck(loadUrl, 'базовому профилю');
+        };
+        profModalEl.addEventListener('click', function (e) {
+            if (e.target && e.target.closest && e.target.closest('#ld-prof-base-row')) { openBase(); }
+        });
+        profModalEl.addEventListener('keydown', function (e) {
+            if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.closest && e.target.closest('#ld-prof-base-row')) {
+                e.preventDefault();
+                openBase();
+            }
+        });
         if (selectAllCb) {
             selectAllCb.addEventListener('change', function () {
                 var vis = visibleProfiles();
@@ -2325,7 +2418,7 @@
                     if (!ok) { return; }
                     var fields = {ids: ids.map(String)};
                     if (loadedId != null) { fields.currentProfile = String(loadedId); }
-                    postForm(bulkDelUrl, fields);
+                    postForm(bulkDelUrl, fields, {reloadIfCurrentDeleted: true, deletedIds: ids, keepUrl: true});
                 });
             });
         }
@@ -2362,7 +2455,7 @@
                 }
                 navigateWithDirtyCheck(loadUrl + '?profile=' + encodeURIComponent(pid), 'профилю «' + pname + '»');
             } else if (e.target.closest('.ld-p-dup')) {
-                postForm(loadUrl + '/profile/' + pid + '/duplicate', {});
+                postForm(loadUrl + '/profile/' + pid + '/duplicate', {}, {keepUrl: true});
             } else if (e.target.closest('.ld-p-ren')) {
                 window.k6Prompt({
                     title: 'Переименовать профиль',
@@ -2371,7 +2464,7 @@
                     confirmText: 'Переименовать'
                 }).then(function (next) {
                     if (next != null && next.trim() && next.trim() !== pname) {
-                        postForm(loadUrl + '/profile/' + pid + '/rename', {name: next.trim()});
+                        postForm(loadUrl + '/profile/' + pid + '/rename', {name: next.trim()}, {keepUrl: true});
                     }
                 });
             } else if (e.target.closest('.ld-p-del')) {
@@ -2382,7 +2475,7 @@
                     variant: 'danger'
                 }).then(function (ok) {
                     if (!ok) { return; }
-                    postForm(loadUrl + '/profile/delete', {profile: String(pid)});
+                    postForm(loadUrl + '/profile/delete', {profile: String(pid)}, {reloadIfCurrentDeleted: true, deletedIds: [pid], keepUrl: true});
                 });
             }
         });

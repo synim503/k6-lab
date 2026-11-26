@@ -21,6 +21,12 @@ public record ConfigInput(
     public static final List<String> TREND_STATS = List.of("avg", "min", "med", "max", "p(50)", "p(90)", "p(95)", "p(99)");
 
     public ConfigInput {
+        if (gracefulStopSec < 0) {
+            gracefulStopSec = 0;
+        }
+        if (gracefulRampDownSec < 0) {
+            gracefulRampDownSec = 0;
+        }
         if (generatorCount < 1) {
             generatorCount = 1;
         }

@@ -41,7 +41,7 @@ class PromQueriesTest {
     @Test
     void errorPercentFromCountersForHelperAndFromRatesOtherwise() {
         String helper = PromQueries.errorPct(n, FailureSource.HELPER, 1, 60);
-        assertThat(helper).contains("k6_op_errors_total").contains("k6_op_count_total").contains("/ sum by (scenario)");
+        assertThat(helper).contains("k6_op_errors_total").contains("k6_op_count_total").contains("/ (sum by (scenario)").contains(" or ");
         // ошибки HTTP - по счётчикам запросов за окно (неуспешные / все); без неуспешных - 0, а не «нет данных»
         assertThat(PromQueries.errorPct(n, FailureSource.HTTP, 1, 60))
                 .contains("histogram_count(increase(k6_http_req_duration_seconds{test_run_id=\"1\",expected_response=\"false\"}[60s])")

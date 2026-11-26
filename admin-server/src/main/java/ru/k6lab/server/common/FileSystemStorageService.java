@@ -38,19 +38,25 @@ public class FileSystemStorageService implements StorageService {
         Path tmp = target.resolveSibling(target.getFileName() + ".part");
         MessageDigest md = Hashes.sha256Digest();
         long size = 0;
-        try (OutputStream out = Files.newOutputStream(tmp)) {
-            byte[] buf = new byte[64 * 1024];
-            int n;
-            while ((n = content.read(buf)) > 0) {
-                md.update(buf, 0, n);
-                out.write(buf, 0, n);
-                size += n;
+        try {
+            try (OutputStream out = Files.newOutputStream(tmp)) {
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = content.read(buf)) > 0) {
+                    md.update(buf, 0, n);
+                    out.write(buf, 0, n);
+                    size += n;
+                }
+            }
+            try {
+                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException | RuntimeException e) {
             Files.deleteIfExists(tmp);
             throw e;
         }
-        Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
         return new StoredFile(key, size, HexFormat.of().formatHex(md.digest()));
     }
 

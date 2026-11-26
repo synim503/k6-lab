@@ -56,14 +56,15 @@ public final class StepAnalysis {
 
         /** Нормализованный оператор сравнения: LTE (<=), LT (<), GTE (>=), GT (>). По умолчанию LTE. */
         public String normalizedCmp() {
-            if (cmp == null) {
+            if (cmp == null || cmp.isBlank()) {
                 return "LTE";
             }
             return switch (cmp.trim().toUpperCase(java.util.Locale.ROOT)) {
+                case "LTE", "<=", "≤" -> "LTE";
                 case "LT", "<" -> "LT";
                 case "GTE", ">=", "≥" -> "GTE";
                 case "GT", ">" -> "GT";
-                default -> "LTE";
+                default -> throw new IllegalArgumentException("Неподдерживаемый оператор сравнения: " + cmp);
             };
         }
 
@@ -143,14 +144,17 @@ public final class StepAnalysis {
             if (s == null) {
                 throw new IllegalArgumentException("Нет SLA для операции " + m.operation());
             }
-            Double p = m.percentile(s.percentile());
-            boolean missing = p == null || m.errorPct() == null || m.actualRatePerSec() == null;
+            Double p = finite(m.percentile(s.percentile()));
+            Double err = finite(m.errorPct());
+            Double rate = finite(m.actualRatePerSec());
+            Double dropped = finite(m.dropped());
+            boolean missing = p == null || err == null || rate == null;
             boolean slaOk = p != null && p <= s.thresholdMs();
-            boolean errorsOk = m.errorPct() != null && m.errorPct() <= s.maxErrorPct();
+            boolean errorsOk = err != null && err <= s.maxErrorPct();
             Double dev = m.deviationPct();
-            boolean rateOk = m.targetRatePerSec() <= 0 || (m.actualRatePerSec() != null
-                    && m.actualRatePerSec() >= m.targetRatePerSec() * c.minRatePct() / 100.0);
-            boolean droppedOk = m.dropped() == null || m.dropped() <= c.maxDropped();
+            boolean rateOk = m.targetRatePerSec() <= 0 || (rate != null
+                    && rate >= m.targetRatePerSec() * c.minRatePct() / 100.0);
+            boolean droppedOk = dropped == null || dropped <= c.maxDropped();
             OpVerdict v = new OpVerdict(m.operation(), slaOk, errorsOk, rateOk, droppedOk, missing, dev);
             ops.add(v);
             if (missing) {
@@ -160,25 +164,36 @@ public final class StepAnalysis {
                 reasons.add(String.format(java.util.Locale.ROOT, "%s: p%d = %.0f мс > SLA %.0f мс", m.operation(),
                         s.percentile(), p, s.thresholdMs()));
             }
-            if (m.errorPct() != null && !errorsOk) {
-                reasons.add(String.format(java.util.Locale.ROOT, "%s: ошибки %.2f%% > %.2f%%", m.operation(), m.errorPct(), s.maxErrorPct()));
+            if (err != null && !errorsOk) {
+                reasons.add(String.format(java.util.Locale.ROOT, "%s: ошибки %.2f%% > %.2f%%", m.operation(), err, s.maxErrorPct()));
             }
-            if (!rateOk && m.actualRatePerSec() != null) {
+            if (!rateOk && rate != null) {
                 reasons.add(String.format(java.util.Locale.ROOT, "%s: интенсивность %.1f%% от цели (< %.0f%%)", m.operation(),
-                        m.actualRatePerSec() / m.targetRatePerSec() * 100.0, c.minRatePct()));
+                        rate / m.targetRatePerSec() * 100.0, c.minRatePct()));
             }
             if (!droppedOk) {
-                reasons.add(m.operation() + ": dropped_iterations = " + m.dropped().longValue());
+                reasons.add(m.operation() + ": dropped_iterations = " + dropped.longValue());
             }
         }
         boolean customFailed = false;
         if (customChecks != null) {
             for (CustomCheckResult cr : customChecks) {
-                if (cr.check() != null && cr.check().stepSla() && !cr.ok() && cr.value() != null) {
+                if (cr.check() == null || !cr.check().stepSla()) {
+                    continue;
+                }
+                if (cr.dataMissing() || cr.value() == null || !Double.isFinite(cr.value())) {
+                    customFailed = true;
+                    String detail = cr.worstSeries() != null && !cr.worstSeries().isBlank()
+                            ? " (" + cr.worstSeries() + ")" : "";
+                    reasons.add(cr.check().name() + ": нет данных" + detail);
+                } else if (!cr.ok()) {
                     customFailed = true;
                     reasons.add(cr.check().formatViolation(cr.value(), cr.worstSeries()));
                 }
             }
+        }
+        if (ops.isEmpty() && sla != null && !sla.isEmpty()) {
+            reasons.add("нет метрик ни по одной операции");
         }
         if (generatorsOverloaded) {
             reasons.add("генераторы перегружены (CPU > " + (int) c.maxCpuPct() + "%) - результат не отражает возможности системы");
@@ -187,11 +202,16 @@ public final class StepAnalysis {
         if (!reliable) {
             status = Status.UNRELIABLE;
             reasons.add(0, "ступень недостоверна: генератор отсутствовал во время ступени");
-        } else if (generatorsOverloaded || customFailed || ops.stream().anyMatch(o -> !o.ok())) {
+        } else if (generatorsOverloaded || customFailed || ops.stream().anyMatch(o -> !o.ok())
+                || (ops.isEmpty() && sla != null && !sla.isEmpty())) {
             status = Status.FAILED;
         } else {
             status = Status.SUCCESS;
         }
         return new StepVerdict(stepNo, status, ops, reasons);
+    }
+
+    private static Double finite(Double v) {
+        return v != null && Double.isFinite(v) ? v : null;
     }
 }

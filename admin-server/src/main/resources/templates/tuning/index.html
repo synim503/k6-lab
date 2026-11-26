@@ -15,7 +15,8 @@
         (процессор, сеть, очереди ядра, порты, лимиты файлов, память) и ищет то, что ограничивает нагрузку. Затем рекомендованные настройки ядра можно применить
         на выбранных хостах одним действием и откатить к исходным значениям. Настройки пишутся в <code th:text="${conf}"></code>.</div>
 
-    <form id="tf" th:action="@{/tuning/profile}" method="post">
+    <div id="tuning-workspace">
+    <form id="tf" th:action="@{/tuning/profile}" method="post" data-ajax="#tuning-workspace">
         <div class="card mb-3" th:if="${standard != null}">
             <div class="card-header d-flex flex-wrap align-items-center gap-3">
                 <strong>Эталонная настройка</strong>
@@ -23,7 +24,8 @@
             <div class="card-body">
                 <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
                     <label class="small fw-semibold mb-0" for="std-src">Эталон</label>
-                    <select class="form-select form-select-sm" style="width:auto" id="std-src" name="sourceId" onchange="location.href='?std=' + this.value">
+                    <select class="form-select form-select-sm" style="width:auto" id="std-src" name="sourceId"
+                            data-ajax-get="#tuning-workspace" data-ajax-param="std">
                         <option th:each="c : ${candidates}" th:value="${c.generator.id}" th:selected="${c.generator.id == standard.generator.id}"
                                 th:text="${c.generator.name} + ' — изменений: ' + ${c.settings}"></option></select>
                     <button class="btn btn-warning" id="btn-std-rollout" th:formaction="@{/tuning/rollout}"
@@ -100,27 +102,16 @@
         </tr>
         <tr th:if="${history.isEmpty()}"><td colspan="5"><div class="empty-state py-4"><i class="bi bi-clock-history"></i>Настройки ещё не применялись.</div></td></tr>
         </tbody></table></div></div>
+    </div>
 </th:block>
 <th:block layout:fragment="scripts">
     <script th:inline="none">
         (function () {
             var saved = null;
-            var selBadge = document.getElementById('tuning-sel-count');
-            var searchIn = document.getElementById('tuning-search');
-            var profNameIn = document.getElementById('std-prof-name');
-            var saveProfBtn = document.getElementById('btn-save-opt-prof');
-
-            // Enter в поле названия профиля оптимизации должен сохранять профиль, а не запускать профилирование
-            if (profNameIn && saveProfBtn) {
-                profNameIn.addEventListener('keydown', function (e) {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        saveProfBtn.click();
-                    }
-                });
-            }
+            var savedQuery = '';
 
             function syncSelection() {
+                var selBadge = document.getElementById('tuning-sel-count');
                 var all = document.querySelectorAll('#tuning-table input.tg:not(:disabled)');
                 var checked = document.querySelectorAll('#tuning-table input.tg:checked');
                 var n = checked.length;
@@ -140,12 +131,35 @@
             }
 
             function applySearch() {
-                if (!searchIn) { return; }
-                var q = (searchIn.value || '').trim().toLowerCase();
+                var searchIn = document.getElementById('tuning-search');
+                savedQuery = searchIn ? searchIn.value : savedQuery;
+                var q = (savedQuery || '').trim().toLowerCase();
                 document.querySelectorAll('#tuning-table tbody tr[data-host-row]').forEach(function (tr) {
                     var ok = !q || (tr.textContent || '').toLowerCase().indexOf(q) >= 0;
                     tr.classList.toggle('d-none', !ok);
                 });
+            }
+
+            function bindControls() {
+                var searchIn = document.getElementById('tuning-search');
+                if (searchIn && searchIn.dataset.k6Bound !== '1') {
+                    searchIn.dataset.k6Bound = '1';
+                    if (savedQuery) { searchIn.value = savedQuery; }
+                    searchIn.addEventListener('input', applySearch);
+                }
+                var profNameIn = document.getElementById('std-prof-name');
+                var saveProfBtn = document.getElementById('btn-save-opt-prof');
+                if (profNameIn && saveProfBtn && profNameIn.dataset.k6Bound !== '1') {
+                    profNameIn.dataset.k6Bound = '1';
+                    profNameIn.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            saveProfBtn.click();
+                        }
+                    });
+                }
+                applySearch();
+                syncSelection();
             }
 
             document.addEventListener('change', function (e) {
@@ -158,7 +172,6 @@
                     syncSelection();
                 }
             });
-            if (searchIn) { searchIn.addEventListener('input', applySearch); }
 
             document.body.addEventListener('htmx:beforeSwap', function (ev) {
                 var target = ev.detail && ev.detail.target;
@@ -177,7 +190,8 @@
                 applySearch();
                 syncSelection();
             });
-            syncSelection();
+            document.addEventListener('k6:swapped', bindControls);
+            bindControls();
         })();
     </script>
 </th:block>

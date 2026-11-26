@@ -34,12 +34,10 @@ public class ChartVariableStore {
         return out;
     }
 
-    /** Задаёт значение (создаёт или обновляет). */
+    /** Задаёт значение (атомарный upsert без гонки DuplicateKeyException). */
     public void save(long scriptId, String name, String value) {
-        int upd = jdbc.update("update chart_variable set value = ? where script_id = ? and name = ?", value, scriptId, name);
-        if (upd == 0) {
-            jdbc.update("insert into chart_variable (script_id, name, value) values (?, ?, ?)", scriptId, name, value);
-        }
+        jdbc.update("insert into chart_variable (script_id, name, value) values (?, ?, ?) "
+                + "on conflict (script_id, name) do update set value = excluded.value", scriptId, name, value);
     }
 
     /** При импорте дашборда: добавляет, только если переменной ещё нет (правки пользователя не затираются). Возвращает true, если добавлена. */

@@ -145,14 +145,19 @@ public final class K6ConfigGenerator {
                     maxOf(actual))));
         }
 
+        Long scPre = op.scenario().get("preAllocatedVUs") instanceof Number n ? n.longValue() : null;
+        Long scMax = op.scenario().get("maxVUs") instanceof Number n ? n.longValue() : null;
         long pre = op.preAllocatedOverride() != null ? op.preAllocatedOverride()
+                : scPre != null ? Math.max(1, scPre)
                 : Math.max(1, ceil(peak * op.expectedDurationSec() * in.preAllocFactor()));
         // k6 делит VU между execution segments целыми числами: если VU меньше числа генераторов, часть сегментов остаётся без VU,
         // их генераторы ничего не выполняют и сразу завершаются (работают только первые). Поэтому минимум - по VU на генератор.
-        if (op.preAllocatedOverride() == null) {
+        if (op.preAllocatedOverride() == null && scPre == null) {
             pre = Math.max(pre, Math.max(1, in.generatorCount()));
         }
-        long max = op.maxVusOverride() != null ? op.maxVusOverride() : Math.max(pre, pre * Math.round(in.maxVusFactor()));
+        long max = op.maxVusOverride() != null ? op.maxVusOverride()
+                : scMax != null ? Math.max(1, scMax)
+                : Math.max(pre, ceil(pre * in.maxVusFactor()));
         if (max < pre) {
             max = pre;
         }
@@ -170,12 +175,7 @@ public final class K6ConfigGenerator {
             stages.addObject().put("duration", s.holdSec() + "s").put("target", sel.targets()[i]);
         }
         sc.put("gracefulStop", in.gracefulStopSec() + "s");
-        // свои значения из параметров сценария: когда стартовать и сколько ждать завершения итераций
-        for (String k : List.of("startTime", "gracefulStop")) {
-            if (op.scenario().get(k) != null) {
-                sc.put(k, String.valueOf(op.scenario().get(k)));
-            }
-        }
+        applyProfileScenarioTiming(sc, op);
         putExec(sc, op);
         putEnvAndTags(sc, op, null);
 
@@ -289,7 +289,7 @@ public final class K6ConfigGenerator {
             }
             return;
         }
-        double sec = durationSec(String.valueOf(m.get("duration")));
+        double sec = warmupDurationSec(m.get("duration"));
         if (sec < WARMUP_MIN_SEC || sec > WARMUP_MAX_SEC) {
             throw new IllegalArgumentException("Операция «" + op.name() + "»: длительность прогрева от 5 секунд до 1 часа, например 2m или 90s");
         }
@@ -315,15 +315,15 @@ public final class K6ConfigGenerator {
         if (w == null) {
             return 0;
         }
-        double start = ConfigDuration.parse(String.valueOf(op.scenario().getOrDefault("startTime", "0s")), 0);
+        double start = ConfigDuration.seconds(op.scenario().get("startTime"), 0);
         if (w.get("stages") instanceof Number n && op.scenario().get("stages") instanceof List<?> stages) {
             double sum = 0;
             for (int i = 0; i < Math.min(n.intValue(), stages.size()); i++) {
-                sum += stages.get(i) instanceof Map<?, ?> st ? durationSec(String.valueOf(st.get("duration"))) : 0;
+                sum += stages.get(i) instanceof Map<?, ?> st ? ConfigDuration.seconds(st.get("duration"), 0) : 0;
             }
             return (int) Math.round(start + sum);
         }
-        return (int) Math.round(start + durationSec(String.valueOf(w.get("duration"))));
+        return (int) Math.round(start + warmupDurationSec(w.get("duration")));
     }
 
     /** Интенсивность прогрева в оп/с (только ramping-arrival-rate со своей интенсивностью прогрева); иначе плана по оп/с нет - 0. */
@@ -340,40 +340,35 @@ public final class K6ConfigGenerator {
         if (!(t instanceof Number n)) {
             return 0;
         }
-        double unit = durationSec(String.valueOf(op.scenario().getOrDefault("timeUnit", "1s")));
+        double unit = ConfigDuration.seconds(op.scenario().getOrDefault("timeUnit", "1s"), 1);
         return unit > 0 ? n.doubleValue() / unit : 0;
     }
 
     /**
      * Своя интенсивность прогрева у ramping-*: первая стадия держит заданное значение, затем секундный переход к прежнему началу
-     * сценария и его собственные стадии. Исполнитель остаётся прежним.
+     * сценария (если оно задано) и его собственные стадии. Исполнитель остаётся прежним.
      */
     private static void applyWarmup(OperationSpec op, ObjectNode sc, Map<?, ?> warm, int gens) {
         if (warm.get("stages") != null || !ramping(op.executor()) || !(warm.get("target") instanceof Number num)) {
             return; // прогрев - первые стадии самого сценария либо только отрезок времени: стадии не меняются
         }
-        long sec = Math.round(durationSec(String.valueOf(warm.get("duration"))));
+        long sec = Math.round(warmupDurationSec(warm.get("duration")));
         double wt = num.doubleValue();
         boolean vu = op.executor().endsWith("vus");
-        Number target;
-        if (vu) {
-            target = Math.max(gens, Math.max(1, Math.round(wt)));
-        } else if (wt == Math.rint(wt)) {
-            target = (long) wt;
-        } else {
-            target = wt;
-        }
+        // k6 анмаршалит startVUs/startRate и stages[].target как int64 — всегда пишем целое число
+        long target = vu ? Math.max(gens, Math.max(1L, Math.round(wt))) : Math.max(1L, Math.round(wt));
         String startField = vu ? "startVUs" : "startRate";
         ArrayNode stages = MAPPER.createArrayNode();
-        stages.addObject().put("duration", sec + "s").set("target", MAPPER.valueToTree(target));
-        var start = sc.has(startField) ? sc.get(startField).deepCopy() : MAPPER.getNodeFactory().numberNode(0);
-        stages.addObject().put("duration", "1s").set("target", start);
+        stages.addObject().put("duration", sec + "s").put("target", target);
+        if (sc.has(startField)) {
+            stages.addObject().put("duration", "1s").set("target", sc.get(startField).deepCopy());
+        }
         sc.path("stages").forEach(stages::add);
         if (!vu && !sc.has("timeUnit")) {
             sc.put("timeUnit", "1s");
         }
         sc.set("stages", stages);
-        sc.set(startField, MAPPER.valueToTree(target));
+        sc.put(startField, target);
     }
     /**
      * Сценарий целиком из параметров операции (executor и поля как в options.scenarios): без ступеней профиля.
@@ -433,16 +428,33 @@ public final class K6ConfigGenerator {
         }
         long vus = Math.max(number(params.get("vus")), Math.max(number(params.get("preAllocatedVUs")), number(params.get("maxVUs"))));
         long pre = Math.max(number(params.get("vus")), number(params.get("preAllocatedVUs")));
+        if ("ramping-vus".equals(op.executor())) {
+            long peakStageVu = sc.path("startVUs").asLong(0);
+            for (var st : sc.path("stages")) {
+                peakStageVu = Math.max(peakStageVu, st.path("target").asLong(0));
+            }
+            vus = Math.max(vus, peakStageVu);
+            pre = Math.max(pre, peakStageVu);
+        }
         double peakRate = 0;
-        if ("constant-arrival-rate".equals(op.executor()) && params.get("rate") != null) {
-            double unitSec = durationSec(String.valueOf(params.getOrDefault("timeUnit", "1s")));
+        List<ScenarioPlan.Pt> poly = ScenarioPlan.polyline(sc);
+        if (!poly.isEmpty()) {
+            for (ScenarioPlan.Pt pt : poly) {
+                peakRate = Math.max(peakRate, pt.rate());
+            }
+        } else if ("constant-arrival-rate".equals(op.executor()) && params.get("rate") != null) {
+            double unitSec = ConfigDuration.seconds(params.getOrDefault("timeUnit", "1s"), 1);
             peakRate = unitSec > 0 ? number(params.get("rate")) / unitSec : 0;
+        } else if (vus > 0 && op.expectedDurationSec() > 0) {
+            peakRate = vus / op.expectedDurationSec();
         }
         int n = in.steps().size();
         double[] ratesPerStep = new double[n];
-        java.util.Arrays.fill(ratesPerStep, peakRate); // план по оп/с есть только у constant-arrival-rate
+        long[] vusPerStep = new long[n];
+        java.util.Arrays.fill(ratesPerStep, peakRate);
+        java.util.Arrays.fill(vusPerStep, vus);
         return new OpPlan(op.name(), op.executor().contains("arrival") ? Mode.OPEN : Mode.CLOSED, 1, new long[0], ratesPerStep,
-                new long[n], pre, vus, peakRate);
+                vusPerStep, pre, vus, peakRate);
     }
 
     private static Map<String, String> stringMap(Object o) {
@@ -457,15 +469,19 @@ public final class K6ConfigGenerator {
         return o instanceof Number n ? n.longValue() : 0;
     }
 
-    /** "30s", "1m", "1m30s", "500ms", число без единиц (секунды) -> секунды; нераспознанное - 0. */
-    private static double durationSec(String s) {
-        if (s == null) {
+    /** Разбор длительности прогрева (UI-поле): «2m», «90s», «1m30s» или число секунд без единиц -> секунды. */
+    private static double warmupDurationSec(Object v) {
+        if (v == null) {
             return 0;
         }
-        if (s.trim().matches("[0-9]*\\.?[0-9]+")) {
-            return Double.parseDouble(s.trim());
+        if (v instanceof Number n) {
+            return n.doubleValue();
         }
-        return ConfigDuration.parse(s, 0); // тот же разбор, что и у плановой длительности: составные значения вроде 1m30s
+        String s = String.valueOf(v).trim();
+        if (s.matches("[0-9]*\\.?[0-9]+")) {
+            return Double.parseDouble(s);
+        }
+        return ConfigDuration.parse(s, 0);
     }
 
     // ------------------------------------------------------------------ закрытая модель
@@ -504,10 +520,20 @@ public final class K6ConfigGenerator {
         }
         sc.put("gracefulRampDown", in.gracefulRampDownSec() + "s");
         sc.put("gracefulStop", in.gracefulStopSec() + "s");
+        applyProfileScenarioTiming(sc, op);
         putExec(sc, op);
         putEnvAndTags(sc, op, String.valueOf(op.pacingMs()));
         double peakRate = peakVus / pacingSec;
         return new OpPlan(op.name(), Mode.CLOSED, 1, new long[0], rates, vus, peakVus, peakVus, peakRate);
+    }
+
+    /** Применяет startTime/gracefulStop из параметров сценария (для профильных open/closed сценариев). */
+    private static void applyProfileScenarioTiming(ObjectNode sc, OperationSpec op) {
+        for (String k : List.of("startTime", "gracefulStop")) {
+            if (op.scenario().get(k) != null) {
+                sc.put(k, String.valueOf(op.scenario().get(k)));
+            }
+        }
     }
 
     /** Для export default function поле exec не задаётся: k6 сам запускает основную функцию. */
@@ -519,6 +545,7 @@ public final class K6ConfigGenerator {
 
     private static void putEnvAndTags(ObjectNode sc, OperationSpec op, String pacingMs) {
         Map<String, String> env = new java.util.TreeMap<>(op.env());
+        env.putAll(stringMap(op.scenario().get("env")));
         if (pacingMs != null) {
             env.put("PACING_MS", pacingMs);
         }
@@ -527,6 +554,7 @@ public final class K6ConfigGenerator {
             env.forEach(e::put);
         }
         Map<String, String> tags = new java.util.TreeMap<>(op.tags());
+        tags.putAll(stringMap(op.scenario().get("tags")));
         tags.remove("scenario"); // системный тег scenario = операция, не переопределяем
         if (!tags.isEmpty()) {
             ObjectNode t = sc.putObject("tags");
@@ -566,7 +594,7 @@ public final class K6ConfigGenerator {
             long totalVus = 0;
             for (OpPlan p : plans) {
                 rate.put(p.name(), p.ratesPerSec()[i]);
-                long v = p.mode() == Mode.OPEN ? p.vusPerStep()[i] : p.vusPerStep()[i];
+                long v = p.vusPerStep()[i];
                 vus.put(p.name(), v);
                 total += p.ratesPerSec()[i];
                 totalVus += v;
