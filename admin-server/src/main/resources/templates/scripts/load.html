@@ -847,8 +847,7 @@
                     <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!planFromProfile and !overridePaths.isEmpty()}">
                         <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
                         <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0"
-                              data-ajax="#adv-summary-badges,#t-config"
-                              data-confirm="Сбросить ручные правки и вернуть расчётный конфиг?">
+                              data-ajax="#adv-summary-badges,#t-config">
                             <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button>
                         </form>
                     </div>

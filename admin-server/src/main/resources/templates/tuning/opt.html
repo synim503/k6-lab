@@ -45,8 +45,7 @@
 
     <div class="card mt-4"><div class="card-body d-flex flex-wrap gap-2 align-items-center">
         <form th:action="@{/tuning/profiles/{id}/apply(id=${p.id})}" method="post" class="m-0"
-              data-ajax="#opt-profile-root"
-              data-confirm="Раскатить профиль на все хосты с SSH-учёткой? Чтобы выбрать хосты, раскатывайте со страницы профилирования (отметьте хосты). Исходные значения сохраняются, вернуть их можно в любой момент.">
+              data-ajax="#opt-profile-root">
             <button class="btn btn-warning"><i class="bi bi-rocket-takeoff me-1"></i>Раскатить на все хосты</button></form>
         <form th:action="@{/tuning/profiles/{id}/delete(id=${p.id})}" method="post" class="m-0 ms-auto"
               data-confirm="Удалить профиль оптимизации? Настройки, уже применённые на хостах, не изменятся.">

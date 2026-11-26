@@ -7,61 +7,227 @@
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='versions')}"></th:block>
 
     <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-        <h5 class="mb-0">Редактор: <code id="edit-file-path" th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span id="edit-ver-num" th:text="${v.number}"></span></span></h5>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <h5 class="mb-0">Редактор: <code id="edit-file-path" th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span id="edit-ver-num" th:text="${v.number}"></span></span></h5>
+            <span id="edit-save-status" class="badge rounded-pill text-bg-light border text-muted fw-normal">
+                <i class="bi bi-check2 text-success me-1"></i>Сохранено
+            </span>
+        </div>
         <a class="btn btn-outline-secondary btn-sm edit-nav-guard" id="edit-back-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}"><i class="bi bi-arrow-left me-1"></i>К версии</a>
     </div>
     <div class="mb-2 small text-muted" id="edit-files-bar">Файлы версии:
         <a class="me-2 edit-file-link" th:each="f : ${scriptFiles}"
            th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
            th:attr="data-file-path=${f.path},data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${f.path})}"
-           th:text="${f.path}" th:classappend="${f.path == path} ? 'fw-bold'"></a></div>
-    <div class="alert alert-info py-2 small">Сохранение создаёт <strong>новую версию</strong>: старая остаётся неизменной. Сценарии, пороги и теги из <code>options</code> при сохранении вырезаются, их задаёт админка.</div>
-    <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post"
-          data-no-loading="true" th:attr="data-cur-vid=${v.id}">
-        <input type="hidden" name="file" th:value="${path}">
-        <input type="hidden" name="content" id="content">
+           th:text="${f.path}" th:classappend="${f.path == path} ? 'fw-bold'"></a>
+    </div>
+    <div id="edit-form"
+         th:attr="data-cur-vid=${v.id},
+                  data-autosave-url=@{/scripts/{id}/versions/{vid}/autosave(id=${script.id},vid=${v.id})},
+                  data-file-path=${path}">
         <div class="alert alert-danger py-2 small d-none" id="edit-err"></div>
-        <div id="editor" class="position-relative" style="height: 62vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden; background: #1e1e1e"
+        <div class="alert alert-warning py-2 small d-none" id="edit-warn"></div>
+        <div id="editor" class="position-relative" style="height: 68vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden; background: #1e1e1e"
              th:attr="data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${path})}">
             <div id="edit-loading" class="d-flex align-items-center justify-content-center h-100 text-light gap-2 small">
                 <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>Загрузка редактора…
             </div>
         </div>
-        <div class="sticky-actions">
-            <input class="form-control" style="max-width:420px" name="comment" placeholder="Что изменилось (необязательно)" aria-label="Комментарий к версии">
-            <button class="btn btn-primary" id="edit-save" type="submit" disabled title="Ctrl+S"><i class="bi bi-check-lg me-1"></i>Сохранить как новую версию</button>
-            <a class="btn btn-outline-secondary edit-nav-guard" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}">Отмена</a>
-            <span class="dirty-flag"><i class="bi bi-circle-fill" style="font-size:.5rem"></i>Есть несохранённые изменения</span>
-            <span class="cb-kbd-hint d-none d-md-inline"><kbd>Ctrl+S</kbd> сохранить</span>
+        <div class="small text-muted mt-2">
+            Изменения сохраняются автоматически. Сценарии, пороги и теги из <code>options</code> при сохранении вырезаются — их задаёт админка.
         </div>
-    </form>
+    </div>
 </th:block>
 <th:block layout:fragment="scripts">
     <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script>
         (function () {
-            var form = document.getElementById('edit-form');
+            var root = document.getElementById('edit-form');
             var box = document.getElementById('editor');
             var loadingEl = document.getElementById('edit-loading');
-            var saveBtn = document.getElementById('edit-save');
+            var statusEl = document.getElementById('edit-save-status');
             var errBox = document.getElementById('edit-err');
+            var warnBox = document.getElementById('edit-warn');
             var filePathEl = document.getElementById('edit-file-path');
-            var fileInputEl = form ? form.querySelector('input[name="file"]') : null;
+            var curPath = root ? (root.dataset.filePath || '') : '';
+            var curVid = root ? String(root.dataset.curVid || '') : '';
+            var sessionVid = null;
+            var autosaveUrl = root ? (root.dataset.autosaveUrl || '') : '';
+            var savedText = '';
             var dirty = false;
-            var submitting = false;
-            var suppressDirty = false;
+            var saving = false;
+            var queued = false;
+            var saveTimer = null;
+            var savePromise = null;
+            var suppressChange = false;
             var editor = null;
-            var initialText = '';
             var fileLoadSeq = 0;
 
             function langFor(p) {
                 return /\.json$/i.test(p || '') ? 'json' : /\.(js|mjs|cjs|ts)$/i.test(p || '') ? 'javascript' : 'plaintext';
             }
 
-            function setDirty(v) {
-                dirty = !!v;
-                if (form) { form.classList.toggle('is-dirty', dirty); }
+            function nowTime() {
+                return new Date().toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
             }
+
+            function setStatus(state, text) {
+                if (!statusEl) { return; }
+                if (state === 'saving') {
+                    statusEl.className = 'badge rounded-pill text-bg-light border text-primary fw-normal';
+                    statusEl.innerHTML = '<span class="spinner-border spinner-border-sm me-1" style="width:.7rem;height:.7rem;border-width:2px" role="status" aria-hidden="true"></span>Сохранение…';
+                } else if (state === 'pending') {
+                    statusEl.className = 'badge rounded-pill text-bg-light border text-muted fw-normal';
+                    statusEl.innerHTML = '<i class="bi bi-dot text-warning me-1"></i>Изменено…';
+                } else if (state === 'err') {
+                    statusEl.className = 'badge rounded-pill text-bg-danger fw-normal';
+                    statusEl.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>' + (text || 'Ошибка сохранения');
+                } else {
+                    statusEl.className = 'badge rounded-pill text-bg-light border text-muted fw-normal';
+                    statusEl.innerHTML = '<i class="bi bi-check2 text-success me-1"></i>' + (text || 'Сохранено');
+                }
+            }
+
+            function rewriteVersionLinks(newVid, verNum) {
+                if (!newVid || newVid === curVid) { return; }
+                var oldRe = new RegExp('/versions/' + curVid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=/|$)');
+                curVid = String(newVid);
+                if (root) { root.dataset.curVid = curVid; }
+                autosaveUrl = autosaveUrl.replace(oldRe, '/versions/' + curVid);
+                if (root) { root.dataset.autosaveUrl = autosaveUrl; }
+                document.querySelectorAll('a.edit-nav-guard, a.edit-file-link').forEach(function (a) {
+                    var h = a.getAttribute('href');
+                    if (h) { a.setAttribute('href', h.replace(oldRe, '/versions/' + curVid)); }
+                    if (a.dataset && a.dataset.fileUrl) {
+                        a.dataset.fileUrl = a.dataset.fileUrl.replace(oldRe, '/versions/' + curVid);
+                    }
+                });
+                if (box && box.dataset && box.dataset.fileUrl) {
+                    box.dataset.fileUrl = box.dataset.fileUrl.replace(oldRe, '/versions/' + curVid);
+                }
+                var verNumEl = document.getElementById('edit-ver-num');
+                if (verNumEl && verNum != null) { verNumEl.textContent = String(verNum); }
+                var nextEditUrl = location.pathname.replace(oldRe, '/versions/' + curVid) + location.search;
+                try { history.replaceState({editFilePath: curPath}, '', nextEditUrl); } catch (_) {}
+            }
+
+            function buildBody(content) {
+                var body = new URLSearchParams();
+                body.append('file', curPath);
+                body.append('content', content);
+                body.append('inPlace', (sessionVid !== null && curVid === sessionVid) ? 'true' : 'false');
+                var csrf = window.K6 ? window.K6.getCsrf() : {token: ''};
+                if (csrf.token) { body.append('_csrf', csrf.token); }
+                return body;
+            }
+
+            function flushSave() {
+                if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+                if (!editor || !autosaveUrl) { return Promise.resolve(true); }
+                var curVal = editor.getValue();
+                if (!dirty && curVal === savedText) {
+                    return savePromise || Promise.resolve(true);
+                }
+                if (saving) {
+                    queued = true;
+                    return savePromise || Promise.resolve(true);
+                }
+                saving = true;
+                queued = false;
+                if (errBox) { errBox.classList.add('d-none'); errBox.textContent = ''; }
+                setStatus('saving');
+                var sentVal = curVal;
+                var sentPath = curPath;
+                var csrf = window.K6 ? window.K6.getCsrf() : {header: 'X-CSRF-TOKEN', token: ''};
+                var headers = {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json'};
+                if (csrf.token && csrf.header) { headers[csrf.header] = csrf.token; }
+                savePromise = fetch(autosaveUrl, {
+                    method: 'POST',
+                    body: buildBody(sentVal),
+                    credentials: 'same-origin',
+                    headers: headers
+                }).then(function (res) {
+                    if (res.redirected && new URL(res.url, location.origin).pathname === '/login') {
+                        location.href = res.url;
+                        return null;
+                    }
+                    return res.json().then(function (data) { return {ok: res.ok, status: res.status, data: data}; });
+                }).then(function (r) {
+                    if (!r) { return false; }
+                    if (!r.ok || !r.data || !r.data.ok) {
+                        var msg = (r.data && r.data.error) ? r.data.error : ('Ошибка сохранения (HTTP ' + r.status + ')');
+                        if (errBox) { errBox.textContent = msg; errBox.classList.remove('d-none'); }
+                        setStatus('err', 'Ошибка сохранения');
+                        return false;
+                    }
+                    if (r.data.versionId != null) {
+                        var nextVid = String(r.data.versionId);
+                        if (nextVid !== curVid) {
+                            sessionVid = nextVid;
+                            rewriteVersionLinks(nextVid, r.data.versionNumber);
+                        } else if (sessionVid === null) {
+                            sessionVid = curVid;
+                        }
+                    }
+                    if (warnBox) {
+                        if (r.data.valid === false && r.data.invalidReason) {
+                            warnBox.textContent = r.data.invalidReason;
+                            warnBox.classList.remove('d-none');
+                        } else {
+                            warnBox.classList.add('d-none');
+                            warnBox.textContent = '';
+                        }
+                    }
+                    if (curPath === sentPath) {
+                        savedText = sentVal;
+                        dirty = editor ? (editor.getValue() !== savedText) : false;
+                    }
+                    if (!dirty) {
+                        setStatus('saved', 'Сохранено в ' + nowTime());
+                    }
+                    return true;
+                }).catch(function () {
+                    setStatus('err', 'Нет связи');
+                    return false;
+                }).finally(function () {
+                    saving = false;
+                    if (queued || (editor && curPath === sentPath && editor.getValue() !== savedText)) {
+                        queued = false;
+                        scheduleSave(300);
+                    }
+                });
+                return savePromise;
+            }
+
+            function scheduleSave(delayMs) {
+                if (saveTimer) { clearTimeout(saveTimer); }
+                if (!saving) { setStatus('pending'); }
+                saveTimer = setTimeout(function () { flushSave(); }, delayMs == null ? 700 : delayMs);
+            }
+
+            function sendKeepaliveIfDirty() {
+                if (!editor || !autosaveUrl) { return; }
+                var curVal = editor.getValue();
+                if (!dirty && curVal === savedText) { return; }
+                if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+                try {
+                    var csrf = window.K6 ? window.K6.getCsrf() : {header: 'X-CSRF-TOKEN', token: ''};
+                    var headers = {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json'};
+                    if (csrf.token && csrf.header) { headers[csrf.header] = csrf.token; }
+                    fetch(autosaveUrl, {
+                        method: 'POST',
+                        body: buildBody(curVal),
+                        credentials: 'same-origin',
+                        headers: headers,
+                        keepalive: true
+                    });
+                } catch (_) {}
+            }
+
+            document.addEventListener('visibilitychange', function () {
+                if (document.visibilityState === 'hidden') { sendKeepaliveIfDirty(); }
+            });
+            window.addEventListener('pagehide', sendKeepaliveIfDirty);
 
             function switchFile(link, push) {
                 if (!editor || !link) { return; }
@@ -71,32 +237,38 @@
                 var mySeq = ++fileLoadSeq;
                 if (errBox) { errBox.classList.add('d-none'); errBox.textContent = ''; }
                 box.classList.add('k6-ajax-busy');
-                fetch(nextFileUrl, {credentials: 'same-origin'}).then(function (r) {
-                    if (!r.ok) { throw new Error('HTTP ' + r.status); }
-                    return r.json();
+                flushSave().then(function () {
+                    if (mySeq !== fileLoadSeq) { return null; }
+                    var latestUrl = link.dataset.fileUrl || nextFileUrl;
+                    return fetch(latestUrl, {credentials: 'same-origin'}).then(function (r) {
+                        if (!r.ok) { throw new Error('HTTP ' + r.status); }
+                        return r.json();
+                    });
                 }).then(function (data) {
-                    if (mySeq !== fileLoadSeq) { return; }
-                    initialText = data.content || '';
+                    if (!data || mySeq !== fileLoadSeq) { return; }
+                    savedText = data.content || '';
+                    curPath = nextPath;
+                    if (root) { root.dataset.filePath = nextPath; }
                     var oldModel = editor.getModel();
-                    var nextModel = monaco.editor.createModel(initialText, langFor(nextPath));
-                    suppressDirty = true;
+                    var nextModel = monaco.editor.createModel(savedText, langFor(nextPath));
+                    suppressChange = true;
                     try {
                         editor.setModel(nextModel);
                         editor.setScrollTop(0);
                         editor.layout();
                     } finally {
-                        suppressDirty = false;
+                        suppressChange = false;
                     }
                     if (oldModel && oldModel !== nextModel && (!oldModel.isDisposed || !oldModel.isDisposed())) {
                         try { oldModel.dispose(); } catch (_) {}
                     }
                     if (filePathEl) { filePathEl.textContent = nextPath; }
-                    if (fileInputEl) { fileInputEl.value = nextPath; }
-                    box.dataset.fileUrl = nextFileUrl;
+                    box.dataset.fileUrl = link.dataset.fileUrl || nextFileUrl;
                     document.querySelectorAll('#edit-files-bar a.edit-file-link').forEach(function (a) {
                         a.classList.toggle('fw-bold', a.dataset.filePath === nextPath);
                     });
-                    setDirty(false);
+                    dirty = false;
+                    setStatus('saved', 'Сохранено');
                     var nextHref = link.getAttribute('href');
                     if (nextHref) {
                         if (push) { history.pushState({editFilePath: nextPath}, '', nextHref); }
@@ -114,16 +286,19 @@
                 a.addEventListener('click', function (e) {
                     if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) { return; }
                     e.preventDefault();
-                    if (fileInputEl && a.dataset.filePath === fileInputEl.value) { return; }
+                    if (a.dataset.filePath === curPath) { return; }
                     if (!editor) { location.href = a.href; return; }
-                    if (!dirty || submitting) { switchFile(a, true); return; }
-                    window.k6Confirm({
-                        title: 'Несохранённые изменения',
-                        message: 'В текущем файле есть несохранённые правки. Переключиться на «' + a.dataset.filePath + '» без сохранения?',
-                        confirmText: 'Переключиться',
-                        variant: 'warning'
-                    }).then(function (ok) {
-                        if (ok) { switchFile(a, true); }
+                    switchFile(a, true);
+                });
+            });
+
+            document.querySelectorAll('a.edit-nav-guard').forEach(function (a) {
+                a.addEventListener('click', function (e) {
+                    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) { return; }
+                    if (!dirty && !saving) { return; }
+                    e.preventDefault();
+                    flushSave().finally(function () {
+                        location.href = a.href;
                     });
                 });
             });
@@ -133,39 +308,13 @@
                 var fp = new URLSearchParams(location.search).get('file');
                 if (!fp) { return; }
                 var link = document.querySelector('#edit-files-bar a.edit-file-link[data-file-path="' + CSS.escape(fp) + '"]');
-                if (link && (!fileInputEl || fileInputEl.value !== fp)) { switchFile(link, false); }
-            });
-
-            function triggerSave() {
-                if (!editor || !saveBtn || saveBtn.disabled) { return; }
-                submitting = true;
-                document.getElementById('content').value = editor.getValue();
-                if (form.requestSubmit) { form.requestSubmit(saveBtn); } else { form.submit(); }
-            }
-
-            window.addEventListener('beforeunload', function (e) {
-                if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; }
-            });
-
-            document.querySelectorAll('a.edit-nav-guard').forEach(function (a) {
-                a.addEventListener('click', function (e) {
-                    if (!dirty || submitting) { return; }
-                    e.preventDefault();
-                    window.k6Confirm({
-                        title: 'Несохранённые изменения',
-                        message: 'В файле есть несохранённые правки. Перейти без сохранения?',
-                        confirmText: 'Перейти',
-                        variant: 'warning'
-                    }).then(function (ok) {
-                        if (ok) { submitting = true; location.href = a.href; }
-                    });
-                });
+                if (link && curPath !== fp) { switchFile(link, false); }
             });
 
             document.addEventListener('keydown', function (e) {
                 if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
                     e.preventDefault();
-                    triggerSave();
+                    flushSave();
                 }
             });
 
@@ -182,21 +331,28 @@
                 'encoding/index.d.ts', 'crypto/index.d.ts', 'html/index.d.ts', 'ws/index.d.ts', 'options/index.d.ts',
                 'net/grpc/index.d.ts', 'timers/index.d.ts', 'experimental/csv/index.d.ts', 'experimental/fs/index.d.ts', 'websockets/index.d.ts', 'global.d.ts'];
             require(['vs/editor/editor.main'], function () {
-                var path = new URLSearchParams(location.search).get('file') || '';
-                var lang = /\.(json)$/i.test(path) ? 'json' : 'javascript';
+                var path = new URLSearchParams(location.search).get('file') || curPath || '';
+                var lang = langFor(path);
                 fetch(box.dataset.fileUrl).then(function (r) {
                     if (!r.ok) { throw new Error('HTTP ' + r.status); }
                     return r.json();
                 }).then(function (data) {
                     if (loadingEl) { loadingEl.remove(); }
-                    initialText = data.content || '';
-                    editor = monaco.editor.create(box, {value: initialText, language: lang, automaticLayout: true,
+                    savedText = data.content || '';
+                    editor = monaco.editor.create(box, {value: savedText, language: lang, automaticLayout: true,
                         minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
                     editor.onDidChangeModelContent(function () {
-                        if (suppressDirty) { return; }
-                        setDirty(editor.getValue() !== initialText);
+                        if (suppressChange) { return; }
+                        var changed = editor.getValue() !== savedText;
+                        dirty = changed;
+                        if (changed) {
+                            scheduleSave(700);
+                        } else if (!saving) {
+                            if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+                            setStatus('saved', 'Сохранено');
+                        }
                     });
-                    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, triggerSave);
+                    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () { flushSave(); });
                     var ts = monaco.languages.typescript;
                     ts.javascriptDefaults.setCompilerOptions({allowJs: true, checkJs: false, allowNonTsExtensions: true,
                         target: ts.ScriptTarget.ES2020, moduleResolution: ts.ModuleResolutionKind.NodeJs,
@@ -206,101 +362,6 @@
                             .then(function (t) { if (t) { ts.javascriptDefaults.addExtraLib(t, 'file:///node_modules/@types/k6/' + f); } })
                             .catch(function () { /* редактор работает и без подсказок k6 */ });
                     });
-                    form.addEventListener('submit', function (ev) {
-                        ev.preventDefault();
-                        if (!editor || !saveBtn || saveBtn.disabled) { return; }
-                        var curVal = editor.getValue();
-                        document.getElementById('content').value = curVal;
-                        if (errBox) { errBox.classList.add('d-none'); errBox.textContent = ''; }
-                        submitting = true;
-                        var origHtml = saveBtn.innerHTML;
-                        saveBtn.disabled = true;
-                        saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Сохранение…';
-                        var body = new URLSearchParams();
-                        new FormData(form).forEach(function (val, key) {
-                            body.append(key, typeof val === 'string' ? val : '');
-                        });
-                        var csrf = window.K6 ? window.K6.getCsrf() : {token: ''};
-                        if (csrf.token && !body.has('_csrf')) { body.append('_csrf', csrf.token); }
-                        var req = window.K6 && window.K6.fetchHtml
-                            ? window.K6.fetchHtml(form.getAttribute('action'), {method: 'POST', body: body})
-                            : fetch(form.getAttribute('action'), {
-                                method: 'POST',
-                                body: body,
-                                credentials: 'same-origin',
-                                headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
-                                redirect: 'follow'
-                            }).then(function (res) {
-                                return res.text().then(function (html) {
-                                    var finalUrl = new URL(res.url || form.action, location.origin);
-                                    if (finalUrl.pathname === '/login') {
-                                        location.href = finalUrl.href;
-                                        var e = new Error('login'); e.redirectedToLogin = true; throw e;
-                                    }
-                                    return {res: res, doc: new DOMParser().parseFromString(html, 'text/html'), finalUrl: finalUrl};
-                                });
-                            });
-                        req.then(function (r) {
-                            var finalUrl = r.finalUrl;
-                            var doc = r.doc;
-                            var hasErr = false;
-                            doc.querySelectorAll('main > .alert.alert-dismissible[role="alert"]').forEach(function (al) {
-                                var txt = ((al.querySelector('span.flex-grow-1') || al).textContent || '').trim();
-                                if (!txt) { return; }
-                                var isErr = al.classList.contains('alert-danger');
-                                if (isErr) {
-                                    hasErr = true;
-                                    if (errBox) { errBox.textContent = txt; errBox.classList.remove('d-none'); }
-                                }
-                                if (window.k6Toast) { window.k6Toast(txt, isErr ? 'err' : 'ok'); }
-                            });
-                            if (hasErr || !r.res.ok) {
-                                if (!hasErr && window.k6Toast) { window.k6Toast('Ошибка сохранения (HTTP ' + r.res.status + ')', 'err'); }
-                                return;
-                            }
-                            var m = /\/versions\/(\d+)(?:\/|$)/.exec(finalUrl.pathname);
-                            var oldVid = form.dataset.curVid;
-                            if (m && oldVid && m[1] !== oldVid) {
-                                var newVid = m[1];
-                                var oldRe = new RegExp('/versions/' + oldVid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=/|$)');
-                                form.dataset.curVid = newVid;
-                                form.setAttribute('action', form.getAttribute('action').replace(oldRe, '/versions/' + newVid));
-                                document.querySelectorAll('a.edit-nav-guard, a.edit-file-link').forEach(function (a) {
-                                    var h = a.getAttribute('href');
-                                    if (h) { a.setAttribute('href', h.replace(oldRe, '/versions/' + newVid)); }
-                                    if (a.dataset && a.dataset.fileUrl) {
-                                        a.dataset.fileUrl = a.dataset.fileUrl.replace(oldRe, '/versions/' + newVid);
-                                    }
-                                });
-                                if (box && box.dataset && box.dataset.fileUrl) {
-                                    box.dataset.fileUrl = box.dataset.fileUrl.replace(oldRe, '/versions/' + newVid);
-                                }
-                                var verNumEl = document.getElementById('edit-ver-num');
-                                var metaEl = doc.getElementById('version-meta');
-                                var verNum = metaEl && metaEl.dataset ? metaEl.dataset.versionNumber : null;
-                                if (!verNum) {
-                                    var h5 = doc.querySelector('h5');
-                                    var vm = h5 && /Версия\s+(\d+)/.exec(h5.textContent || '');
-                                    verNum = vm ? vm[1] : null;
-                                }
-                                if (verNumEl && verNum) { verNumEl.textContent = verNum; }
-                                var nextEditUrl = location.pathname.replace(oldRe, '/versions/' + newVid) + location.search;
-                                history.replaceState(null, '', nextEditUrl);
-                            }
-                            initialText = curVal;
-                            setDirty(false);
-                            var cmt = form.querySelector('input[name="comment"]');
-                            if (cmt) { cmt.value = ''; }
-                        }).catch(function (err) {
-                            if (err && err.redirectedToLogin) { return; }
-                            if (window.k6Toast) { window.k6Toast('Не удалось сохранить версию — проверьте связь', 'err'); }
-                        }).finally(function () {
-                            submitting = false;
-                            saveBtn.disabled = false;
-                            saveBtn.innerHTML = origHtml;
-                        });
-                    });
-                    if (saveBtn) { saveBtn.disabled = false; }
                 }).catch(function (e) {
                     if (loadingEl) { loadingEl.remove(); }
                     if (errBox) {

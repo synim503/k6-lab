@@ -401,13 +401,7 @@
     }
 
     function withDiscardCheck(fn) {
-        if (!isDirty()) { fn(); return; }
-        window.k6Confirm({
-            title: 'Есть несохранённые изменения',
-            message: 'В текущем графике есть несохранённые изменения. Продолжить без сохранения?',
-            confirmText: 'Продолжить без сохранения',
-            variant: 'warning'
-        }).then(function (ok) { if (ok) { fn(); } });
+        fn();
     }
 
     // ==================== Render: Summary & Variables ====================
@@ -1635,20 +1629,12 @@
             saveVariable(item.dataset.vname, item.querySelector('.cb-var-in').value);
         } else if (e.target.closest('.cb-var-del')) {
             var vname = item.dataset.vname, vid = item.dataset.vid;
-            window.k6Confirm({
-                title: 'Удалить переменную?',
-                message: 'Переменная $' + vname + ' будет удалена.',
-                confirmText: 'Удалить',
-                variant: 'danger'
-            }).then(function (ok) {
-                if (!ok) { return; }
-                api('/api/variables/' + vid + '/delete', 'POST').then(function (res) {
-                    if (res.ok && res.data.variables) {
-                        variables = res.data.variables;
-                        renderVariables(); renderChartVars(); renderQueries(); renderList();
-                        toast('Переменная $' + vname + ' удалена', 'info');
-                    }
-                });
+            api('/api/variables/' + vid + '/delete', 'POST').then(function (res) {
+                if (res.ok && res.data.variables) {
+                    variables = res.data.variables;
+                    renderVariables(); renderChartVars(); renderQueries(); renderList();
+                    toast('Переменная $' + vname + ' удалена', 'info');
+                }
             });
         }
     });
@@ -1975,14 +1961,6 @@
     if (root.dataset.openGrafana === 'true') {
         bootstrap.Modal.getOrCreateInstance(document.getElementById('cb-grafana-modal')).show();
     }
-
-    // Warn before leaving page with unsaved changes
-    window.addEventListener('beforeunload', function (e) {
-        if (isDirty()) {
-            e.preventDefault();
-            e.returnValue = '';
-        }
-    });
 
     // ==================== Boot ====================
     renderPresetsMenu();

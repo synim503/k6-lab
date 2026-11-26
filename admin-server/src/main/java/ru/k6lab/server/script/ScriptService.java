@@ -226,6 +226,85 @@ public class ScriptService {
                 base.getGitRepoId(), base.getGitRef(), base.getGitBranch(), base.getCommitHash(), new ArrayList<>());
     }
 
+    /**
+     * Автосохранение из редактора:
+     * - если содержимое файла не изменилось — возвращает текущую версию без записи;
+     * - при allowInPlace=true и если текущая версия создана редактором, является последней и ещё не использована
+     *   ни в одном запуске/сценарии — обновляет её на месте (не плодя десятки версий на каждое нажатие клавиш);
+     * - иначе создаёт новую версию, сохраняя прежнюю неизменной.
+     */
+    public ScriptVersion autosaveEdit(Long scriptId, Long baseVersionId, String file, String newContent,
+                                      boolean allowInPlace) throws IOException {
+        Script s = get(scriptId);
+        ScriptVersion base = version(scriptId, baseVersionId);
+        String path = ZipUtil.safePath(file);
+        if (path == null) {
+            throw new IllegalArgumentException("Недопустимый путь файла");
+        }
+        Map<String, byte[]> files = ZipUtil.readAll(new ByteArrayInputStream(zipBytes(base)));
+        if (!files.containsKey(path)) {
+            throw new IllegalArgumentException("Файла " + path + " нет в версии");
+        }
+        byte[] updated = (newContent == null ? "" : newContent).getBytes(StandardCharsets.UTF_8);
+        if (java.util.Arrays.equals(files.get(path), updated)) {
+            return base;
+        }
+        files.put(path, updated);
+        if (!allowInPlace) {
+            return finalizeVersion(s, files, base.getEntrypoint(), Source.EDITOR,
+                    "правка " + path, base.getId(),
+                    base.getGitRepoId(), base.getGitRef(), base.getGitBranch(), base.getCommitHash(), new ArrayList<>());
+        }
+        PreparedVersion prep = prepareVersion(files, base.getEntrypoint(), new ArrayList<>());
+        var stored = storage.store("scripts", s.getName() + ".zip", new ByteArrayInputStream(prep.zip()));
+        final String[] oldKeyToDelete = new String[1];
+        try {
+            ScriptVersion result = tx.execute(st -> {
+                ScriptVersion cur = versions.findById(baseVersionId)
+                        .filter(x -> scriptId.equals(x.getScriptId()))
+                        .orElse(null);
+                if (cur != null && canUpdateInPlace(scriptId, cur)) {
+                    oldKeyToDelete[0] = cur.getStorageKey();
+                    applyPrepared(cur, prep, stored.key());
+                    return versions.saveAndFlush(cur);
+                }
+                return null;
+            });
+            if (result != null) {
+                if (oldKeyToDelete[0] != null && !oldKeyToDelete[0].equals(stored.key())) {
+                    try {
+                        storage.delete(oldKeyToDelete[0]);
+                    } catch (IOException cleanupEx) {
+                        log.warn("Не удалось удалить старый архив {}: {}", oldKeyToDelete[0], cleanupEx.toString());
+                    }
+                }
+                return result;
+            }
+            // Версия уже использована в запуске или не последняя — создаём новую версию из уже подготовленного архива
+            return persistNewVersion(s, prep, stored.key(), Source.EDITOR, "правка " + path, base.getId(),
+                    base.getGitRepoId(), base.getGitRef(), base.getGitBranch(), base.getCommitHash());
+        } catch (RuntimeException e) {
+            try {
+                storage.delete(stored.key());
+            } catch (IOException cleanupEx) {
+                log.warn("Не удалось удалить осиротевший архив {}: {}", stored.key(), cleanupEx.toString());
+            }
+            throw e;
+        }
+    }
+
+    private boolean canUpdateInPlace(Long scriptId, ScriptVersion v) {
+        if (v.getSource() != Source.EDITOR) {
+            return false;
+        }
+        if (v.getNumber() != versions.maxNumber(scriptId)) {
+            return false;
+        }
+        Integer runsCnt = jdbc.queryForObject("select count(*) from run where script_version_id = ?",
+                Integer.class, v.getId());
+        return runsCnt == null || runsCnt == 0;
+    }
+
     /** Откат = новая версия из содержимого старой. */
     public ScriptVersion rollback(Long scriptId, Long versionId) throws IOException {
         Script s = get(scriptId);
@@ -376,9 +455,12 @@ public class ScriptService {
 
     // ------------------------------------------------------------------ ядро: нормализация, валидация, сохранение
 
-    private ScriptVersion finalizeVersion(Script script, Map<String, byte[]> rawFiles, String entrypoint, Source source,
-                                          String comment, Long parentVersionId, Long gitRepoId, String gitRef,
-                                          String gitBranch, String commit, List<String> notes) throws IOException {
+    private record PreparedVersion(byte[] zip, String sha, String entrypoint, K6Tool.Inspect inspect,
+                                   List<OpEntry> operations, boolean valid, String invalidReason,
+                                   boolean usesHelper, List<String> warnings, List<FileEntry> files) {
+    }
+
+    private PreparedVersion prepareVersion(Map<String, byte[]> rawFiles, String entrypoint, List<String> notes) throws IOException {
         Map<String, byte[]> files = new LinkedHashMap<>(rawFiles);
         // __admin/ принадлежит админке и подкладывается при подготовке запуска; пользовательскую копию не храним
         if (files.keySet().removeIf(p -> p.startsWith("__admin/"))) {
@@ -462,51 +544,35 @@ public class ScriptService {
         }
         fileList.sort(Comparator.comparing(FileEntry::path));
 
-        var stored = storage.store("scripts", script.getName() + ".zip", new ByteArrayInputStream(zip));
-        final boolean fValid = valid;
-        final String fReason = invalidReason;
-        final boolean fHelper = usesHelper;
+        List<OpEntry> ops = new ArrayList<>(analysis.operations().stream()
+                .map(o -> new OpEntry(o.name(), o.origin())).toList());
+        return new PreparedVersion(zip, sha, entrypoint, inspect, ops, valid, invalidReason, usesHelper, warnings, fileList);
+    }
+
+    private static void applyPrepared(ScriptVersion v, PreparedVersion prep, String storageKey) {
+        v.setStorageKey(storageKey);
+        v.setEntrypoint(prep.entrypoint());
+        v.setSha256(prep.sha());
+        v.setSizeBytes(prep.zip().length);
+        v.setInspectStatus(prep.inspect().status());
+        v.setInspectResult(prep.inspect().options());
+        v.setInspectError(prep.inspect().error());
+        v.setOperations(new ArrayList<>(prep.operations()));
+        v.setValidForModel(prep.valid());
+        v.setInvalidReason(prep.invalidReason());
+        v.setUsesHelper(prep.usesHelper());
+        v.setWarnings(new ArrayList<>(prep.warnings()));
+        v.setFiles(new ArrayList<>(prep.files()));
+    }
+
+    private ScriptVersion finalizeVersion(Script script, Map<String, byte[]> rawFiles, String entrypoint, Source source,
+                                          String comment, Long parentVersionId, Long gitRepoId, String gitRef,
+                                          String gitBranch, String commit, List<String> notes) throws IOException {
+        PreparedVersion prep = prepareVersion(rawFiles, entrypoint, notes);
+        var stored = storage.store("scripts", script.getName() + ".zip", new ByteArrayInputStream(prep.zip()));
         try {
-            for (int attempt = 0; ; attempt++) {
-                try {
-                    return tx.execute(st -> {
-                        ScriptVersion v = new ScriptVersion();
-                        v.setScriptId(script.getId());
-                        v.setNumber(versions.maxNumber(script.getId()) + 1);
-                        v.setSource(source);
-                        v.setComment(blankToNull(comment));
-                        v.setParentVersionId(parentVersionId);
-                        v.setGitRepoId(gitRepoId);
-                        v.setGitRef(gitRef);
-                        v.setGitBranch(gitBranch);
-                        v.setCommitHash(commit);
-                        v.setStorageKey(stored.key());
-                        v.setEntrypoint(entrypoint);
-                        v.setSha256(sha);
-                        v.setSizeBytes(zip.length);
-                        v.setInspectStatus(inspect.status());
-                        v.setInspectResult(inspect.options());
-                        v.setInspectError(inspect.error());
-                        v.setOperations(new ArrayList<>(analysis.operations().stream()
-                                .map(o -> new OpEntry(o.name(), o.origin())).toList()));
-                        v.setValidForModel(fValid);
-                        v.setInvalidReason(fReason);
-                        v.setUsesHelper(fHelper);
-                        v.setWarnings(warnings);
-                        v.setFiles(fileList);
-                        var auth = SecurityContextHolder.getContext().getAuthentication();
-                        v.setCreatedBy(auth == null ? "system" : auth.getName());
-                        ScriptVersion saved = versions.saveAndFlush(v);
-                        audit.record("script.version", "script_version", saved.getId(),
-                                Map.of("script", script.getName(), "number", saved.getNumber(), "source", source.name()));
-                        return saved;
-                    });
-                } catch (DataIntegrityViolationException e) {
-                    if (attempt >= 3) {
-                        throw e;
-                    }
-                }
-            }
+            return persistNewVersion(script, prep, stored.key(), source, comment, parentVersionId,
+                    gitRepoId, gitRef, gitBranch, commit);
         } catch (RuntimeException e) {
             try {
                 storage.delete(stored.key());
@@ -514,6 +580,38 @@ public class ScriptService {
                 log.warn("Не удалось удалить осиротевший архив {}: {}", stored.key(), cleanupEx.toString());
             }
             throw e;
+        }
+    }
+
+    private ScriptVersion persistNewVersion(Script script, PreparedVersion prep, String storageKey, Source source,
+                                            String comment, Long parentVersionId, Long gitRepoId, String gitRef,
+                                            String gitBranch, String commit) {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return tx.execute(st -> {
+                    ScriptVersion v = new ScriptVersion();
+                    v.setScriptId(script.getId());
+                    v.setNumber(versions.maxNumber(script.getId()) + 1);
+                    v.setSource(source);
+                    v.setComment(blankToNull(comment));
+                    v.setParentVersionId(parentVersionId);
+                    v.setGitRepoId(gitRepoId);
+                    v.setGitRef(gitRef);
+                    v.setGitBranch(gitBranch);
+                    v.setCommitHash(commit);
+                    applyPrepared(v, prep, storageKey);
+                    var auth = SecurityContextHolder.getContext().getAuthentication();
+                    v.setCreatedBy(auth == null ? "system" : auth.getName());
+                    ScriptVersion saved = versions.saveAndFlush(v);
+                    audit.record("script.version", "script_version", saved.getId(),
+                            Map.of("script", script.getName(), "number", saved.getNumber(), "source", source.name()));
+                    return saved;
+                });
+            } catch (DataIntegrityViolationException e) {
+                if (attempt >= 3) {
+                    throw e;
+                }
+            }
         }
     }
 

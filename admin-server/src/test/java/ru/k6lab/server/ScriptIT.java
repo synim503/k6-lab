@@ -24,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -33,6 +34,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** Скрипты: загрузка, валидация (k6 inspect), версии, редактор, откат, Git (локальный репозиторий). */
@@ -281,5 +283,49 @@ class ScriptIT extends AbstractIT {
         // новую git-конфигурацию USER создавать не может, но смотреть может
         mvc.perform(get("/git-repos/new")).andExpect(status().isForbidden());
         mvc.perform(post("/scripts/" + v.getScriptId() + "/delete").with(csrf())).andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @WithMockUser(roles = "USER")
+    void autosaveCreatesOneSessionVersionAndUpdatesInPlace() throws Exception {
+        ScriptVersion v1 = upload(name(), "auto.js", "export function a() {}\nexport default function () {}\n");
+        Long sid = v1.getScriptId();
+        String base = "/scripts/" + sid;
+
+        // 1. Первое автосохранение (inPlace=false) создаёт версию 2, оставляя v1 нетронутой
+        mvc.perform(post(base + "/versions/" + v1.getId() + "/autosave")
+                        .with(csrf())
+                        .param("file", "auto.js")
+                        .param("content", "export function a() {}\nexport function b() {}\nexport default function () {}\n")
+                        .param("inPlace", "false"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.versionNumber").value(2));
+
+        List<ScriptVersion> afterFirst = scripts.versionsOf(sid);
+        assertThat(afterFirst).hasSize(2);
+        ScriptVersion v2 = afterFirst.get(0);
+        assertThat(v2.getNumber()).isEqualTo(2);
+
+        // 2. Повторное автосохранение в той же сессии (inPlace=true) обновляет v2 на месте без создания v3
+        mvc.perform(post(base + "/versions/" + v2.getId() + "/autosave")
+                        .with(csrf())
+                        .param("file", "auto.js")
+                        .param("content", "export function a() {}\nexport function b() {}\nexport function c() {}\nexport default function () {}\n")
+                        .param("inPlace", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.versionId").value(v2.getId()))
+                .andExpect(jsonPath("$.versionNumber").value(2));
+
+        assertThat(scripts.versionsOf(sid)).hasSize(2);
+        mvc.perform(get(base + "/versions/" + v2.getId() + "/file").param("path", "auto.js"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("export function c()")));
+
+        // 3. v1 осталась неизменной
+        mvc.perform(get(base + "/versions/" + v1.getId() + "/file").param("path", "auto.js"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("export function b()"))));
     }
 }

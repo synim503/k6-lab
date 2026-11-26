@@ -2021,9 +2021,6 @@ window.k6InitLoadEditor = function () {
                 }
             }
         }, _sig);
-        window.addEventListener('beforeunload', function (e) {
-            if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; }
-        }, _sig);
     }
 
     gwFromJson();
@@ -2055,46 +2052,16 @@ window.k6InitLoadEditor = function () {
     if (form) { form.classList.remove('is-dirty'); }
     if (form && form.dataset.fromProfile) { markDirty(); }
 
-    // Подтверждение ручной разовой отправки выбранных разделов в остальные профили (через делегирование для AJAX-swap)
+    // Проверка выбора разделов при отправке базовых параметров в остальные профили
     if (form) {
         document.addEventListener('click', function (e) {
             var applyBaseBtn = e.target && e.target.closest ? e.target.closest('#ld-apply-base-btn') : null;
             if (!applyBaseBtn) { return; }
-            if (applyBaseBtn.dataset.k6Confirmed === '1') {
-                delete applyBaseBtn.dataset.k6Confirmed;
-                return;
+            var checked = document.querySelectorAll('#ld-base-profile-box .ld-push-opt:checked');
+            if (checked.length === 0) {
+                e.preventDefault();
+                if (window.k6Toast) { window.k6Toast('Отметьте хотя бы один раздел для отправки в профили', 'warn'); }
             }
-            var checkedLabels = [];
-            document.querySelectorAll('#ld-base-profile-box .ld-push-opt:checked').forEach(function (cb) {
-                checkedLabels.push(cb.dataset.label || cb.name);
-            });
-            e.preventDefault();
-            if (checkedLabels.length === 0) {
-                window.k6Confirm({
-                    title: 'Не выбраны разделы',
-                    message: 'Отметьте хотя бы один раздел, который нужно отправить в остальные профили.',
-                    confirmText: 'Понятно',
-                    variant: 'warning',
-                    hideCancel: true
-                });
-                return;
-            }
-            var pCnt = applyBaseBtn.dataset.profCount || '';
-            window.k6Confirm({
-                title: 'Отправить данные в остальные профили?',
-                message: 'Базовая нагрузка будет сохранена, а выбранные разделы разово отправятся во все профили (' + pCnt + '). Постоянной привязки не создаётся.',
-                items: checkedLabels,
-                confirmText: 'Отправить (' + pCnt + ')',
-                variant: 'primary'
-            }).then(function (ok) {
-                if (!ok) { return; }
-                applyBaseBtn.dataset.k6Confirmed = '1';
-                if (form.requestSubmit) {
-                    form.requestSubmit(applyBaseBtn);
-                } else {
-                    applyBaseBtn.click();
-                }
-            });
         }, _sig);
         document.addEventListener('k6:ajax-done', function (ev) {
             if (ev.detail && ev.detail.form === form) { submitting = false; }
@@ -2439,21 +2406,9 @@ window.k6InitLoadEditor = function () {
             syncSelectionUi();
         }
 
-        function navigateWithDirtyCheck(targetUrl, label) {
-            if (!dirty) {
-                switchProfile(targetUrl, true);
-                return;
-            }
-            window.k6Confirm({
-                title: 'Есть несохранённые изменения',
-                message: 'Несохранённые изменения формы будут потеряны при переходе к ' + label + '. Продолжить?',
-                confirmText: 'Перейти без сохранения',
-                variant: 'warning'
-            }).then(function (ok) {
-                if (!ok) { return; }
-                dirty = false;
-                switchProfile(targetUrl, true);
-            });
+        function navigateWithDirtyCheck(targetUrl) {
+            dirty = false;
+            switchProfile(targetUrl, true);
         }
 
         renderProfiles();

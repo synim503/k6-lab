@@ -27,8 +27,7 @@
                 <i class="bi bi-collection me-1"></i>Импорт профилей нагрузки
             </button>
             <form class="m-0" th:unless="${paused}" th:action="@{/schedule/pause}" method="post"
-                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
-                  data-confirm="Поставить планировщик на паузу? Идущий тест закончится сам, новые запуски по расписанию не стартуют.">
+                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                 <button class="btn btn-outline-warning btn-sm"><i class="bi bi-pause-fill me-1"></i>Поставить на паузу</button>
             </form>
         </div>
@@ -155,8 +154,7 @@
                         </li>
                         <li th:if="${historyCount > 0}">
                             <form class="m-0" th:action="@{/schedule/clear-history}" method="post"
-                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
-                                  data-confirm="Очистить историю завершённых, отменённых и упавших записей расписания? Ожидающие в очереди тесты останутся.">
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                 <button type="submit" class="dropdown-item small">
                                     <i class="bi bi-trash3 me-2"></i>Очистить историю (<span th:text="${historyCount}"></span>)
                                 </button>
@@ -184,8 +182,7 @@
                     </button>
                 </form>
                 <form th:action="@{/schedule/bulk-cancel}" method="post" class="m-0 sch-bulk-form"
-                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
-                      data-confirm="Отменить выбранные ожидающие записи расписания?">
+                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                     <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" id="sch-bulk-cancel-btn" title="Отменить выбранные ожидающие записи">
                         <i class="bi bi-x-lg me-1"></i>Отменить ожидающие
                     </button>
@@ -285,8 +282,7 @@
                             <!-- Компактные быстрые действия для ожидающего теста -->
                             <th:block th:if="${s.pending}">
                                 <form th:action="@{/schedule/{id}/start-now(id=${s.id})}" method="post" class="d-inline m-0"
-                                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
-                                      data-confirm="Запустить этот тест прямо сейчас (если генераторы свободны)? Остальные записи очереди сдвинутся следом.">
+                                      data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                     <button type="submit" class="btn btn-sm btn-outline-success btn-icon-sm"
                                             title="Запустить прямо сейчас вне очереди" aria-label="Запустить сейчас">
                                         <i class="bi bi-play-fill"></i>
@@ -378,8 +374,7 @@
                             </div>
 
                             <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
-                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
-                                  data-confirm="Отменить запланированный запуск?">
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                 <button class="btn btn-sm btn-outline-danger btn-icon-sm" title="Отменить" aria-label="Отменить"><i class="bi bi-x-lg"></i></button>
                             </form>
                         </div>
@@ -514,8 +509,7 @@
                                 </button>
                             </form>
                             <form class="m-0" th:action="@{/schedule/guards/{id}/run-ssh(id=${g.id})}" method="post"
-                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards"
-                                  data-confirm="Выполнить SSH-скрипт прямо сейчас независимо от значения метрики?">
+                                  data-ajax="#sch-head,#sch-paused-wrap,#sch-kpi-row,#sch-queue-wrap,#guards">
                                 <button type="submit" class="btn btn-sm btn-outline-warning py-0 px-2" title="Принудительно выполнить SSH-скрипт сейчас (для отладки)">
                                     <i class="bi bi-terminal me-1"></i>SSH
                                 </button>

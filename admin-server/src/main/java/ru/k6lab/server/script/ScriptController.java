@@ -310,6 +310,30 @@ public class ScriptController {
         }
     }
 
+    @PostMapping(value = "/{id}/versions/{vid}/autosave", produces = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> autosaveEdit(@PathVariable Long id, @PathVariable Long vid,
+                                                            @RequestParam String file,
+                                                            @RequestParam String content,
+                                                            @RequestParam(defaultValue = "false") boolean inPlace) {
+        try {
+            ScriptVersion v = service.autosaveEdit(id, vid, file, content, inPlace);
+            Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("ok", true);
+            body.put("versionId", v.getId());
+            body.put("versionNumber", v.getNumber());
+            body.put("valid", v.isValidForModel());
+            body.put("invalidReason", v.getInvalidReason());
+            body.put("warnings", v.getWarnings() == null ? List.of() : v.getWarnings());
+            return ResponseEntity.ok(body);
+        } catch (IllegalArgumentException | IllegalStateException | IOException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "ok", false,
+                    "error", e.getMessage() != null ? e.getMessage() : "Ошибка сохранения"
+            ));
+        }
+    }
+
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes ra) {
         try {

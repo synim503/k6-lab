@@ -39,8 +39,7 @@
                 <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 ms-1 k6-copy-btn" th:attr="data-copy=${k.fingerprintSha256}" title="Копировать отпечаток" aria-label="Копировать отпечаток"><i class="bi bi-clipboard"></i></button></td>
             <td class="small text-muted" th:text="${k.confirmedBy} + ', ' + ${#temporals.format(k.confirmedAt, 'dd.MM.yyyy HH:mm')}"></td>
             <td class="text-end"><form th:action="@{/ssh-credentials/known-hosts/{id}/delete(id=${k.id})}" method="post"
-                                       data-ajax="#ssh-hosts-card"
-                                       data-confirm="Забыть ключ хоста? Следующее подключение потребует нового подтверждения.">
+                                       data-ajax="#ssh-hosts-card">
                 <button class="btn btn-sm btn-outline-danger" title="Забыть ключ: следующее подключение потребует подтверждения"><i class="bi bi-x-lg me-1"></i>Забыть</button></form></td>
         </tr></tbody></table></div></div>
 </th:block>

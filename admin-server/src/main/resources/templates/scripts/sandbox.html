@@ -197,15 +197,7 @@
                 });
             }
             function confirmRemoveFile(p) {
-                var f = files[p];
-                var hasContent = f && ((f.text !== null && (textOf(p) || '').trim().length > 0) || f.b64);
-                if (!hasContent) { removeFile(p); return; }
-                window.k6Confirm({
-                    title: 'Удалить файл?',
-                    message: 'Удалить файл «' + p + '» из отладчика?',
-                    confirmText: 'Удалить',
-                    variant: 'danger'
-                }).then(function (ok) { if (ok) { removeFile(p); } });
+                removeFile(p);
             }
             function removeFile(p) {
                 delete files[p];
@@ -427,35 +419,19 @@
                     .catch(function (e) { if (my === loadSeq) { showErr('Ошибка запроса: ' + e); applyMode(); done(); } });
             }
             $('sb-script').onchange = function () {
-                var sel = this;
-                var v = sel.value;
-                var applySwitch = function () {
-                    if (v) { loadScript(v); return; }
-                    loadSeq++;   // отменяем ещё не завершённую загрузку другого скрипта
-                    loadingScript = false;
-                    $('sb-script').disabled = false;
-                    existing = null;
-                    var oldModels = resetFiles();
-                    addFile('main.js', TEMPLATE, null, TEMPLATE.length, true);
-                    entry = 'main.js';
-                    open('main.js');
-                    disposeModels(oldModels);
-                    $('sb-env').value = '';
-                    renderFiles(); refreshFns(); applyMode(); setDirty(false);
-                };
-                if (!dirty) { applySwitch(); return; }
-                window.k6Confirm({
-                    title: 'Заменить файлы в редакторе?',
-                    message: 'Заменить текущие файлы в редакторе? Несохранённые правки пропадут.',
-                    confirmText: 'Заменить',
-                    variant: 'warning'
-                }).then(function (ok) {
-                    if (!ok) {
-                        sel.value = existing ? String(existing.id) : '';
-                        return;
-                    }
-                    applySwitch();
-                });
+                var v = this.value;
+                if (v) { loadScript(v); return; }
+                loadSeq++;   // отменяем ещё не завершённую загрузку другого скрипта
+                loadingScript = false;
+                $('sb-script').disabled = false;
+                existing = null;
+                var oldModels = resetFiles();
+                addFile('main.js', TEMPLATE, null, TEMPLATE.length, true);
+                entry = 'main.js';
+                open('main.js');
+                disposeModels(oldModels);
+                $('sb-env').value = '';
+                renderFiles(); refreshFns(); applyMode(); setDirty(false);
             };
 
             // ---------- запуск и лог
@@ -644,11 +620,10 @@
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(); }
                 else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); $('sb-save').click(); }
             });
-            window.addEventListener('beforeunload', function (e) {
+            window.addEventListener('beforeunload', function () {
                 unloading = true;
                 clearTimeout(pollTimer);
                 clearTimeout(fnTimer);
-                if (dirty) { e.preventDefault(); e.returnValue = ''; }
             });
 
             // ---------- редактор

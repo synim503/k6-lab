@@ -14,7 +14,7 @@
                 <input type="hidden" name="on" th:value="${!v.g().maintenance}">
                 <button class="btn btn-outline-secondary" th:title="${v.g().maintenance} ? 'Генератор снова будет получать запуски' : 'Новые запуски на этот генератор не назначаются'">
                     <i class="bi me-1" th:classappend="${v.g().maintenance} ? 'bi-play-circle' : 'bi-pause-circle'"></i><span th:text="${v.g().maintenance} ? 'Вернуть в работу' : 'На обслуживание'"></span></button></form>
-            <form th:action="@{/generators/{id}/restart(id=${v.g().id})}" method="post" data-ajax="#gen-head,#card" data-confirm="Перезапустить агента?">
+            <form th:action="@{/generators/{id}/restart(id=${v.g().id})}" method="post" data-ajax="#gen-head,#card">
                 <button class="btn btn-outline-secondary" th:disabled="${v.g().busy}"><i class="bi bi-arrow-clockwise me-1"></i>Перезапустить</button></form>
             <div class="dropdown">
                 <button class="btn btn-outline-secondary" data-bs-toggle="dropdown" aria-label="Другие действия"><i class="bi bi-three-dots"></i></button>
@@ -34,8 +34,7 @@
         <div><i class="bi bi-exclamation-octagon me-1"></i><strong>Агент в ошибке.</strong> Установка или операция не завершилась.
             <a th:if="${history != null and !history.isEmpty()}" th:href="@{/deployments/{id}(id=${history[0].id})}">Журнал последней операции</a></div>
         <div class="d-flex gap-2" sec:authorize="hasRole('ADMIN')">
-            <form th:action="@{/generators/{id}/redeploy(id=${v.g().id},keepMode=true)}" method="post"
-                  data-confirm="Повторить установку агента? Остатки прошлой попытки будут удалены.">
+            <form th:action="@{/generators/{id}/redeploy(id=${v.g().id},keepMode=true)}" method="post">
                 <button class="btn btn-danger" th:disabled="${v.g().busy}"><i class="bi bi-arrow-repeat me-1"></i>Повторить установку</button></form>
             <form th:action="@{/generators/{id}/redeploy(id=${v.g().id})}" method="post"
                   data-confirm="Жёсткий редеплой: снести всё про старого агента и поставить заново системным сервисом systemd?">
@@ -81,8 +80,7 @@
         <div class="col-lg-5" sec:authorize="hasRole('ADMIN')">
             <div class="card mb-3">
                 <div class="card-header">Обновление</div>
-                <form th:action="@{/generators/{id}/update(id=${v.g().id})}" method="post" class="card-body row g-2"
-                      data-confirm="Остановить агент и заменить файлы? При неудаче будет откат.">
+                <form th:action="@{/generators/{id}/update(id=${v.g().id})}" method="post" class="card-body row g-2">
                     <div class="col-sm-6"><label class="form-label" for="u-agent">Агент</label>
                         <select class="form-select form-select-sm" id="u-agent" name="agentArtifactId">
                             <option value="">по умолчанию</option>
