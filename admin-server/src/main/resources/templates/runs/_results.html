@@ -12,14 +12,14 @@
             <span class="dot dot-busy"></span>
             <div class="me-auto small">
                 <strong>Предварительные итоги</strong> — тест ещё выполняется. Показаны уже пройденные ступени и текущая ступень
-                <span th:if="${data != null and data.computedAt != null}" th:text="'(обновлено в ' + ${fmt.time(data.computedAt)} + ', автообновление каждые 15 с)'"></span>.
+                <span th:if="${data != null and data.computedAt != null}" th:text="'(обновлено в ' + ${fmt.time(data.computedAt)} + ')'"></span>.
                 Окончательный отчёт, экспорт и вывод инженера будут доступны после завершения запуска.
             </div>
             <button type="button" class="btn btn-sm btn-outline-primary"
                     th:attr="hx-get=@{/runs/{id}/results(id=${run.id},refresh=true)}"
-                    hx-target="#results-box" hx-swap="innerHTML">
+                    hx-target="#results-box" hx-swap="innerHTML" hx-disabled-elt="this">
                 <span class="spinner-border spinner-border-sm k6-htmx-spin me-1" role="status" aria-hidden="true"></span>
-                <i class="bi bi-arrow-clockwise me-1"></i>Обновить
+                <i class="bi bi-arrow-clockwise me-1 k6-htmx-hide"></i>Обновить
             </button>
         </div>
 

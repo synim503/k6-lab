@@ -188,24 +188,17 @@
                     }
                     if (h === 'results' && window.htmx) {
                         var box = document.getElementById('results-box');
-                        var liveRoot = document.getElementById('run-live');
-                        var isFinal = liveRoot && liveRoot.dataset.final === 'true';
-                        if (box && (!isFinal || box.dataset.needsRefresh === '1')) {
+                        if (box && (!box.dataset.loaded || box.dataset.needsRefresh === '1')) {
                             delete box.dataset.needsRefresh;
                             htmx.trigger(box, 'refresh');
                         }
                     }
                 });
             });
-            setInterval(function () {
-                var pane = document.getElementById('tab-results');
-                var box = document.getElementById('results-box');
-                var liveRoot = document.getElementById('run-live');
-                if (!pane || !pane.classList.contains('active') || !box || !window.htmx) { return; }
-                if (liveRoot && liveRoot.dataset.final === 'true') { return; }
-                if (document.querySelector('.modal.show') || (window.k6IsSelecting && window.k6IsSelecting())) { return; }
-                htmx.trigger(box, 'refresh');
-            }, 15000);
+            document.body.addEventListener('htmx:afterSwap', function (ev) {
+                var t = ev.detail && ev.detail.target;
+                if (t && t.id === 'results-box') { t.dataset.loaded = '1'; }
+            });
             window.addEventListener('hashchange', openByHash);
             openByHash();
         })();

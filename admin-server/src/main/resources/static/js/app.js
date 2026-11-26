@@ -1081,7 +1081,7 @@ window.k6InitSubtree(document);
             }
             var doc = new DOMParser().parseFromString(r.html, 'text/html');
             var allowCross = (form.dataset && form.dataset.ajaxAllowRedirect) || '';
-            if (spec !== 'toast' && finalUrl.pathname !== location.pathname && !allowCross) {
+            if (spec !== 'toast' && r.res.redirected && finalUrl.pathname !== location.pathname && !allowCross) {
                 location.href = finalUrl.href;
                 return;
             }

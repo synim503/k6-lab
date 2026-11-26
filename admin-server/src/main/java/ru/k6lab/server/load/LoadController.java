@@ -108,8 +108,9 @@ public class LoadController {
      */
     @PostMapping("/load/profile")
     public String saveProfile(@PathVariable Long id, @ModelAttribute("form") LoadForm f, @RequestParam String profileName,
+                              @RequestParam(name = "profile", required = false) Long currentProfileId,
                               java.security.Principal user, Model model) {
-        Long savedProfileId = null;
+        Long savedProfileId = currentProfileId;
         try {
             String name = profileName == null ? "" : profileName.strip();
             if (name.isEmpty() || name.length() > 120) {
@@ -130,6 +131,10 @@ public class LoadController {
             model.addAttribute("loadedProfileId", savedProfileId);
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
+            if (currentProfileId != null) {
+                model.addAttribute("loadedProfileId", currentProfileId);
+                model.addAttribute("loadedProfile", profileName == null ? "" : profileName.strip());
+            }
         }
         fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()), savedProfileId);
         return "scripts/load";
@@ -252,12 +257,14 @@ public class LoadController {
     }
 
     @PostMapping("/load")
-    public String save(@PathVariable Long id, @ModelAttribute("form") LoadForm f, Model model, RedirectAttributes ra) {
+    public String save(@PathVariable Long id, @ModelAttribute("form") LoadForm f,
+                       @org.springframework.web.bind.annotation.RequestHeader(value = "X-Requested-With", required = false) String xhr,
+                       Model model, RedirectAttributes ra) {
         try {
             f.setBaseProfileActive(false);
             load.save(id, f);
             ra.addFlashAttribute("info", "Нагрузка сохранена");
-            return "redirect:/scripts/" + id;
+            return "XMLHttpRequest".equals(xhr) ? "redirect:/scripts/" + id + "/load" : "redirect:/scripts/" + id;
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
             fill(model, id, f, Math.max(1, f.getGeneratorCount() == null ? scripts.get(id).getGeneratorCount() : f.getGeneratorCount()));

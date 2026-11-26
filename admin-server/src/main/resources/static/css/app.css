@@ -814,7 +814,8 @@ tr.sch-row.sch-row-highlight > td { background: #eef0ff !important; transition: 
 
 /* HTMX состояние загрузки */
 .htmx-request.btn { opacity: .72; pointer-events: none; }
-.htmx-request .k6-htmx-spin { display: inline-block !important; }
+.htmx-request > .k6-htmx-spin { display: inline-block !important; }
+.htmx-request > .k6-htmx-hide { display: none !important; }
 .k6-htmx-spin { display: none; }
 .k6-htmx-target.htmx-request { opacity: .62; transition: opacity .15s; }
 

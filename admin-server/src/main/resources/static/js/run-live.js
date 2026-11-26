@@ -249,7 +249,8 @@
         if (inflight) { again = true; return; }
         inflight = true;
         var finish = function () { inflight = false; if (again && !isFinal) { again = false; refreshStatus(); } };
-        var p = htmx.ajax('GET', root.dataset.statusUrl, {target: '#run-status', swap: 'outerHTML'});
+        var statusTarget = document.getElementById('run-status');
+        var p = htmx.ajax('GET', root.dataset.statusUrl, {target: '#run-status', swap: 'outerHTML', source: statusTarget || undefined});
         if (p && typeof p.then === 'function') { p.then(finish, finish); } else { setTimeout(finish, 1500); }
         setTimeout(function () { if (inflight) { finish(); } }, 8000);
     }

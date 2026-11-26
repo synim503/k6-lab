@@ -1971,6 +1971,7 @@
                 if (!nameEl || !nameEl.value.trim()) {
                     ev.preventDefault();
                     if (nameEl) { nameEl.focus(); nameEl.classList.add('is-invalid'); }
+                    if (window.k6Toast) { window.k6Toast('Введите название профиля', 'warn'); }
                     return;
                 }
                 nameEl.classList.remove('is-invalid');
@@ -2184,14 +2185,34 @@
                     curBaseRow.innerHTML = newBaseRow.innerHTML;
                 }
             }
-            if (finalUrl) {
+            var nextLoadedId = undefined;
+            if (doc) {
+                var newModal = doc.getElementById('ld-profiles-modal');
+                if (newModal && newModal.dataset) {
+                    nextLoadedId = newModal.dataset.loadedId ? Number(newModal.dataset.loadedId) : null;
+                }
+                var newProfName = doc.getElementById('profile-name');
+                var curProfName = document.getElementById('profile-name');
+                if (newProfName && curProfName && nextLoadedId != null && newProfName.value) {
+                    curProfName.value = newProfName.value;
+                }
+            }
+            if (nextLoadedId === undefined && finalUrl) {
                 try {
                     var u = new URL(finalUrl, location.origin);
                     var qp = u.searchParams.get('profile');
-                    loadedId = qp ? Number(qp) : null;
-                    profModalEl.dataset.loadedId = loadedId != null ? String(loadedId) : '';
-                    if (u.pathname === location.pathname && u.search !== location.search) {
-                        history.replaceState(null, '', u.pathname + u.search + location.hash);
+                    nextLoadedId = qp ? Number(qp) : null;
+                } catch (_) {}
+            }
+            if (nextLoadedId !== undefined) {
+                loadedId = nextLoadedId;
+                profModalEl.dataset.loadedId = loadedId != null ? String(loadedId) : '';
+                var pidInput = document.getElementById('profile-id');
+                if (pidInput) { pidInput.value = loadedId != null ? String(loadedId) : ''; }
+                try {
+                    var nextUrl = loadUrl + (loadedId != null ? '?profile=' + encodeURIComponent(loadedId) : '') + location.hash;
+                    if (nextUrl !== (location.pathname + location.search + location.hash)) {
+                        history.replaceState(null, '', nextUrl);
                     }
                 } catch (_) {}
             }

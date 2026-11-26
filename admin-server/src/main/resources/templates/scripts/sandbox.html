@@ -216,36 +216,71 @@
                 renderFiles(); refreshFns();
             }
             var emptyModel = null;
+            var suppressDirty = false;
+            function disposeModels(list) {
+                (list || []).forEach(function (m) {
+                    if (m && m !== emptyModel && (!m.isDisposed || !m.isDisposed())) {
+                        try { m.dispose(); } catch (_) {}
+                    }
+                });
+            }
             function showEmpty() {
+                current = null;
                 $('sb-cur').textContent = '—';
                 if (editor) {
                     if (!emptyModel || emptyModel.isDisposed()) {
                         emptyModel = monaco.editor.createModel('', 'plaintext');
                     }
-                    editor.setModel(emptyModel);
-                    editor.updateOptions({readOnly: true});
+                    suppressDirty = true;
+                    try {
+                        editor.setModel(emptyModel);
+                        editor.updateOptions({readOnly: true});
+                    } finally {
+                        suppressDirty = false;
+                    }
                 }
             }
             function open(p) {
-                if (!editor || !files[p]) { return; }
-                current = p; $('sb-cur').textContent = p;
-                if (!models[p]) {
+                if (!files[p]) { return; }
+                current = p;
+                $('sb-cur').textContent = p;
+                if (!editor) {
+                    renderFiles();
+                    return;
+                }
+                if (!models[p] || (models[p].isDisposed && models[p].isDisposed())) {
                     var f = files[p];
                     models[p] = monaco.editor.createModel(f.text !== null ? f.text : '[бинарный файл, ' + Math.ceil(f.size / 1024) + ' КБ — в редакторе не показывается]',
                         f.text !== null ? lang(p) : 'plaintext');
                 }
-                editor.setModel(models[p]);
-                editor.updateOptions({readOnly: files[p].text === null});
+                suppressDirty = true;
+                try {
+                    editor.setModel(models[p]);
+                    editor.updateOptions({readOnly: files[p].text === null});
+                    editor.setScrollTop(0);
+                    editor.layout();
+                } finally {
+                    suppressDirty = false;
+                }
+                requestAnimationFrame(function () { if (editor) { editor.layout(); } });
                 renderFiles();
             }
-            function addFile(path, text, b64, size) {
-                path = path.replace(/^\/+/, '');
-                setDirty(true);
-                if (models[path]) { models[path].dispose(); delete models[path]; }
+            function addFile(path, text, b64, size, silent) {
+                path = String(path || '').replace(/^\.?\/+/, '');
+                if (!path) { return; }
+                if (!silent) { setDirty(true); }
+                if (models[path]) {
+                    var prev = models[path];
+                    delete models[path];
+                    if (editor && editor.getModel() === prev) { editor.setModel(null); }
+                    disposeModels([prev]);
+                }
                 files[path] = {text: text, b64: b64, size: size};
                 if (!entry || !files[entry]) { entry = isJs(path) ? path : entry; }
-                if (!current) { open(path); }
-                renderFiles(); refreshFns();
+                if (!silent) {
+                    if (!current) { open(path); }
+                    renderFiles(); refreshFns();
+                }
             }
             function textOf(p) { return models[p] ? models[p].getValue() : files[p].text; }
 
@@ -340,8 +375,9 @@
 
             // ---------- выбор существующего скрипта
             function resetFiles() {
-                Object.keys(models).forEach(function (p) { models[p].dispose(); });
+                var oldModels = Object.keys(models).map(function (p) { return models[p]; });
                 models = {}; files = {}; current = null; entry = ''; execTouched = false;
+                return oldModels;
             }
             function applyMode() {
                 $('sb-name').classList.toggle('d-none', !!existing);
@@ -357,23 +393,34 @@
                     : 'Новый скрипт: соберите файлы и сохраните. Чтобы отладить уже существующий, выберите его в списке.';
             }
             var loadSeq = 0;   // номер последнего запроса: ответ более раннего запроса игнорируется (иначе в редакторе оказывался прежний скрипт)
+            var loadingScript = false;
             function loadScript(id) {
                 showErr('');
                 var my = ++loadSeq;
+                loadingScript = true;
                 $('sb-script').disabled = true;
                 $('sb-script-info').textContent = 'Загружаю скрипт…';
-                function done() { if (my === loadSeq) { $('sb-script').disabled = false; } }
-                return fetch('/scripts/sandbox/script/' + id).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+                function done() {
+                    if (my === loadSeq) {
+                        loadingScript = false;
+                        $('sb-script').disabled = false;
+                    }
+                }
+                return fetch('/scripts/sandbox/script/' + id, {credentials: 'same-origin', cache: 'no-store'})
+                    .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
                     .then(function (res) {
                         if (my !== loadSeq) { return; }
                         if (!res.ok) { showErr(res.j.error || 'Не удалось загрузить скрипт'); $('sb-script').value = existing ? String(existing.id) : ''; applyMode(); done(); return; }
                         var j = res.j;
-                        resetFiles();
-                        j.files.forEach(function (f) { addFile(f.path, f.text, f.base64, f.text ? f.text.length : 0); });
-                        entry = files[j.entrypoint] ? j.entrypoint : (Object.keys(files).filter(isJs)[0] || '');
+                        var oldModels = resetFiles();
+                        (j.files || []).forEach(function (f) { addFile(f.path, f.text, f.base64, f.text ? f.text.length : 0, true); });
+                        var ep = String(j.entrypoint || '').replace(/^\.?\/+/, '');
+                        entry = files[ep] ? ep : (Object.keys(files).filter(isJs)[0] || '');
+                        var toOpen = entry || Object.keys(files)[0] || '';
                         existing = {id: j.id, name: j.name, version: j.version};
                         $('sb-env').value = Object.keys(j.env || {}).map(function (k) { return k + '=' + j.env[k]; }).join('\n');
-                        if (entry) { open(entry); } else { showEmpty(); }
+                        if (toOpen) { open(toOpen); } else { showEmpty(); }
+                        disposeModels(oldModels);
                         $('sb-script').value = String(j.id);
                         renderFiles(); refreshFns(); applyMode(); setDirty(false); done();
                     })
@@ -385,9 +432,16 @@
                 var applySwitch = function () {
                     if (v) { loadScript(v); return; }
                     loadSeq++;   // отменяем ещё не завершённую загрузку другого скрипта
+                    loadingScript = false;
                     $('sb-script').disabled = false;
-                    existing = null; resetFiles(); addFile('main.js', TEMPLATE, null, TEMPLATE.length);
-                    $('sb-env').value = ''; applyMode(); setDirty(false);
+                    existing = null;
+                    var oldModels = resetFiles();
+                    addFile('main.js', TEMPLATE, null, TEMPLATE.length, true);
+                    entry = 'main.js';
+                    open('main.js');
+                    disposeModels(oldModels);
+                    $('sb-env').value = '';
+                    renderFiles(); refreshFns(); applyMode(); setDirty(false);
                 };
                 if (!dirty) { applySwitch(); return; }
                 window.k6Confirm({
@@ -591,9 +645,32 @@
                 });
                 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, run);
                 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () { $('sb-save').click(); });
-                editor.onDidChangeModelContent(function () { setDirty(true); if (current === entry) { refreshFns(); } });
+                editor.onDidChangeModelContent(function () {
+                    if (suppressDirty) { return; }
+                    setDirty(true);
+                    if (current === entry) { refreshFns(); }
+                });
+                var selVal = $('sb-script').value;
                 var pre = $('sb-script').dataset.pre;
-                if (pre) { $('sb-script').value = pre; loadScript(pre); } else { addFile('main.js', TEMPLATE, null, TEMPLATE.length); setDirty(false); }
+                if (loadingScript) {
+                    // Скрипт уже загружается (выбран пользователем пока грузился Monaco) — дождёмся завершения loadScript
+                } else if (Object.keys(files).length > 0) {
+                    // Пользователь успел выбрать и загрузить скрипт до готовности Monaco — просто открываем его в редакторе
+                    var target = (current && files[current]) ? current : (entry && files[entry] ? entry : Object.keys(files)[0]);
+                    if (target) { open(target); } else { showEmpty(); }
+                } else if (selVal) {
+                    loadScript(selVal);
+                } else if (pre) {
+                    $('sb-script').value = pre;
+                    loadScript(pre);
+                } else {
+                    addFile('main.js', TEMPLATE, null, TEMPLATE.length, true);
+                    entry = 'main.js';
+                    open('main.js');
+                    renderFiles();
+                    refreshFns();
+                    setDirty(false);
+                }
             });
         })();
     </script>
