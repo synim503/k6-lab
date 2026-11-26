@@ -11,14 +11,14 @@ import java.util.Iterator;
 import java.util.Map;
 
 /** Конфиг нагрузки скрипта в виде JSON: то же, что форма «Нагрузка», но текстом (env - объектом, операции - списком). */
-final class LoadJson {
+public final class LoadJson {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private LoadJson() {
     }
 
-    static String toJson(LoadForm f) {
+    public static String toJson(LoadForm f) {
         ObjectNode n = MAPPER.valueToTree(f);
         n.remove("envText");
         JsonNode ops = n.remove("ops");
@@ -34,7 +34,7 @@ final class LoadJson {
         }
     }
 
-    static LoadForm fromJson(String json) {
+    public static LoadForm fromJson(String json) {
         if (json == null || json.isBlank()) {
             throw new IllegalArgumentException("Конфиг пуст");
         }

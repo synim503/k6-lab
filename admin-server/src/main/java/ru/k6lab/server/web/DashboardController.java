@@ -40,7 +40,10 @@ public class DashboardController {
     }
 
     @GetMapping("/")
-    public String dashboard(Model model) {
+    public String dashboard(Model model, jakarta.servlet.http.HttpServletRequest req) {
+        if ("document".equalsIgnoreCase(req.getHeader("Sec-Fetch-Dest")) && req.getParameter("classic") == null) {
+            return "redirect:/app/";
+        }
         List<GeneratorView> all = views.all();
         model.addAttribute("generators", all);
         // на главной - только самые важные: сначала проблемные, затем занятые, остальные по имени; полный список по ссылке «все»
@@ -116,7 +119,12 @@ public class DashboardController {
     }
 
     @GetMapping("/login")
-    public String login() {
+    public String login(jakarta.servlet.http.HttpServletRequest req) {
+        if ("document".equalsIgnoreCase(req.getHeader("Sec-Fetch-Dest"))
+                && req.getParameter("classic") == null
+                && req.getParameter("error") == null) {
+            return "redirect:/app/";
+        }
         return "login";
     }
 }

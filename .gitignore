@@ -11,3 +11,5 @@ config/k6lab.properties
 admin-server/target/dev-pg/
 .tools/
 .m2-vendor/
+frontend/node_modules/
+frontend/.vite/

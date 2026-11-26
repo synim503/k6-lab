@@ -123,6 +123,15 @@ fi
 rm -rf portable
 mkdir -p "$DIST/agent/linux-amd64" "$DIST/agent/linux-arm64" "$DIST/k6/linux-amd64" "$DIST/k6/linux-arm64" "$DIST/jre"
 
+# ---------------------------------------------------------------- фронтенд (React SPA -> static/app/)
+if [ -d frontend/node_modules ] && command -v npm >/dev/null 2>&1; then
+  echo "== Сборка React SPA (frontend -> static/app/)"
+  (cd frontend && npm run build)
+elif [ ! -f admin-server/src/main/resources/static/app/index.html ]; then
+  echo "✖ не найден собранный фронтенд admin-server/src/main/resources/static/app/index.html (установите Node.js и выполните: cd frontend && npm install && npm run build)"
+  exit 1
+fi
+
 # ---------------------------------------------------------------- админка
 if [ "$WITH_TESTS" -eq 1 ]; then
   echo "== Тесты (${MVN[*]} verify)"
