@@ -314,6 +314,11 @@ public class RunService {
         return runs.findByStatusIn(List.of(RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.STOPPING));
     }
 
+    /** Run, уже занимающие или ожидающие выдачи генераторов (включая QUEUED, чтобы планировщик не бронировал те же хосты поверх них). */
+    public List<Run> activeAndQueuedRuns() {
+        return runs.findByStatusIn(List.of(RunStatus.QUEUED, RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.STOPPING));
+    }
+
     public List<RunGenerator> generatorsOf(Long runId) {
         return runGenerators.findByRunIdOrderBySeqIndexAsc(runId);
     }

@@ -12,6 +12,7 @@ const protocolVersion = 1
 const (
 	stPreparing = "PREPARING"
 	stPrepared  = "PREPARED"
+	stStarting  = "STARTING"
 	stRunning   = "RUNNING"
 	stStopping  = "STOPPING"
 	stExited    = "EXITED"

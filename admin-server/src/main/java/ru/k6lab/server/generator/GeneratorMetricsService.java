@@ -31,11 +31,13 @@ public class GeneratorMetricsService {
     }
 
     private final JdbcTemplate jdbc;
+    private final ru.k6lab.server.settings.SettingsService settings;
     private final Queue<Row> buffer = new ConcurrentLinkedQueue<>();
     private final Map<Long, Row> latest = new ConcurrentHashMap<>();
 
-    public GeneratorMetricsService(JdbcTemplate jdbc) {
+    public GeneratorMetricsService(JdbcTemplate jdbc, ru.k6lab.server.settings.SettingsService settings) {
         this.jdbc = jdbc;
+        this.settings = settings;
     }
 
     public void record(long generatorId, Messages.Heartbeat hb, int activeRuns) {
@@ -86,8 +88,9 @@ public class GeneratorMetricsService {
 
     @Scheduled(cron = "0 17 * * * *")
     public void purgeOld() {
+        Duration retention = Duration.ofDays(Math.max(1, settings.metricsRetentionDays()));
         int n = jdbc.update("delete from generator_metrics where ts < ?",
-                Timestamp.from(Instant.now().minus(RETENTION)));
+                Timestamp.from(Instant.now().minus(retention)));
         if (n > 0) {
             log.info("Удалено {} старых строк generator_metrics", n);
         }

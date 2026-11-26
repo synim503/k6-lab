@@ -107,9 +107,20 @@ public final class ZipUtil {
     public static byte[] read(InputStream zip, String path) throws IOException {
         try (ZipInputStream in = new ZipInputStream(zip)) {
             ZipEntry e;
+            byte[] buf = new byte[64 * 1024];
             while ((e = in.getNextEntry()) != null) {
                 if (!e.isDirectory() && e.getName().equals(path)) {
-                    return in.readAllBytes();
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    long total = 0;
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        total += n;
+                        if (total > MAX_TOTAL_BYTES) {
+                            throw new IOException("Файл в архиве слишком большой");
+                        }
+                        bos.write(buf, 0, n);
+                    }
+                    return bos.toByteArray();
                 }
             }
         }
@@ -119,18 +130,26 @@ public final class ZipUtil {
     public static Map<String, byte[]> readAll(InputStream zip) throws IOException {
         Map<String, byte[]> out = new LinkedHashMap<>();
         long total = 0;
+        byte[] buf = new byte[64 * 1024];
         try (ZipInputStream in = new ZipInputStream(zip)) {
             ZipEntry e;
             while ((e = in.getNextEntry()) != null) {
                 if (e.isDirectory()) {
                     continue;
                 }
-                byte[] b = in.readAllBytes();
-                total += b.length;
-                if (total > MAX_TOTAL_BYTES || out.size() > MAX_ENTRIES) {
-                    throw new IOException("Архив слишком большой");
+                if (out.size() >= MAX_ENTRIES) {
+                    throw new IOException("В архиве слишком много файлов");
                 }
-                out.put(e.getName(), b);
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    total += n;
+                    if (total > MAX_TOTAL_BYTES) {
+                        throw new IOException("Архив слишком большой");
+                    }
+                    bos.write(buf, 0, n);
+                }
+                out.put(e.getName(), bos.toByteArray());
             }
         }
         return out;

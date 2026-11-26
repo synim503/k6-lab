@@ -8,6 +8,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.session.SessionRegistry;
+import org.springframework.security.core.session.SessionRegistryImpl;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -20,6 +22,11 @@ public class SecurityConfig {
     @Bean
     PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    SessionRegistry sessionRegistry() {
+        return new SessionRegistryImpl();
     }
 
     /** Порт агентов: аутентификация токеном выполняется в handshake WebSocket, CSRF и сессии не нужны. */
@@ -35,7 +42,7 @@ public class SecurityConfig {
 
     @Bean
     @Order(2)
-    SecurityFilterChain webChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain webChain(HttpSecurity http, SessionRegistry sessionRegistry) throws Exception {
         http.authorizeHttpRequests(a -> a
                         .requestMatchers("/login", "/css/**", "/js/**", "/webjars/**", "/favicon.ico",
                                 "/actuator/health", "/actuator/health/**").permitAll()
@@ -44,6 +51,7 @@ public class SecurityConfig {
                         .anyRequest().authenticated())
                 .formLogin(f -> f.loginPage("/login").defaultSuccessUrl("/", true).permitAll())
                 .logout(l -> l.logoutSuccessUrl("/login?logout"))
+                .sessionManagement(s -> s.maximumSessions(-1).sessionRegistry(sessionRegistry))
                 // CSRF включён; htmx передаёт токен заголовком X-CSRF-TOKEN (см. layout)
                 .headers(h -> h.frameOptions(fo -> fo.sameOrigin()));
         return http.build();

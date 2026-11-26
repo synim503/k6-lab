@@ -208,11 +208,21 @@ public class RunHistoryService {
             if (elapsed <= 0) {
                 continue;
             }
+            Instant ptInstant = Instant.ofEpochSecond(t);
+            RunStep cur = null;
+            for (RunStep s : steps) {
+                if (!ptInstant.isBefore(s.getRampStartAt()) && ptInstant.isBefore(s.getHoldEndAt())) {
+                    cur = s;
+                }
+            }
+            int stepNo = cur != null ? cur.getStepNo() : (steps.isEmpty() ? 1 : steps.get(steps.size() - 1).getStepNo());
+            boolean inHold = cur == null ? !ptInstant.isBefore(holdStart) : !ptInstant.isBefore(cur.getHoldStartAt());
+            String phase = inHold ? "hold" : (snap.warmup() != null && stepNo == 1 ? "warmup" : "ramp");
             ObjectNode m = MAPPER.createObjectNode();
             m.put("ts", t * 1000);
             m.put("dataTs", t * 1000);
-            m.put("step", 1);
-            m.put("phase", snap.warmup() != null && t < holdStart.getEpochSecond() ? "warmup" : "hold");
+            m.put("step", stepNo);
+            m.put("phase", phase);
             m.put("elapsedSec", (long) elapsed);
             m.put("windowSec", window);
             RunMonitor.putD(m, "vus", vus.get(t));

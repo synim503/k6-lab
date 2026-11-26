@@ -70,7 +70,9 @@ public class GeneratorViewService {
         boolean clockWarn = off != null && Math.abs(off) > 250 && !clockBad;
 
         Arch arch = g.getArch() == null ? null : Arch.valueOf(g.getArch());
-        Optional<DistributionArtifact> defAgent = distributions.defaultFor(Kind.AGENT, Arch.ANY);
+        Optional<DistributionArtifact> defAgent = arch != null
+                ? distributions.defaultFor(Kind.AGENT, arch).or(() -> distributions.defaultFor(Kind.AGENT, Arch.ANY))
+                : distributions.defaultFor(Kind.AGENT, Arch.ANY);
         Optional<DistributionArtifact> defK6 = arch == null ? Optional.empty() : distributions.defaultFor(Kind.K6, arch);
         boolean agentDrift = defAgent.isPresent() && g.getAgentVersion() != null
                 && !norm(defAgent.get().getVersion()).equals(norm(g.getAgentVersion()));

@@ -184,7 +184,7 @@ public class RunSeriesService {
         plan.add(new Pt(0, 0));
         for (RunSnapshot.StepInfo s : snap.steps()) {
             double target = o.ratePerSec() * s.levelPct() / 100.0;
-            if (s.rampSec() > 0 && snap.warmup() != null) {
+            if (s.no() == 1 && s.rampSec() > 0 && snap.warmup() != null) {
                 // прогрев без своей интенсивности идёт на плане основной нагрузки
                 double warm = o.warmRatePerSec() > 0 ? o.warmRatePerSec() : target;
                 plan.set(0, new Pt(0, warm));

@@ -19,13 +19,16 @@ public class AgentMaintenanceJobs {
 
     private final AgentSessionRegistry registry;
     private final GeneratorStateService state;
+    private final org.springframework.context.ApplicationEventPublisher publisher;
 
-    public AgentMaintenanceJobs(AgentSessionRegistry registry, GeneratorStateService state) {
+    public AgentMaintenanceJobs(AgentSessionRegistry registry, GeneratorStateService state,
+                                org.springframework.context.ApplicationEventPublisher publisher) {
         this.registry = registry;
         this.state = state;
+        this.publisher = publisher;
     }
 
-    /** Подтверждаем агентам принятые события (раз в секунду) и сохраняем last_seq. */
+    /** Подтверждаем агентам принятые события (раз в секунду): сначала фиксируем last_seq в БД, затем шлём ACK. */
     @Scheduled(fixedDelay = 1000)
     public void sendAcks() {
         for (AgentSession s : registry.all()) {
@@ -35,9 +38,9 @@ public class AgentMaintenanceJobs {
             long seq = s.lastSeq();
             if (seq > s.lastAckedToAgent()) {
                 try {
+                    state.saveLastSeq(s.generatorId(), seq);
                     s.send(new Messages.Ack(seq, System.currentTimeMillis()));
                     s.lastAckedToAgent(seq);
-                    state.saveLastSeq(s.generatorId(), seq);
                 } catch (RuntimeException e) {
                     log.debug("ACK не отправлен: {}", e.getMessage());
                 }
@@ -45,7 +48,7 @@ public class AgentMaintenanceJobs {
         }
     }
 
-    /** Каждые 30 с замеряем смещение часов (PING/PONG). */
+    /** Каждые 30 с замеряем смещение часов (PING/PONG). При ошибке записи закрываем мёртвую сессию. */
     @Scheduled(fixedDelay = 30_000, initialDelay = 10_000)
     public void pingAgents() {
         for (AgentSession s : registry.all()) {
@@ -53,7 +56,8 @@ public class AgentMaintenanceJobs {
                 try {
                     s.send(new Messages.Ping("p-" + System.nanoTime(), System.currentTimeMillis()));
                 } catch (RuntimeException e) {
-                    log.debug("PING не отправлен: {}", e.getMessage());
+                    log.warn("PING агенту {} не отправлен ({}): закрываем сессию", s.generatorName(), e.getMessage());
+                    dropDeadSession(s, "ping failed");
                 }
             }
         }
@@ -61,7 +65,24 @@ public class AgentMaintenanceJobs {
 
     @Scheduled(fixedDelay = 5000, initialDelay = 15_000)
     public void markStale() {
-        state.markStaleOffline(Instant.now().minus(HEARTBEAT_TIMEOUT), registry::isConnected)
+        Instant cutoff = Instant.now().minus(HEARTBEAT_TIMEOUT);
+        for (AgentSession s : registry.all()) {
+            Instant last = s.lastHeartbeatAt() != null ? s.lastHeartbeatAt() : s.connectedAt();
+            if (last.isBefore(cutoff)) {
+                log.warn("Агент {} не присылает heartbeat > {} с — закрываем залипшую сессию",
+                        s.generatorName(), HEARTBEAT_TIMEOUT.toSeconds());
+                dropDeadSession(s, "heartbeat timeout");
+            }
+        }
+        state.markStaleOffline(cutoff, registry::isConnected)
                 .forEach(g -> log.warn("Генератор {} не присылает heartbeat - OFFLINE", g.getName()));
+    }
+
+    private void dropDeadSession(AgentSession s, String reason) {
+        s.close(reason);
+        if (registry.unregister(s)) {
+            state.markOffline(s.generatorId());
+            publisher.publishEvent(new AgentLifecycleEvents.Disconnected(s.generatorId(), s.generatorName()));
+        }
     }
 }

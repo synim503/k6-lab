@@ -29,7 +29,7 @@ public final class DataFileStats {
                             lines++;
                         }
                     }
-                    last = buf[n - 1];
+                    last = buf[n - 1] & 0xFF;
                 }
                 if (last >= 0 && last != '\n') {
                     lines++;

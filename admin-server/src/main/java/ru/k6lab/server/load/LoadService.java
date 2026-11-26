@@ -125,13 +125,13 @@ public class LoadService {
         return f;
     }
 
-    /** Заполняет в форме настройки базового профиля скрипта (приоритет разделов и общий прогрев из script.successCriteria). */
+    /** Заполняет в форме сохранённые настройки ручной рассылки и общего прогрева из script.successCriteria. */
     public void readBaseConfigIntoForm(Script script, LoadForm f) {
         Map<String, Object> sc = script.getSuccessCriteria();
+        f.setBaseProfileActive(false); // постоянной привязки к базовому профилю больше нет
         if (sc == null) {
             return;
         }
-        f.setBaseProfileActive(Boolean.TRUE.equals(sc.get("baseProfileActive")));
         f.setBaseOverrideEnv(!sc.containsKey("baseOverrideEnv") || Boolean.TRUE.equals(sc.get("baseOverrideEnv")));
         f.setBaseOverrideStop(!sc.containsKey("baseOverrideStop") || Boolean.TRUE.equals(sc.get("baseOverrideStop")));
         f.setBaseOverrideSla(!sc.containsKey("baseOverrideSla") || Boolean.TRUE.equals(sc.get("baseOverrideSla")));
@@ -242,7 +242,7 @@ public class LoadService {
     @Transactional
     public void save(Long scriptId, LoadForm f) {
         Script script = scripts.get(scriptId);
-        boolean allowEmptyOps = f.isBaseProfileActive() || !profiles.list(scriptId).isEmpty();
+        boolean allowEmptyOps = !profiles.list(scriptId).isEmpty();
         BuiltLoad b = build(scriptId, f, allowEmptyOps);
         operations.deleteByScriptId(scriptId);
         operations.flush();
@@ -264,19 +264,16 @@ public class LoadService {
         dataFiles.flush();
         b.dataFiles().forEach(dataFiles::save);
 
-        if (f.isBaseProfileActive()) {
-            syncBaseToAllProfiles(scriptId, "system");
-        }
         audit.record("script.load", "script", scriptId, Map.of("operations", b.ops().size()));
     }
 
-    /** Сохраняет метаданные базового профиля (приоритеты разделов, общий прогрев и SLA всех операций) в script.successCriteria. */
+    /** Сохраняет метаданные базового профиля (выбранные разделы для ручной рассылки, общий прогрев и SLA) в script.successCriteria. */
     private void saveBaseConfigToScript(Script script, LoadForm f) {
         Map<String, Object> sc = script.getSuccessCriteria() == null
                 ? new java.util.LinkedHashMap<>()
                 : new java.util.LinkedHashMap<>(script.getSuccessCriteria());
-        if (f.isBaseConfigSubmitted() || f.isBaseProfileActive() || !sc.containsKey("baseProfileActive")) {
-            sc.put("baseProfileActive", f.isBaseProfileActive());
+        sc.put("baseProfileActive", false); // автоматическая привязка профилей к базовому отключена
+        if (f.isBaseConfigSubmitted() || !sc.containsKey("baseOverrideEnv")) {
             sc.put("baseOverrideEnv", f.isBaseOverrideEnv());
             sc.put("baseOverrideStop", f.isBaseOverrideStop());
             sc.put("baseOverrideSla", f.isBaseOverrideSla());
@@ -348,46 +345,23 @@ public class LoadService {
         return "";
     }
 
-    /** Применяет базовые параметры скрипта к форме профиля (согласно включённым флагам baseOverride*). */
-    @Transactional(readOnly = true)
-    public void applyBaseOverridesToProfileForm(Long scriptId, LoadForm profileForm) {
-        applyBaseOverridesToProfileForm(scripts.get(scriptId), profileForm, false);
-    }
-
     /**
-     * Применяет базовые параметры скрипта к форме профиля.
-     * @param force если true — применяет выбранные галочками разделы даже если baseProfileActive ещё не был сохранён.
+     * Разовое ручное применение выбранных разделов базового профиля к целевому профилю.
+     * Для переменных (env): обновляются и добавляются только ключи, заданные в базовом профиле —
+     * дополнительные переменные целевого профиля сохраняются без изменений.
      */
     @Transactional(readOnly = true)
     public void applyBaseOverridesToProfileForm(Script script, LoadForm profileForm, boolean force) {
-        Map<String, Object> sc = script.getSuccessCriteria();
-        boolean active = force || (sc != null && Boolean.TRUE.equals(sc.get("baseProfileActive")));
-        readBaseConfigIntoForm(script, profileForm);
-        // Кастомные метрики Prometheus из базового скрипта наследуются всеми профилями всегда (если в самом профиле список пуст или включён приоритет базы)
-        List<ru.k6lab.core.analysis.StepAnalysis.CustomCheck> baseChecks = LoadCriteria.customChecks(script.getStopCriteria());
-        if (!baseChecks.isEmpty()) {
-            if (profileForm.getStop() == null) {
-                profileForm.setStop(new LoadForm.StopForm());
-            }
-            boolean profileHasChecks = profileForm.getStop().getCustomChecks() != null
-                    && profileForm.getStop().getCustomChecks().stream().anyMatch(c -> c != null && !c.blank());
-            if (!profileHasChecks || (active && profileForm.isBaseOverrideStop())) {
-                List<LoadForm.CustomCheckForm> inherited = new ArrayList<>(baseChecks.size());
-                for (var cc : baseChecks) {
-                    inherited.add(LoadForm.CustomCheckForm.of(cc));
-                }
-                profileForm.getStop().setCustomChecks(inherited);
-            }
-        }
-        if (!active) {
+        if (!force) {
             return;
         }
+        readBaseConfigIntoForm(script, profileForm);
         if (profileForm.isBaseOverrideGenerators()) {
             profileForm.setGeneratorCount(script.getGeneratorCount());
         }
         if (profileForm.isBaseOverrideEnv() && script.getEnv() != null && !script.getEnv().isEmpty()) {
             Map<String, String> mergedEnv = new java.util.LinkedHashMap<>(LoadForm.parseKv(profileForm.getEnvText()));
-            mergedEnv.putAll(script.getEnv()); // базовые переменные всегда приоритетнее, а уникальные переменные профиля сохраняются
+            mergedEnv.putAll(script.getEnv());
             profileForm.setEnvText(LoadForm.formatKv(mergedEnv));
         }
         if (profileForm.isBaseOverrideStop()) {
@@ -433,11 +407,14 @@ public class LoadService {
         }
         String dur = warmDur == null ? "" : warmDur.strip();
         for (LoadForm.OpForm o : ops) {
-            if (o == null || o.blank()) {
+            if (o == null || o.blank() || !o.isEnabled()) {
                 continue;
             }
             Map<String, Object> sc = new java.util.LinkedHashMap<>(o.parseScenario());
             String ex = o.getExecutor() == null ? "" : o.getExecutor().strip();
+            if (OperationSpec.isProfile(ex, sc)) {
+                continue;
+            }
             boolean isRamp = ex.startsWith("ramping-");
             if (dur.isEmpty()) {
                 // прогрев отключён в базе — убираем прогрев из сценария профиля
@@ -461,6 +438,9 @@ public class LoadService {
                 }
                 int existingWarm = (sc.get("warmup") instanceof Map<?, ?> wm && wm.get("stages") instanceof Number n) ? n.intValue() : 0;
                 if (existingWarm > 0 && !stages.isEmpty()) {
+                    if (existingWarm > 1 && stages.size() >= existingWarm) {
+                        stages.subList(1, existingWarm).clear();
+                    }
                     stages.get(0).put("duration", dur);
                 } else {
                     double firstTarget = 50;
@@ -555,7 +535,7 @@ public class LoadService {
             op.setSlaPercentile(o.getSlaPercentile());
             op.setSlaThresholdMs(o.getSlaThresholdMs() == null ? 1000 : o.getSlaThresholdMs());
             op.setMaxErrorPct(o.getMaxErrorPct() == null ? 1 : o.getMaxErrorPct());
-            op.setFailureSource(o.getFailureSource());
+            op.setFailureSource(o.getFailureSource() == null ? OperationSpec.FailureSource.HTTP : o.getFailureSource());
             op.setExecutor(executor);
             op.setScenario(scenario);
             built.add(op);
@@ -577,7 +557,7 @@ public class LoadService {
             ScriptDataFile df = new ScriptDataFile();
             df.setScriptId(scriptId);
             df.setPath(d.getPath());
-            df.setMode(d.getMode());
+            df.setMode(d.getMode() == null ? ScriptDataFile.Mode.SHARED : d.getMode());
             df.setHasHeader(d.isHasHeader());
             df.setConsumed(d.isConsumed());
             data.add(df);
@@ -587,13 +567,12 @@ public class LoadService {
         return new BuiltLoad(built, env, data, null, stopForm.toMap());
     }
 
-    /** Нагрузка из сохранённого профиля скрипта для запуска (операции, переменные, файлы данных); ошибка понятным сообщением, если профиль удалён или не проходит проверку. */
+    /** Нагрузка из сохранённого профиля скрипта для запуска (операции, переменные, файлы данных); профиль полностью независим от базовой нагрузки. */
     @Transactional(readOnly = true)
     public BuiltLoad fromProfile(Long scriptId, Long profileId) {
         var p = profiles.find(scriptId, profileId).orElseThrow(() -> new IllegalArgumentException("Профиль нагрузки не найден (возможно, удалён)"));
         try {
             LoadForm pf = LoadJson.fromJson(p.data());
-            applyBaseOverridesToProfileForm(scriptId, pf);
             BuiltLoad b = build(scriptId, pf);
             return new BuiltLoad(b.ops(), b.env(), b.dataFiles(), p.name(), b.stop());
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -620,11 +599,9 @@ public class LoadService {
     @Transactional(readOnly = true)
     public Map<Long, String> profileEnvText(Long scriptId) {
         Map<Long, String> out = new java.util.LinkedHashMap<>();
-        Script script = scripts.get(scriptId);
         for (var p : profiles.list(scriptId)) {
             try {
                 LoadForm pf = LoadJson.fromJson(p.data());
-                applyBaseOverridesToProfileForm(script, pf, false);
                 String t = pf.getEnvText();
                 out.put(p.id(), t == null ? "" : t);
             } catch (IllegalArgumentException e) {

@@ -60,10 +60,19 @@ public class GeneratorAddController {
             String name = h.replaceAll("[^A-Za-z0-9_.-]", "_");
             // агент всегда ставится системным сервисом systemd (systemctl): пользователь k6agent, /opt/k6-agent, автозапуск и
             // перезапуск при сбое. Нужен root или sudo (в том числе без пароля); без sudo - «Расширенно» (пользовательский режим)
-            var d = deploy.startInstall(new DeployService.InstallRequest(name, h, port, cred.getId(), Generator.InstallMode.SYSTEM,
-                    null, serverUrl.trim(), false, 1, null, null));
-            // при первом подключении потребуется подтвердить отпечаток ключа - это на странице операции
-            return "redirect:/deployments/" + d.getId();
+            try {
+                var d = deploy.startInstall(new DeployService.InstallRequest(name, h, port, cred.getId(), Generator.InstallMode.SYSTEM,
+                        null, serverUrl.trim(), false, 1, null, null));
+                // при первом подключении потребуется подтвердить отпечаток ключа - это на странице операции
+                return "redirect:/deployments/" + d.getId();
+            } catch (RuntimeException ex) {
+                try {
+                    credentials.delete(cred.getId());
+                } catch (RuntimeException ignored) {
+                    // best-effort rollback of orphan credential
+                }
+                throw ex;
+            }
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
             model.addAttribute("serverUrl", serverUrl);

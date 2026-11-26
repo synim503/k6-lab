@@ -68,60 +68,62 @@ public class ScheduleImportService {
                 : (gapMinutesOverride != null ? gapMinutesOverride : 5);
         int pauseSec = Math.max(ScheduleTimelineService.TAIL_SEC, Math.min(24 * 3600, gapMin * 60));
 
-        // загружаем справочники и снимок таймлайна ОДИН раз на весь пакет, чтобы 20–50 тестов импортировались за доли секунды
-        Map<String, Script> scriptsByName = new HashMap<>();
-        for (Script s : scripts.list()) {
-            scriptsByName.putIfAbsent(s.getName(), s);
-        }
-        List<Generator> allGens = generators.findAll();
-        Map<Long, Generator> genById = new HashMap<>();
-        Map<String, Generator> genByName = new HashMap<>();
-        for (Generator g : allGens) {
-            genById.put(g.getId(), g);
-            genByName.putIfAbsent(g.getName(), g);
-        }
-        Map<Long, Map<String, Long>> profilesByScript = new HashMap<>();
-        ScheduleTimelineService.Snapshot snap = timeline.snapshot();
-        Map<String, ru.k6lab.server.load.RunPlan> planCache = new HashMap<>();
-        Map<String, ru.k6lab.server.load.LoadService.BuiltLoad> builtCache = new HashMap<>();
-
-        Instant cursor = Instant.now().plus(ScheduledRunService.MIN_LEAD).plusSeconds(30);
-        List<Long> prevBooked = List.of();
-        List<Created> done = new ArrayList<>();
-        try {
-            int n = 0;
-            for (JsonNode t : list) {
-                n++;
-                try {
-                    Parsed p = parseOne(t, scriptsByName, profilesByScript, genById, genByName);
-                    List<Long> targetIds = p.genIds();
-                    int need = !targetIds.isEmpty() ? targetIds.size()
-                            : (p.count() != null ? p.count() : Math.max(1, p.script().getGeneratorCount()));
-                    // если время не задано: ставим строго последовательно после предыдущего авто-теста + пауза (≥5 мин),
-                    // переиспользуя те же генераторы (если не заданы свои), чтобы тесты не ушли в параллель и не склеились при сдвиге
-                    boolean autoSeq = p.runAt() == null;
-                    if (autoSeq && targetIds.isEmpty() && !prevBooked.isEmpty() && need <= prevBooked.size()) {
-                        targetIds = prevBooked.subList(0, need);
-                    }
-                    boolean itemShift = p.shift() && (!autoSeq || done.isEmpty() || !targetIds.isEmpty());
-                    var res = schedule.scheduleInBatch(snap, planCache, builtCache, p.script(), p.runAt(),
-                            autoSeq ? cursor : null, targetIds, p.count(), p.env(), p.profileId(), user, itemShift);
-                    done.add(new Created(res.id(), p.script().getName(), p.profileName(), res.runAt()));
-                    if (autoSeq) {
-                        if (!res.generatorIds().isEmpty()) {
-                            prevBooked = res.generatorIds();
-                        }
-                        cursor = res.runAt().plusSeconds((long) res.durationSec() + pauseSec);
-                    }
-                } catch (IllegalArgumentException | IllegalStateException e) {
-                    throw new IllegalArgumentException("Тест №" + n + ": " + e.getMessage(), e);
-                }
+        return schedule.withLock(() -> {
+            // загружаем справочники и снимок таймлайна ОДИН раз на весь пакет, чтобы 20–50 тестов импортировались за доли секунды
+            Map<String, Script> scriptsByName = new HashMap<>();
+            for (Script s : scripts.list()) {
+                scriptsByName.putIfAbsent(s.getName(), s);
             }
-        } catch (RuntimeException e) {
-            done.forEach(c -> schedule.cancel(c.scheduleId(), user));
-            throw e;
-        }
-        return done;
+            List<Generator> allGens = generators.findAll();
+            Map<Long, Generator> genById = new HashMap<>();
+            Map<String, Generator> genByName = new HashMap<>();
+            for (Generator g : allGens) {
+                genById.put(g.getId(), g);
+                genByName.putIfAbsent(g.getName(), g);
+            }
+            Map<Long, Map<String, Long>> profilesByScript = new HashMap<>();
+            ScheduleTimelineService.Snapshot snap = timeline.snapshot();
+            Map<String, ru.k6lab.server.load.RunPlan> planCache = new HashMap<>();
+            Map<String, ru.k6lab.server.load.LoadService.BuiltLoad> builtCache = new HashMap<>();
+
+            Instant cursor = Instant.now().plus(ScheduledRunService.MIN_LEAD).plusSeconds(30);
+            List<Long> prevBooked = List.of();
+            List<Created> done = new ArrayList<>();
+            try {
+                int n = 0;
+                for (JsonNode t : list) {
+                    n++;
+                    try {
+                        Parsed p = parseOne(t, scriptsByName, profilesByScript, genById, genByName);
+                        List<Long> targetIds = p.genIds();
+                        int need = !targetIds.isEmpty() ? targetIds.size()
+                                : (p.count() != null ? p.count() : Math.max(1, p.script().getGeneratorCount()));
+                        // если время не задано: ставим строго последовательно после предыдущего авто-теста + пауза (≥5 мин),
+                        // переиспользуя те же генераторы (если не заданы свои), чтобы тесты не ушли в параллель и не склеились при сдвиге
+                        boolean autoSeq = p.runAt() == null;
+                        if (autoSeq && targetIds.isEmpty() && !prevBooked.isEmpty() && need <= prevBooked.size()) {
+                            targetIds = prevBooked.subList(0, need);
+                        }
+                        boolean itemShift = p.shift() && (!autoSeq || done.isEmpty() || !targetIds.isEmpty());
+                        var res = schedule.scheduleInBatch(snap, planCache, builtCache, p.script(), p.runAt(),
+                                autoSeq ? cursor : null, targetIds, p.count(), p.env(), p.profileId(), user, itemShift);
+                        done.add(new Created(res.id(), p.script().getName(), p.profileName(), res.runAt()));
+                        if (autoSeq) {
+                            if (!res.generatorIds().isEmpty()) {
+                                prevBooked = res.generatorIds();
+                            }
+                            cursor = res.runAt().plusSeconds((long) res.durationSec() + pauseSec);
+                        }
+                    } catch (IllegalArgumentException | IllegalStateException e) {
+                        throw new IllegalArgumentException("Тест №" + n + ": " + e.getMessage(), e);
+                    }
+                }
+            } catch (RuntimeException e) {
+                done.forEach(c -> schedule.cancel(c.scheduleId(), user));
+                throw e;
+            }
+            return done;
+        });
     }
 
     private record Parsed(Script script, Long profileId, String profileName, Instant runAt, List<Long> genIds,
@@ -176,7 +178,7 @@ public class ScheduleImportService {
         if (t.path("env").isObject()) {
             env = new LinkedHashMap<>();
             Map<String, String> e = env;
-            t.get("env").fields().forEachRemaining(x -> e.put(x.getKey(), x.getValue().asText()));
+            t.get("env").fields().forEachRemaining(x -> e.put(x.getKey(), x.getValue() == null || x.getValue().isNull() ? "" : x.getValue().asText()));
         }
         boolean shift = !t.has("shift") || t.get("shift").asBoolean(true);
         return new Parsed(script, profileId, profileName, runAt, genIds, count, env, shift);

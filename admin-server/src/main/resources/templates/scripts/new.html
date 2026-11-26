@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security"
       layout:decorate="~{layout/main}">
 <head><title>Новый скрипт</title></head>
 <body>
@@ -59,7 +60,7 @@
                     <li class="mb-1">Скрипт проверяется через <code>k6 inspect</code>, функции становятся операциями нагрузки.</li>
                     <li class="mb-1">Сценарии, пороги и теги из <code>options</code> вырезаются: нагрузку задаёте вы на вкладке «Нагрузка».</li>
                     <li>Каждая загрузка создаёт новую версию, старые можно вернуть.</li></ul></div></div>
-            <div class="card"><div class="card-body">
+            <div class="card" sec:authorize="hasRole('ADMIN')"><div class="card-body">
                 <h6 class="fw-semibold mb-1">Нет готового файла?</h6>
                 <p class="small text-muted mb-2">Напишите скрипт прямо в браузере, запустите на одном узле и посмотрите лог.</p>
                 <a class="btn btn-outline-primary btn-sm" th:href="@{/scripts/sandbox}"><i class="bi bi-bug me-1"></i>Написать и отладить в браузере</a></div></div>

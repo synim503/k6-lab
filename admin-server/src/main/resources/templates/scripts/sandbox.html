@@ -192,7 +192,7 @@
                     star.type = 'button'; star.className = 'sb-act sb-entry' + (p === entry ? ' on' : '');
                     star.title = 'Основной файл'; star.innerHTML = '<i class="bi ' + (p === entry ? 'bi-star-fill' : 'bi-star') + '"></i>';
                     star.style.visibility = isJs(p) ? 'visible' : 'hidden';
-                    star.onclick = function (ev) { ev.stopPropagation(); entry = p; renderFiles(); refreshFns(); };
+                    star.onclick = function (ev) { ev.stopPropagation(); entry = p; dirty = true; renderFiles(); refreshFns(); };
                     var name = document.createElement('span'); name.className = 'sb-path'; name.textContent = p; name.title = p;
                     var del = document.createElement('button');
                     del.type = 'button'; del.className = 'sb-act'; del.title = 'Удалить'; del.innerHTML = '<i class="bi bi-x-lg"></i>';
@@ -204,6 +204,7 @@
             }
             function removeFile(p) {
                 delete files[p];
+                dirty = true;
                 if (models[p]) { models[p].dispose(); delete models[p]; }
                 if (entry === p) { entry = Object.keys(files).filter(isJs)[0] || ''; }
                 if (current === p) { current = null; var k = Object.keys(files)[0]; if (k) { open(k); } else { showEmpty(); } }
@@ -353,16 +354,28 @@
                     .catch(function (e) { if (my === loadSeq) { showErr('Ошибка запроса: ' + e); applyMode(); done(); } });
             }
             $('sb-script').onchange = function () {
-                var v = this.value;
-                if (dirty && !confirm('Заменить текущие файлы в редакторе? Несохранённые правки пропадут.')) {
-                    this.value = existing ? String(existing.id) : '';
-                    return;
-                }
-                if (v) { loadScript(v); return; }
-                loadSeq++;   // отменяем ещё не завершённую загрузку другого скрипта
-                $('sb-script').disabled = false;
-                existing = null; resetFiles(); addFile('main.js', TEMPLATE, null, TEMPLATE.length);
-                $('sb-env').value = ''; applyMode(); dirty = false;
+                var sel = this;
+                var v = sel.value;
+                var applySwitch = function () {
+                    if (v) { loadScript(v); return; }
+                    loadSeq++;   // отменяем ещё не завершённую загрузку другого скрипта
+                    $('sb-script').disabled = false;
+                    existing = null; resetFiles(); addFile('main.js', TEMPLATE, null, TEMPLATE.length);
+                    $('sb-env').value = ''; applyMode(); dirty = false;
+                };
+                if (!dirty) { applySwitch(); return; }
+                window.k6Confirm({
+                    title: 'Заменить файлы в редакторе?',
+                    message: 'Заменить текущие файлы в редакторе? Несохранённые правки пропадут.',
+                    confirmText: 'Заменить',
+                    variant: 'warning'
+                }).then(function (ok) {
+                    if (!ok) {
+                        sel.value = existing ? String(existing.id) : '';
+                        return;
+                    }
+                    applySwitch();
+                });
             };
 
             // ---------- запуск и лог
@@ -457,9 +470,13 @@
                     body: JSON.stringify({name: name, description: '', entrypoint: entry, files: payloadFiles(),
                         scriptId: existing ? existing.id : null, comment: existing ? $('sb-comment').value : '', env: envMap()})})
                     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
-                    .then(function (res) { if (res.ok) { location.href = res.j.redirect; } else { showErr(res.j.error || 'Не удалось сохранить'); } })
+                    .then(function (res) { if (res.ok) { dirty = false; location.href = res.j.redirect; } else { showErr(res.j.error || 'Не удалось сохранить'); } })
                     .catch(function (e) { showErr('Ошибка запроса: ' + e); });
             };
+            $('sb-env').addEventListener('input', function () { dirty = true; });
+            window.addEventListener('beforeunload', function (e) {
+                if (dirty) { e.preventDefault(); e.returnValue = ''; }
+            });
 
             // ---------- редактор
             var base = location.origin + '/webjars/monaco-editor/min/vs';
@@ -482,7 +499,7 @@
                         .catch(function () { /* редактор работает и без подсказок k6 */ });
                 });
                 editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, run);
-                editor.onDidChangeModelContent(function () { if (current === entry) { refreshFns(); } });
+                editor.onDidChangeModelContent(function () { dirty = true; if (current === entry) { refreshFns(); } });
                 var pre = $('sb-script').dataset.pre;
                 if (pre) { $('sb-script').value = pre; loadScript(pre); } else { addFile('main.js', TEMPLATE, null, TEMPLATE.length); dirty = false; }
             });

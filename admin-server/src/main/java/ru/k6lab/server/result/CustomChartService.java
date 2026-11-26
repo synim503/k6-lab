@@ -46,10 +46,13 @@ public class CustomChartService {
         this.chartStyle = chartStyle;
     }
 
-    /** Подстановка в запрос: переменные скрипта ($имя, ${имя}), затем {run_id} (идентификатор запуска) и {range} (окно rate/increase). */
+    /** Подстановка в запрос: переменные скрипта ($имя, ${имя}), затем {run_id} (идентификатор запуска) и {range}/{range_s}/{range_ms}. */
     static String expand(String promql, long runId, long rangeSec, Map<String, String> vars) {
         String s = GrafanaDashboardImport.substitute(promql, vars == null ? Map.of() : vars);
-        return s.replace("{run_id}", String.valueOf(runId)).replace("{range}", rangeSec + "s");
+        return s.replace("{run_id}", String.valueOf(runId))
+                .replace("{range_ms}", String.valueOf(rangeSec * 1000L))
+                .replace("{range_s}", String.valueOf(rangeSec))
+                .replace("{range}", rangeSec + "s");
     }
 
     /**

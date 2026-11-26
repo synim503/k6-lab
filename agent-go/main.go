@@ -44,9 +44,10 @@ func main() {
 	}
 	var conn *Conn
 	runs := NewRunManager(cfg, func(factory func(seq int64) any) {
-		raw := journal.Append(factory)
 		if conn != nil {
-			conn.Publish(raw)
+			conn.Emit(factory)
+		} else {
+			journal.Append(factory)
 		}
 	})
 	conn = NewConn(cfg, journal, runs, NewSystemMetrics(cfg.Home))

@@ -378,6 +378,7 @@
                             at.value = '';
                             iso.value = '';
                             if (pos) { pos.value = p; }
+                            at.dispatchEvent(new Event('input'));
                             return;
                         }
                         if (pos) { pos.value = ''; }

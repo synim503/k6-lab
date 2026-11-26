@@ -57,28 +57,83 @@ public final class SetupWizard {
         server.stop(0);
     }
 
+    private static final int MAX_BODY_BYTES = 16 * 1024;
+    private static final java.util.regex.Pattern SAFE_HOST = java.util.regex.Pattern.compile("^[A-Za-z0-9._:\\[\\]-]{1,253}$");
+    private static final java.util.regex.Pattern SAFE_DB = java.util.regex.Pattern.compile("^[A-Za-z0-9_.-]{1,128}$");
+
     private static void handle(HttpExchange ex, Path configFile, CountDownLatch done) throws IOException {
         Map<String, String> f = new LinkedHashMap<>();
         String error = null;
         boolean ok = false;
         if ("POST".equals(ex.getRequestMethod())) {
-            f = form(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-            String url = "jdbc:postgresql://" + f.getOrDefault("host", "localhost").trim() + ":" + f.getOrDefault("port", "5432").trim()
-                    + "/" + f.getOrDefault("db", "k6lab").trim();
-            error = check(url, f.getOrDefault("user", ""), f.getOrDefault("password", ""));
-            if (error == null) {
-                String admin = f.getOrDefault("admin", "").isBlank() ? randomPassword() : f.get("admin");
-                save(configFile, url, f.getOrDefault("user", ""), f.getOrDefault("password", ""), admin);
-                ok = true;
-                send(ex, 200, page("Готово", "<div class='ok'>Настройки сохранены в <code>" + esc(configFile.toString()) + "</code>.</div>"
-                        + "<p>Приложение запускается, страница обновится сама. Логин администратора: <b>admin</b>, пароль: <b>" + esc(admin)
-                        + "</b> (запишите его).</p><script>setTimeout(function(){location.href='/login'},12000)</script>"));
-                done.countDown();
+            byte[] rawBody = readLimited(ex.getRequestBody(), MAX_BODY_BYTES);
+            if (rawBody == null) {
+                error = "Слишком большой запрос";
+            } else {
+                f = form(new String(rawBody, StandardCharsets.UTF_8));
+                String host = f.getOrDefault("host", "localhost").trim();
+                String portStr = f.getOrDefault("port", "5432").trim();
+                String db = f.getOrDefault("db", "k6lab").trim();
+                String adminIn = f.getOrDefault("admin", "");
+                error = validateParams(host, portStr, db, adminIn);
+                if (error == null) {
+                    String url = "jdbc:postgresql://" + host + ":" + portStr + "/" + db;
+                    error = check(url, f.getOrDefault("user", ""), f.getOrDefault("password", ""));
+                    if (error == null) {
+                        String requestedAdmin = adminIn.isBlank() ? randomPassword() : adminIn;
+                        SaveResult saved = save(configFile, url, f.getOrDefault("user", ""), f.getOrDefault("password", ""), requestedAdmin);
+                        ok = true;
+                        String pwdNote = saved.keptExistingAdmin()
+                                ? "<p>Приложение запускается, страница обновится сама. Использован ранее сохранённый пароль администратора <b>admin</b>.</p>"
+                                : "<p>Приложение запускается, страница обновится сама. Логин администратора: <b>admin</b>, пароль: <b>"
+                                + esc(saved.adminPassword()) + "</b> (запишите его).</p>";
+                        send(ex, 200, page("Готово", "<div class='ok'>Настройки сохранены в <code>" + esc(configFile.toString()) + "</code>.</div>"
+                                + pwdNote + "<script>setTimeout(function(){location.href='/login'},12000)</script>"));
+                        done.countDown();
+                    }
+                }
             }
         }
         if (!ok) {
             send(ex, 200, page("Настройка k6-lab", formHtml(f, error)));
         }
+    }
+
+    private static String validateParams(String host, String portStr, String db, String admin) {
+        if (!SAFE_HOST.matcher(host).matches() || host.contains("?") || host.contains("&") || host.contains("/") || host.contains("@")) {
+            return "Недопустимый адрес PostgreSQL (укажите хост или IP без параметров)";
+        }
+        try {
+            int p = Integer.parseInt(portStr);
+            if (p < 1 || p > 65535) {
+                return "Порт PostgreSQL должен быть в диапазоне 1..65535";
+            }
+        } catch (NumberFormatException e) {
+            return "Порт PostgreSQL должен быть числом";
+        }
+        if (!SAFE_DB.matcher(db).matches()) {
+            return "Недопустимое имя базы данных (допустимы латиница, цифры, _, -, .)";
+        }
+        if (!admin.isBlank() && admin.length() < 8) {
+            return "Пароль администратора должен быть не короче 8 символов (или оставьте поле пустым для генерации)";
+        }
+        return null;
+    }
+
+    private static byte[] readLimited(java.io.InputStream in, int maxBytes) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            if (out.size() + n > maxBytes) {
+                return null;
+            }
+            out.write(buf, 0, n);
+        }
+        return out.toByteArray();
+    }
+
+    private record SaveResult(String adminPassword, boolean keptExistingAdmin) {
     }
 
     /** Проверка подключения; null - успешно, иначе сообщение для пользователя. */
@@ -108,7 +163,7 @@ public final class SetupWizard {
         }
     }
 
-    static void save(Path file, String url, String user, String password, String adminPassword) throws IOException {
+    static SaveResult save(Path file, String url, String user, String password, String adminPassword) throws IOException {
         Properties p = Files.isRegularFile(file) ? load(file) : new Properties();
         p.setProperty("spring.datasource.url", url);
         p.setProperty("spring.datasource.username", user);
@@ -118,21 +173,35 @@ public final class SetupWizard {
             new SecureRandom().nextBytes(key);
             p.setProperty("k6lab.master-key", Base64.getEncoder().encodeToString(key));
         }
-        if (p.getProperty("k6lab.admin-password", "").isBlank()) {
+        boolean keptExistingAdmin = !p.getProperty("k6lab.admin-password", "").isBlank();
+        if (!keptExistingAdmin) {
             p.setProperty("k6lab.admin-password", adminPassword);
         }
         if (file.getParent() != null) {
             Files.createDirectories(file.getParent());
         }
-        try (var out = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+        // создаём временный файл с правами 0600 до записи секретов, затем атомарно переименовываем
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.deleteIfExists(tmp);
+        try {
+            var perms = java.nio.file.attribute.PosixFilePermissions.fromString("rw-------");
+            Files.createFile(tmp, java.nio.file.attribute.PosixFilePermissions.asFileAttribute(perms));
+        } catch (UnsupportedOperationException e) {
+            Files.createFile(tmp);
+            tmp.toFile().setReadable(false, false);
+            tmp.toFile().setWritable(false, false);
+            tmp.toFile().setReadable(true, true);
+            tmp.toFile().setWritable(true, true);
+        }
+        try (var out = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
             p.store(out, "k6-lab. Файл содержит секреты (ключ шифрования!): храните его и не публикуйте.");
         }
         try {
-            file.toFile().setReadable(false, false);
-            file.toFile().setReadable(true, true);
-        } catch (RuntimeException ignored) {
-            // права не поддерживаются файловой системой - не критично
+            Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
+        return new SaveResult(p.getProperty("k6lab.admin-password", adminPassword), keptExistingAdmin);
     }
 
     static Properties load(Path file) {

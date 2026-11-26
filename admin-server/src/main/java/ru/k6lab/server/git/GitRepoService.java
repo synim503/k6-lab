@@ -44,26 +44,43 @@ public class GitRepoService {
 
     @Transactional
     public GitRepo save(Form f) {
+        String name = f.name() == null ? "" : f.name().trim();
+        if (name.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название репозитория");
+        }
         GitRepo r;
         if (f.id() == null) {
-            if (repo.existsByNameIgnoreCase(f.name())) {
+            if (repo.existsByNameIgnoreCase(name)) {
                 throw new IllegalArgumentException("Репозиторий с таким именем уже есть");
             }
             r = new GitRepo();
         } else {
             r = get(f.id());
+            if (!r.getName().equalsIgnoreCase(name) && repo.existsByNameIgnoreCase(name)) {
+                throw new IllegalArgumentException("Репозиторий с таким именем уже есть");
+            }
         }
         if (f.url() == null || f.url().isBlank()) {
             throw new IllegalArgumentException("Укажите URL репозитория");
         }
         String url = f.url().trim();
-        if (f.authType() == GitRepo.AuthType.SSH && !(url.startsWith("ssh://") || url.matches("^[\\w.-]+@[\\w.-]+:.*"))) {
-            throw new IllegalArgumentException("Для SSH нужен URL вида ssh://host/path или git@host:path");
+        if (f.authType() == GitRepo.AuthType.SSH) {
+            if (!(url.startsWith("ssh://") || url.matches("^[\\w.-]+@[\\w.-]+:.*"))) {
+                throw new IllegalArgumentException("Для SSH нужен URL вида ssh://host/path или git@host:path");
+            }
+        } else {
+            if (url.startsWith("ssh://") || url.matches("^[\\w.-]+@[\\w.-]+:.*")) {
+                throw new IllegalArgumentException("URL по SSH - выберите тип аутентификации «SSH-ключ»");
+            }
+            boolean httpUrl = url.startsWith("http://") || url.startsWith("https://");
+            boolean fileUrl = f.authType() == GitRepo.AuthType.NONE && url.startsWith("file://");
+            if (!httpUrl && !fileUrl) {
+                throw new IllegalArgumentException(f.authType() == GitRepo.AuthType.HTTPS_TOKEN
+                        ? "Для аутентификации по токену URL должен начинаться с http:// или https://"
+                        : "URL репозитория должен начинаться с http://, https:// или file://");
+            }
         }
-        if (f.authType() != GitRepo.AuthType.SSH && (url.startsWith("ssh://") || url.matches("^[\\w.-]+@[\\w.-]+:.*"))) {
-            throw new IllegalArgumentException("URL по SSH - выберите тип аутентификации «SSH-ключ»");
-        }
-        r.setName(f.name().trim());
+        r.setName(name);
         r.setUrl(url);
         r.setAuthType(f.authType());
         r.setSubdir(GitClient.normalizeSubdir(f.subdir()));
@@ -80,6 +97,13 @@ public class GitRepoService {
             if (f.sshCredentialId() == null) {
                 throw new IllegalArgumentException("Выберите SSH-учётку с ключом");
             }
+            var cred = credentials.get(f.sshCredentialId());
+            if (cred.getAuthType() != ru.k6lab.server.ssh.SshCredential.AuthType.KEY) {
+                throw new IllegalArgumentException("Для Git по SSH нужна учётка с приватным ключом (тип «ключ»)");
+            }
+            if (cred.getJumpHost() != null && !cred.getJumpHost().isBlank()) {
+                throw new IllegalArgumentException("Для Git по SSH не поддерживаются учётки с jump-host");
+            }
             r.setSshCredentialId(f.sshCredentialId());
         } else {
             r.setSshCredentialId(null);
@@ -93,6 +117,7 @@ public class GitRepoService {
     public void delete(Long id) {
         GitRepo r = get(id);
         repo.delete(r);
+        git.evictCache(id);
         audit.record("git_repo.delete", "git_repo", id, Map.of("name", r.getName()));
     }
 

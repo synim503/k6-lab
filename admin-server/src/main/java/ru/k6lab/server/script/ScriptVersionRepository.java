@@ -14,7 +14,7 @@ public interface ScriptVersionRepository extends JpaRepository<ScriptVersion, Lo
 
     Optional<ScriptVersion> findFirstByScriptIdAndGitBranchOrderByNumberDesc(Long scriptId, String branch);
 
-    Optional<ScriptVersion> findByScriptIdAndCommitHash(Long scriptId, String commitHash);
+    Optional<ScriptVersion> findFirstByScriptIdAndCommitHashAndEntrypointOrderByNumberDesc(Long scriptId, String commitHash, String entrypoint);
 
     @Query("select coalesce(max(v.number), 0) from ScriptVersion v where v.scriptId = :scriptId")
     int maxNumber(Long scriptId);

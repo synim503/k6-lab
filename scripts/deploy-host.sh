@@ -39,10 +39,13 @@ fi
 
 SSH_OPTS=(-p "$SSH_PORT")
 SCP_OPTS=(-P "$SSH_PORT")
-REMOTE_ARCHIVE="/tmp/$(basename "$ARCHIVE")"
+STAMP="$$-$(date +%s)"
+REMOTE_ARCHIVE="/tmp/k6-lab-${STAMP}.tar.gz"
+REMOTE_SCRIPT="/tmp/k6-lab-remote-update-${STAMP}.sh"
 echo "== Копирование на $TARGET ($(du -h "$ARCHIVE" | cut -f1))"
 scp "${SCP_OPTS[@]}" "$ARCHIVE" "$TARGET:$REMOTE_ARCHIVE"
-scp "${SCP_OPTS[@]}" scripts/remote-update.sh "$TARGET:/tmp/k6-lab-remote-update.sh"
+scp "${SCP_OPTS[@]}" scripts/remote-update.sh "$TARGET:$REMOTE_SCRIPT"
 
 echo "== Обновление на хосте (может запросить пароль sudo)"
-ssh -t "${SSH_OPTS[@]}" "$TARGET" "ARCHIVE='$REMOTE_ARCHIVE' DIR='$DIR' SERVICE='$SERVICE' PORT='$PORT' bash /tmp/k6-lab-remote-update.sh; rc=\$?; rm -f /tmp/k6-lab-remote-update.sh; exit \$rc"
+REMOTE_CMD="ARCHIVE=$(printf %q "$REMOTE_ARCHIVE") DIR=$(printf %q "$DIR") SERVICE=$(printf %q "$SERVICE") PORT=$(printf %q "$PORT") bash $(printf %q "$REMOTE_SCRIPT"); rc=\$?; rm -f $(printf %q "$REMOTE_SCRIPT") $(printf %q "$REMOTE_ARCHIVE"); exit \$rc"
+ssh -t "${SSH_OPTS[@]}" "$TARGET" "$REMOTE_CMD"

@@ -150,7 +150,15 @@ public class GeneratorController {
                 }
                 String host = m.group(1);
                 int port = m.group(2) == null ? form.getSshPort() : Integer.parseInt(m.group(2));
+                if (port < 1 || port > 65535) {
+                    br.rejectValue("hosts", "port", "Строка " + lineNo + ": порт SSH должен быть от 1 до 65535");
+                    continue;
+                }
                 String name = m.group(3) != null ? m.group(3) : host.replaceAll("[^A-Za-z0-9_.-]", "_");
+                if (name.length() > 100) {
+                    br.rejectValue("hosts", "name", "Строка " + lineNo + ": имя генератора не должно превышать 100 символов");
+                    continue;
+                }
                 requests.add(installRequest(form, name, host, port));
             }
             if (requests.isEmpty() && !br.hasFieldErrors("hosts")) {

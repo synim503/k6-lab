@@ -187,10 +187,12 @@ public class GrafanaDashboardImport {
         while (m.find()) {
             String name = m.group(1) != null ? m.group(1) : m.group(2) != null ? m.group(2) : m.group(3);
             String rep;
-            if (name.equals("__interval") || name.equals("__rate_interval") || name.equals("__range") || name.equals("__range_s")) {
+            if (name.equals("__interval") || name.equals("__rate_interval") || name.equals("__range")) {
                 rep = "{range}";
+            } else if (name.equals("__range_s")) {
+                rep = "{range_s}";
             } else if (name.equals("__interval_ms") || name.equals("__range_ms")) {
-                rep = "{range}";
+                rep = "{range_ms}";
             } else if (vars.containsKey(name)) {
                 rep = vars.get(name);
             } else {

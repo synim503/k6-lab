@@ -56,12 +56,14 @@ public class DeployLog {
     }
 
     private void append(String line) {
+        List<SseEmitter> targets;
         synchronized (text) {
             if (text.length() < MAX_CHARS) {
                 text.append(line).append('\n');
             }
+            targets = List.copyOf(subscribers);
         }
-        push("log", line);
+        pushTo(targets, "log", line);
     }
 
     public String snapshot() {
@@ -76,21 +78,29 @@ public class DeployLog {
         emitter.onCompletion(() -> subscribers.remove(emitter));
         emitter.onTimeout(() -> subscribers.remove(emitter));
         emitter.onError(e -> subscribers.remove(emitter));
-        try {
-            String snap = snapshot();
-            if (!snap.isEmpty()) {
-                emitter.send(SseEmitter.event().name("log").data(snap.stripTrailing()));
+        synchronized (emitter) {
+            String snap;
+            boolean done;
+            synchronized (text) {
+                snap = text.toString();
+                done = finished;
+                if (!done) {
+                    subscribers.add(emitter);
+                }
             }
-            if (finished) {
-                emitter.send(SseEmitter.event().name("done").data("done"));
-                emitter.complete();
-                return emitter;
+            try {
+                if (!snap.isEmpty()) {
+                    emitter.send(SseEmitter.event().name("log").data(snap.stripTrailing()));
+                }
+                if (done) {
+                    emitter.send(SseEmitter.event().name("done").data("done"));
+                    emitter.complete();
+                }
+            } catch (IOException | IllegalStateException e) {
+                subscribers.remove(emitter);
+                emitter.completeWithError(e);
             }
-        } catch (IOException e) {
-            emitter.completeWithError(e);
-            return emitter;
         }
-        subscribers.add(emitter);
         return emitter;
     }
 
@@ -100,12 +110,22 @@ public class DeployLog {
     }
 
     public void finish() {
-        finished = true;
-        push("done", "done");
-        for (SseEmitter e : subscribers) {
-            e.complete();
+        List<SseEmitter> targets;
+        synchronized (text) {
+            finished = true;
+            targets = List.copyOf(subscribers);
+            subscribers.clear();
         }
-        subscribers.clear();
+        pushTo(targets, "done", "done");
+        for (SseEmitter e : targets) {
+            synchronized (e) {
+                try {
+                    e.complete();
+                } catch (IllegalStateException ignored) {
+                    // already completed
+                }
+            }
+        }
     }
 
     public boolean isFinished() {
@@ -113,11 +133,17 @@ public class DeployLog {
     }
 
     private void push(String event, String data) {
-        for (SseEmitter e : subscribers) {
-            try {
-                e.send(SseEmitter.event().name(event).data(data));
-            } catch (IOException | IllegalStateException ex) {
-                subscribers.remove(e);
+        pushTo(List.copyOf(subscribers), event, data);
+    }
+
+    private void pushTo(List<SseEmitter> targets, String event, String data) {
+        for (SseEmitter e : targets) {
+            synchronized (e) {
+                try {
+                    e.send(SseEmitter.event().name(event).data(data));
+                } catch (IOException | IllegalStateException ex) {
+                    subscribers.remove(e);
+                }
             }
         }
     }

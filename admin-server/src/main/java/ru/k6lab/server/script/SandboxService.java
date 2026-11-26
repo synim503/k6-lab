@@ -143,6 +143,8 @@ public class SandboxService {
         List<K6Flag> flags = K6Flag.parse(req.flags());
 
         Path dir = Files.createTempDirectory("k6lab-sandbox");
+        String id = null;
+        Session s = null;
         try {
             for (var e : files.entrySet()) {
                 Path p = dir.resolve(e.getKey()).normalize();
@@ -183,19 +185,26 @@ public class SandboxService {
                     }
                 });
             }
-            Session s = new Session(dir);
-            String id = UUID.randomUUID().toString().substring(0, 12);
+            s = new Session(dir);
+            id = UUID.randomUUID().toString().substring(0, 12);
             sessions.put(id, s);
             add(s, "INFO", "$ k6 run " + String.join(" ", cmd.subList(2, cmd.size()).stream()
                     .map(a -> a.startsWith(dir.toString()) ? a.substring(dir.toString().length() + 1) : a).toList()));
             s.process = pb.start();
             s.process.getOutputStream().close();
             int limit = Math.max(10, Math.min(req.maxDurationSec() == null ? 300 : req.maxDurationSec(), 3600));
-            Thread t = new Thread(() -> pump(s, limit), "sandbox-" + id);
+            Session fs = s;
+            Thread t = new Thread(() -> pump(fs, limit), "sandbox-" + id);
             t.setDaemon(true);
             t.start();
             return id;
         } catch (IOException | RuntimeException e) {
+            if (id != null) {
+                sessions.remove(id);
+            }
+            if (s != null && s.process != null && s.process.isAlive()) {
+                s.process.destroyForcibly();
+            }
             deleteQuietly(dir);
             throw e;
         }
@@ -319,6 +328,17 @@ public class SandboxService {
             }
             return old;
         });
+    }
+
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        for (Session s : sessions.values()) {
+            if (s.process != null && s.process.isAlive()) {
+                s.process.destroyForcibly();
+            }
+            deleteQuietly(s.dir);
+        }
+        sessions.clear();
     }
 
     private static void deleteQuietly(Path dir) {

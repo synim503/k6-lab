@@ -213,10 +213,25 @@ public class K6Tool {
         if (dir != null) {
             pb.directory(dir.toFile());
         }
-        pb.environment().put("K6_NO_USAGE_REPORT", "true");
-        pb.environment().put("K6_NO_COLOR", "true");
+        // очищаем окружение, чтобы секреты и переменные админки (БД, пароли, токены) не утекли в k6 inspect
+        Map<String, String> env = pb.environment();
+        env.clear();
+        String path = System.getenv("PATH");
+        env.put("PATH", path == null ? "/usr/bin:/bin" : path);
+        for (String k : new String[]{"SystemRoot", "SYSTEMROOT", "TEMP", "TMP"}) {
+            if (System.getenv(k) != null) {
+                env.put(k, System.getenv(k));
+            }
+        }
+        if (dir != null) {
+            env.put("HOME", dir.toAbsolutePath().toString());
+        } else if (System.getenv("HOME") != null) {
+            env.put("HOME", System.getenv("HOME"));
+        }
+        env.put("K6_NO_USAGE_REPORT", "true");
+        env.put("K6_NO_COLOR", "true");
         // без интернета и без зависаний: k6 не докачивает расширения сам (скрипты с k6/x/... проверяются статически)
-        pb.environment().put("K6_AUTO_EXTENSION_RESOLUTION", "false");
+        env.put("K6_AUTO_EXTENSION_RESOLUTION", "false");
         Process p = pb.start();
         p.getOutputStream().close();
         var out = java.util.concurrent.CompletableFuture.supplyAsync(() -> read(p.getInputStream()));
@@ -232,12 +247,13 @@ public class K6Tool {
             Thread.currentThread().interrupt();
             throw new IOException("Прервано", e);
         } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+            p.destroyForcibly();
             throw new IOException("Не удалось прочитать вывод k6", e);
         }
     }
 
     private static String read(InputStream in) {
-        try {
+        try (in) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             return "";

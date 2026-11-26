@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru" xmlns:th="http://www.thymeleaf.org" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security"
       layout:decorate="~{layout/main}">
 <head><title>Скрипты</title></head>
 <body>
@@ -21,7 +22,7 @@
             Скриптов пока нет. Загрузите файл k6, импортируйте из Git или напишите скрипт в браузере.
             <div class="mt-3 d-flex gap-2 justify-content-center">
                 <a class="btn btn-primary" th:href="@{/scripts/new}">Добавить скрипт</a>
-                <a class="btn btn-outline-secondary" th:href="@{/scripts/sandbox}">Написать в браузере</a></div></div>
+                <a class="btn btn-outline-secondary" sec:authorize="hasRole('ADMIN')" th:href="@{/scripts/sandbox}">Написать в браузере</a></div></div>
         <div class="table-responsive" th:unless="${scripts.isEmpty()}"><table class="table table-hover align-middle mb-0" id="scripts-table">
             <thead><tr><th>Скрипт</th><th>Версия</th><th class="text-end">Операций</th><th>Состояние</th><th>Обновлён</th><th></th></tr></thead>
             <tbody>
@@ -38,7 +39,7 @@
                 <td class="text-muted small text-nowrap" th:text="${#temporals.format(s.updatedAt, 'dd.MM.yyyy HH:mm')}"></td>
                 <td class="text-end text-nowrap">
                     <form class="d-inline" th:if="${runningIds.contains(s.id)}" th:action="@{/scripts/{id}/stop(id=${s.id})}" method="post"
-                          onsubmit="return confirm('Остановить выполняющийся скрипт?')">
+                          data-confirm="Остановить выполняющийся скрипт?">
                         <button class="btn btn-sm btn-outline-danger"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form>
                     <a class="btn btn-sm btn-success" th:if="${!runningIds.contains(s.id) and ready}" th:href="@{/scripts/{id}/run(id=${s.id})}"><i class="bi bi-play-fill me-1"></i>Запустить</a>
                     <a class="btn btn-sm btn-outline-primary" th:if="${!ready}" th:href="@{/scripts/{id}/load(id=${s.id})}">Описать нагрузку</a></td>

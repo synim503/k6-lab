@@ -23,7 +23,7 @@
             <td class="text-muted" th:text="${c.jumpHost} ? ${c.jumpHost} + ':' + (${c.jumpPort} ?: 22) : '—'"></td>
             <td class="text-end text-nowrap row-actions">
                 <a class="btn btn-sm btn-outline-secondary btn-icon" th:href="@{/ssh-credentials/{id}/edit(id=${c.id})}" title="Изменить" aria-label="Изменить"><i class="bi bi-pencil"></i></a>
-                <form class="d-inline" th:action="@{/ssh-credentials/{id}/delete(id=${c.id})}" method="post" onsubmit="return confirm('Удалить учётку?')">
+                <form class="d-inline" th:action="@{/ssh-credentials/{id}/delete(id=${c.id})}" method="post" data-confirm="Удалить учётку?">
                     <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
             </td>
         </tr></tbody></table></div></div>
@@ -38,7 +38,7 @@
             <td><code class="small" th:text="${k.fingerprintSha256}"></code></td>
             <td class="small text-muted" th:text="${k.confirmedBy} + ', ' + ${#temporals.format(k.confirmedAt, 'dd.MM.yyyy HH:mm')}"></td>
             <td class="text-end"><form th:action="@{/ssh-credentials/known-hosts/{id}/delete(id=${k.id})}" method="post"
-                                       onsubmit="return confirm('Забыть ключ хоста? Следующее подключение потребует нового подтверждения.')">
+                                       data-confirm="Забыть ключ хоста? Следующее подключение потребует нового подтверждения.">
                 <button class="btn btn-sm btn-outline-danger" title="Забыть ключ: следующее подключение потребует подтверждения"><i class="bi bi-x-lg me-1"></i>Забыть</button></form></td>
         </tr></tbody></table></div></div>
 </th:block>

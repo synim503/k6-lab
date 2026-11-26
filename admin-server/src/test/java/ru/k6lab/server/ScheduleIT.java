@@ -1,5 +1,6 @@
 package ru.k6lab.server;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -79,6 +80,11 @@ class ScheduleIT extends AbstractIT {
         return scripts.get(v.getScriptId());
     }
 
+    @AfterEach
+    void cleanGenerators() {
+        jdbc.update("update generator set status = 'OFFLINE' where name like 'sch-%'");
+    }
+
     private Generator generator() {
         Generator g = new Generator();
         g.setName("sch-" + UUID.randomUUID().toString().substring(0, 6));
@@ -86,6 +92,7 @@ class ScheduleIT extends AbstractIT {
         g.setInstallDir("/opt/k6-agent");
         g.setServerUrl("ws://127.0.0.1:1/agent/ws");
         g.setStatus(Generator.Status.ONLINE);
+        g.setLastHeartbeatAt(Instant.now());
         return generators.save(g);
     }
 
@@ -441,6 +448,7 @@ class ScheduleIT extends AbstractIT {
     @Test
     void formCreatesAScheduleAndThePagesRender() throws Exception {
         Script s = scriptWithLoad();
+        generator();
         String at = Instant.now().plusSeconds(3600).toString();
         mvc.perform(post("/scripts/" + s.getId() + "/schedule").with(csrf()).param("runAt", at).param("count", "1")
                         .param("pct_work", "125").param("envMode", "custom").param("envText", "BASE=form\nTOKEN=abc"))

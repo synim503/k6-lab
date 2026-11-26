@@ -14,7 +14,7 @@ SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 has_unit() { command -v systemctl >/dev/null 2>&1 && systemctl cat "$SERVICE" >/dev/null 2>&1; }
 stop_app() {
   if has_unit; then $SUDO systemctl stop "$SERVICE" || true
-  else pkill -f "$DIR/k6-lab-admin.jar" 2>/dev/null || pkill -f "k6-lab-admin.jar" 2>/dev/null || true; sleep 2; fi
+  else $SUDO pkill -f "[k]6-lab-admin.jar" 2>/dev/null || true; sleep 2; fi
 }
 start_app() {
   if has_unit; then $SUDO systemctl start "$SERVICE"
@@ -22,30 +22,33 @@ start_app() {
 }
 healthy() {
   for _ in $(seq 1 "$WAIT"); do
-    if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/login" 2>/dev/null; then return 0; fi
+    if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/actuator/health" 2>/dev/null \
+       || curl -fsS -o /dev/null "http://127.0.0.1:$PORT/login" 2>/dev/null; then return 0; fi
     sleep 1
   done
   return 1
 }
 
 echo "== Распаковка новой версии"
-rm -rf "$NEW"; mkdir -p "$NEW"
-tar -xzf "$ARCHIVE" -C "$NEW" --strip-components=1
+$SUDO rm -rf "$NEW"; $SUDO mkdir -p "$NEW"
+$SUDO tar -xzf "$ARCHIVE" -C "$NEW" --strip-components=1
 [ -f "$NEW/k6-lab-admin.jar" ] || { echo "В архиве нет k6-lab-admin.jar"; exit 1; }
+
+echo "== Остановка приложения перед переносом данных"
+stop_app
 
 if [ -d "$DIR" ]; then
   echo "== Перенос настроек и данных"
-  [ -d "$DIR/config" ] && cp -a "$DIR/config" "$NEW/config"
-  [ -d "$DIR/data" ] && cp -a "$DIR/data" "$NEW/data"
+  [ -d "$DIR/config" ] && $SUDO cp -a "$DIR/config" "$NEW/config"
+  [ -d "$DIR/data" ] && $SUDO cp -a "$DIR/data" "$NEW/data"
   # тот же владелец, что у текущей установки (служба обычно работает не от root)
-  if [ "$(id -u)" -eq 0 ]; then chown -R --reference="$DIR" "$NEW"; fi
+  $SUDO chown -R --reference="$DIR" "$NEW"
 fi
 
-echo "== Остановка, замена, запуск"
-stop_app
-rm -rf "$PREV"
-[ -d "$DIR" ] && mv "$DIR" "$PREV"
-mv "$NEW" "$DIR"
+echo "== Замена и запуск"
+$SUDO rm -rf "$PREV"
+[ -d "$DIR" ] && $SUDO mv "$DIR" "$PREV"
+$SUDO mv "$NEW" "$DIR"
 start_app
 if healthy; then
   echo "Готово: новая версия работает (http://127.0.0.1:$PORT). Прежняя - в $PREV."
@@ -54,8 +57,8 @@ if healthy; then
 else
   echo "✖ Новая версия не поднялась за ${WAIT} с - откат"
   stop_app
-  rm -rf "$DIR"
-  [ -d "$PREV" ] && mv "$PREV" "$DIR"
+  $SUDO rm -rf "$DIR"
+  [ -d "$PREV" ] && $SUDO mv "$PREV" "$DIR"
   start_app || true
   exit 1
 fi

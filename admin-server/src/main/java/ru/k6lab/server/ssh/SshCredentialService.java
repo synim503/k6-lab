@@ -5,6 +5,7 @@ import org.springframework.transaction.annotation.Transactional;
 import ru.k6lab.server.audit.AuditService;
 import ru.k6lab.server.common.SecretCipher;
 import ru.k6lab.server.generator.GeneratorRepository;
+import ru.k6lab.server.git.GitRepoRepository;
 
 import java.util.HashSet;
 import java.util.List;
@@ -23,15 +24,17 @@ public class SshCredentialService {
     private final SshCredentialRepository repo;
     private final GeneratorRepository generators;
     private final ru.k6lab.server.schedule.ScheduleGuardStore guards;
+    private final GitRepoRepository gitRepos;
     private final SecretCipher cipher;
     private final AuditService audit;
 
     public SshCredentialService(SshCredentialRepository repo, GeneratorRepository generators,
-                                ru.k6lab.server.schedule.ScheduleGuardStore guards, SecretCipher cipher,
-                                AuditService audit) {
+                                ru.k6lab.server.schedule.ScheduleGuardStore guards, GitRepoRepository gitRepos,
+                                SecretCipher cipher, AuditService audit) {
         this.repo = repo;
         this.generators = generators;
         this.guards = guards;
+        this.gitRepos = gitRepos;
         this.cipher = cipher;
         this.audit = audit;
     }
@@ -48,9 +51,17 @@ public class SshCredentialService {
 
     @Transactional
     public SshCredential save(Form f) {
+        String name = f.name() == null ? "" : f.name().trim();
+        String username = f.username() == null ? "" : f.username().trim();
+        if (name.isEmpty()) {
+            throw new IllegalArgumentException("Укажите название учётки");
+        }
+        if (username.isEmpty()) {
+            throw new IllegalArgumentException("Укажите имя пользователя SSH");
+        }
         SshCredential c;
         if (f.id() == null) {
-            if (repo.existsByNameIgnoreCase(f.name())) {
+            if (repo.existsByNameIgnoreCase(name)) {
                 throw new IllegalArgumentException("Учётка с таким именем уже есть");
             }
             c = new SshCredential();
@@ -60,12 +71,17 @@ public class SshCredentialService {
             }
         } else {
             c = get(f.id());
-            if (!c.getName().equalsIgnoreCase(f.name()) && repo.existsByNameIgnoreCase(f.name())) {
+            if (!c.getName().equalsIgnoreCase(name) && repo.existsByNameIgnoreCase(name)) {
                 throw new IllegalArgumentException("Учётка с таким именем уже есть");
             }
+            if (c.getAuthType() != f.authType() && blank(f.secret())) {
+                throw new IllegalArgumentException(f.authType() == SshCredential.AuthType.KEY
+                        ? "При смене типа на «ключ» вставьте приватный ключ"
+                        : "При смене типа на «пароль» введите пароль");
+            }
         }
-        c.setName(f.name().trim());
-        c.setUsername(f.username().trim());
+        c.setName(name);
+        c.setUsername(username);
         c.setAuthType(f.authType());
         if (!blank(f.secret())) {
             c.setSecretEnc(cipher.encrypt(f.authType() == SshCredential.AuthType.KEY ? normalizeKey(f.secret()) : f.secret()));
@@ -127,6 +143,9 @@ public class SshCredentialService {
         }
         if (guards.usesCredential(id)) {
             throw new IllegalStateException("Учётка используется автопроверками планировщика");
+        }
+        if (gitRepos.existsBySshCredentialId(id)) {
+            throw new IllegalStateException("Учётка используется Git-репозиториями");
         }
         repo.delete(c);
         audit.record("ssh_credential.delete", "ssh_credential", id, Map.of("name", c.getName()));

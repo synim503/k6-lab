@@ -56,6 +56,7 @@ public class AgentMessageService {
         long lastSeq = state.onHello(session.generatorId(), hello, session.tokenKind());
         session.lastSeq(lastSeq);
         session.lastAckedToAgent(lastSeq);
+        session.lastHello(hello);
         session.helloReceived(true);
         session.send(new Messages.Ack(lastSeq, System.currentTimeMillis()));
         session.send(new Messages.Ping("hello-" + System.nanoTime(), System.currentTimeMillis()));

@@ -62,6 +62,11 @@ public class DeployStore {
     }
 
     @Transactional
+    public boolean claimHostKeyConfirm(Long id) {
+        return deployments.claimHostKeyConfirm(id) > 0;
+    }
+
+    @Transactional
     public void waitHostKey(Long id, String host, int port, String type, String fingerprint, String publicKey,
                             List<Deployment.StepInfo> steps, String log) {
         Deployment d = deployments.findById(id).orElseThrow();

@@ -2,15 +2,18 @@ package ru.k6lab.server.tuning;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import ru.k6lab.server.audit.AuditService;
+import ru.k6lab.server.common.SecretMasker;
 import ru.k6lab.server.deploy.DeployStore;
 import ru.k6lab.server.deploy.Deployment;
 import ru.k6lab.server.generator.Generator;
 import ru.k6lab.server.generator.GeneratorRepository;
+import ru.k6lab.server.ssh.ResolvedCredential;
 import ru.k6lab.server.ssh.SshConnection;
 import ru.k6lab.server.ssh.SshConnector;
 import ru.k6lab.server.ssh.SshCredentialService;
@@ -24,10 +27,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
 /**
@@ -42,10 +48,8 @@ public class HostTuningService {
 
     /** Отдельный файл: загружается после установочного 99-k6.conf и перекрывает его. */
     public static final String CONF = "/etc/sysctl.d/99-k6lab-tuning.conf";
-    private static final String TMP = "/tmp/k6lab-tuning.conf";
     /** Настройки из /sys переживают перезагрузку через systemd-tmpfiles. */
     public static final String TMPFILES = "/etc/tmpfiles.d/k6lab-tuning.conf";
-    private static final String TMPFILES_TMP = "/tmp/k6lab-tmpfiles.conf";
     /** sysctl лежит в sbin, которого может не быть в PATH не-интерактивной SSH-сессии. */
     private static final String PATH_FIX = "PATH=$PATH:/usr/sbin:/sbin:/usr/local/sbin; export PATH; ";
     private static final String THP_FILE = "/sys/kernel/mm/transparent_hugepage/enabled";
@@ -62,11 +66,17 @@ public class HostTuningService {
     private final DeployStore deployStore;
     private final TuningProfileStore profiles;
     private final String script;
-    private final ExecutorService pool = Executors.newFixedThreadPool(8, r -> {
-        Thread t = new Thread(r, "host-tuning");
+    private final ExecutorService profilePool = Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "host-tuning-profile");
         t.setDaemon(true);
         return t;
     });
+    private final ExecutorService actionPool = Executors.newFixedThreadPool(8, r -> {
+        Thread t = new Thread(r, "host-tuning-action");
+        t.setDaemon(true);
+        return t;
+    });
+    private final Map<Long, ReentrantLock> hostLocks = new ConcurrentHashMap<>();
 
     public HostTuningService(GeneratorRepository generators, SshCredentialService credentials, SshConnector connector,
                              HostTuningStore store, AuditService audit, DeployStore deployStore,
@@ -90,11 +100,18 @@ public class HostTuningService {
         store.failStaleProfiles();
     }
 
+    @PreDestroy
+    void shutdown() {
+        profilePool.shutdownNow();
+        actionPool.shutdownNow();
+    }
+
     // ------------------------------------------------------------------ журнал операций
 
     /** Запись в журнале «Операции»: что сделано на хосте, по шагам. */
     private final class Op {
         final long id;
+        final SecretMasker masker = new SecretMasker();
         private final List<Deployment.StepInfo> steps = new ArrayList<>();
         private final StringBuilder text = new StringBuilder();
 
@@ -112,17 +129,19 @@ public class HostTuningService {
 
         void step(String name, String status, String message) {
             Instant now = Instant.now();
-            steps.add(new Deployment.StepInfo(steps.size() + 1, name, status, message, now, now));
+            String safe = message == null ? null : masker.mask(message);
+            steps.add(new Deployment.StepInfo(steps.size() + 1, name, status, safe, now, now));
             text.append("▶ Шаг ").append(steps.size()).append(": ").append(name);
-            if (message != null && !message.isBlank()) {
-                text.append(" — ").append(message);
+            if (safe != null && !safe.isBlank()) {
+                text.append(" — ").append(safe);
             }
             text.append('\n');
             deployStore.saveProgress(id, steps, text.toString());
         }
 
         void finish(boolean ok, String error) {
-            deployStore.finish(id, ok ? Deployment.Status.SUCCEEDED : Deployment.Status.FAILED, error, steps, text.toString());
+            String safeErr = error == null ? null : masker.mask(error);
+            deployStore.finish(id, ok ? Deployment.Status.SUCCEEDED : Deployment.Status.FAILED, safeErr, steps, text.toString());
         }
     }
 
@@ -142,13 +161,13 @@ public class HostTuningService {
             long profileId = store.createProfile(g.getId(), g.getName(), seconds);
             audit.record("host.profile", "generator", g.getId(), Map.of("seconds", seconds, "by", String.valueOf(user)));
             Op op = new Op(g, Deployment.Operation.PROFILE, user, Map.of("seconds", seconds));
-            pool.submit(() -> profile(g, profileId, seconds, op));
+            profilePool.submit(() -> profile(g, profileId, seconds, op));
         }
         return problems;
     }
 
     private void profile(Generator g, long profileId, int seconds, Op op) {
-        try (SshConnection ssh = connect(g)) {
+        try (SshConnection ssh = connect(g, op.masker)) {
             op.step("Подключение по SSH", "OK", g.getHost());
             String cmd = script.replace("@SECS@", String.valueOf(seconds)).replace("@KEYS@", String.join(" ", TuningAnalyzer.KEYS));
             var r = ssh.sudo(cmd, Duration.ofSeconds(seconds + 60L));
@@ -175,10 +194,11 @@ public class HostTuningService {
             op.step("Анализ", "OK", "критично: " + crit + ", замечаний: " + warn + ", настроек для применения: " + a.recommended().size());
             op.finish(true, null);
         } catch (RuntimeException e) {
-            log.warn("Профилирование {} не удалось: {}", g.getName(), e.toString());
-            store.finishProfile(profileId, "FAILED", message(e), null, null);
-            op.step("Профилирование", "FAILED", message(e));
-            op.finish(false, message(e));
+            String safeMsg = op.masker.mask(message(e));
+            log.warn("Профилирование {} не удалось: {}", g.getName(), safeMsg);
+            store.finishProfile(profileId, "FAILED", safeMsg, null, null);
+            op.step("Профилирование", "FAILED", safeMsg);
+            op.finish(false, safeMsg);
         }
     }
 
@@ -239,154 +259,201 @@ public class HostTuningService {
     }
 
     private String applyOne(Generator g, String user, Map<String, String> forced, String sourceName) {
-        Map<String, String> wanted = forced;
-        if (wanted == null) {
-            HostTuningStore.Profile p = store.latestDone(g.getId()).orElse(null);
-            if (p == null) {
-                return "нет профиля: сначала запустите профилирование";
-            }
-            wanted = recommended(p);
-            if (wanted.isEmpty()) {
-                return "рекомендаций по настройкам нет";
-            }
-        }
-        if (g.getSshCredentialId() == null) {
-            return "не задана SSH-учётка";
-        }
-        Op op = new Op(g, Deployment.Operation.TUNE_APPLY, user,
-                Map.of("settings", wanted.size(), "source", sourceName == null ? "собственный профиль" : sourceName));
-        try (SshConnection ssh = connect(g)) {
-            op.step("Подключение по SSH", "OK", g.getHost());
-            List<HostTuningStore.Tuning> active = store.activeTunings(g.getId());
-            Map<String, String> original = new LinkedHashMap<>();   // исходное значение до первого применения
-            Map<String, String> desired = new LinkedHashMap<>();    // что должно стоять (ранее применённое + новое)
-            for (HostTuningStore.Tuning t : active) {
-                for (JsonNode c : t.changes()) {
-                    original.putIfAbsent(c.path("key").asText(), c.path("previous").asText());
-                    desired.put(c.path("key").asText(), c.path("requested").asText());
+        ReentrantLock lock = hostLocks.computeIfAbsent(g.getId(), k -> new ReentrantLock());
+        lock.lock();
+        try {
+            Map<String, String> wanted = forced;
+            if (wanted == null) {
+                HostTuningStore.Profile p = store.latestDone(g.getId()).orElse(null);
+                if (p == null) {
+                    return "нет профиля: сначала запустите профилирование";
+                }
+                wanted = recommended(p);
+                if (wanted.isEmpty()) {
+                    return "рекомендаций по настройкам нет";
                 }
             }
-            desired.putAll(wanted);
-            Map<String, String> current = read(ssh, new ArrayList<>(desired.keySet()));
-            desired.keySet().forEach(k -> original.putIfAbsent(k, current.getOrDefault(k, "")));
-            op.step("Сохранены исходные значения", "OK", original.size() + " параметров");
-
-            // sysctl: отдельный файл настроек; /sys (THP, режим частоты): запись сейчас и файл systemd-tmpfiles для перезагрузки
-            StringBuilder conf = new StringBuilder("# Настройки ядра от k6-lab (профилирование хоста). Откат - в админке.\n");
-            StringBuilder tmpfiles = new StringBuilder("# Настройки /sys от k6-lab. Откат - в админке.\n");
-            StringBuilder cmd = new StringBuilder(PATH_FIX).append("rc=0; ");
-            int sysctlCount = 0;
-            for (Map.Entry<String, String> e : desired.entrySet()) {
-                if (TuningAnalyzer.SYS_KEYS.contains(e.getKey())) {
-                    cmd.append(writeCmd(e.getKey(), e.getValue()));
-                    tmpfiles.append("w ").append(e.getKey().equals(TuningAnalyzer.THP) ? THP_FILE : GOV_GLOB).append(" - - - - ").append(e.getValue()).append('\n');
-                } else {
-                    conf.append(e.getKey()).append(" = ").append(e.getValue()).append('\n');
-                    sysctlCount++;
+            if (g.getSshCredentialId() == null) {
+                return "не задана SSH-учётка";
+            }
+            Op op = new Op(g, Deployment.Operation.TUNE_APPLY, user,
+                    Map.of("settings", wanted.size(), "source", sourceName == null ? "собственный профиль" : sourceName));
+            try (SshConnection ssh = connect(g, op.masker)) {
+                op.step("Подключение по SSH", "OK", g.getHost());
+                List<HostTuningStore.Tuning> active = store.activeTunings(g.getId());
+                Map<String, String> original = new LinkedHashMap<>();   // исходное значение до первого применения
+                Map<String, String> desired = new LinkedHashMap<>();    // что должно стоять (ранее применённое + новое)
+                for (HostTuningStore.Tuning t : active) {
+                    for (JsonNode c : t.changes()) {
+                        original.putIfAbsent(c.path("key").asText(), c.path("previous").asText());
+                        desired.put(c.path("key").asText(), c.path("requested").asText());
+                    }
                 }
-            }
-            boolean hasSys = desired.keySet().stream().anyMatch(TuningAnalyzer.SYS_KEYS::contains);
-            if (sysctlCount > 0) {
-                ssh.uploadText(conf.toString(), TMP);
-                cmd.append("install -m 644 ").append(TMP).append(' ').append(CONF).append(" && rm -f ").append(TMP)
-                        .append(" && sysctl -p ").append(CONF).append(" >/dev/null || rc=1; ");
-            } else {
-                cmd.append("rm -f ").append(CONF).append("; ");
-            }
-            if (hasSys) {
-                ssh.uploadText(tmpfiles.toString(), TMPFILES_TMP);
-                cmd.append("install -m 644 ").append(TMPFILES_TMP).append(' ').append(TMPFILES).append(" && rm -f ").append(TMPFILES_TMP).append("; ");
-            } else {
-                cmd.append("rm -f ").append(TMPFILES).append("; ");
-            }
-            cmd.append("exit $rc");
-            var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(60));
-            Map<String, String> after = read(ssh, new ArrayList<>(desired.keySet()));
+                desired.putAll(wanted);
+                Map<String, String> current = read(ssh, new ArrayList<>(desired.keySet()));
+                desired.keySet().forEach(k -> original.putIfAbsent(k, current.getOrDefault(k, "")));
+                op.step("Сохранены исходные значения", "OK", original.size() + " параметров");
 
-            List<Map<String, Object>> changes = new ArrayList<>();
-            int okCount = 0;
-            for (Map.Entry<String, String> e : desired.entrySet()) {
-                String actual = after.getOrDefault(e.getKey(), "");
-                boolean ok = norm(actual).equals(norm(e.getValue()));
-                okCount += ok ? 1 : 0;
-                Map<String, Object> c = new LinkedHashMap<>();
-                c.put("key", e.getKey());
-                c.put("previous", original.getOrDefault(e.getKey(), ""));
-                c.put("requested", e.getValue());
-                c.put("applied", actual);
-                c.put("ok", ok);
-                changes.add(c);
-                op.step("Параметр " + e.getKey(), ok ? "OK" : "FAILED",
-                        original.getOrDefault(e.getKey(), "") + " → " + actual + (ok ? "" : " (запрошено " + e.getValue() + ")"));
+                // Применяем параметры напрямую; постоянные файлы записываем только для реально применившихся параметров
+                StringBuilder applyCmd = new StringBuilder(PATH_FIX).append("rc=0; ");
+                for (Map.Entry<String, String> e : desired.entrySet()) {
+                    applyCmd.append(writeCmd(e.getKey(), e.getValue()));
+                }
+                applyCmd.append("exit $rc");
+                var r = ssh.sudo(applyCmd.toString(), Duration.ofSeconds(60));
+                Map<String, String> after = read(ssh, new ArrayList<>(desired.keySet()));
+
+                List<Map<String, Object>> changes = new ArrayList<>();
+                Map<String, String> succeeded = new LinkedHashMap<>();
+                int okCount = 0;
+                for (Map.Entry<String, String> e : desired.entrySet()) {
+                    String actual = after.getOrDefault(e.getKey(), "");
+                    boolean ok = norm(actual).equals(norm(e.getValue()));
+                    if (ok) {
+                        okCount++;
+                        succeeded.put(e.getKey(), e.getValue());
+                    }
+                    Map<String, Object> c = new LinkedHashMap<>();
+                    c.put("key", e.getKey());
+                    c.put("previous", original.getOrDefault(e.getKey(), ""));
+                    c.put("requested", e.getValue());
+                    c.put("applied", actual);
+                    c.put("ok", ok);
+                    changes.add(c);
+                    op.step("Параметр " + e.getKey(), ok ? "OK" : "FAILED",
+                            original.getOrDefault(e.getKey(), "") + " → " + actual + (ok ? "" : " (запрошено " + e.getValue() + ")"));
+                }
+                String err = r.ok() ? null : (r.stderr().isBlank() ? "команда вернула код " + r.exitCode() : r.stderr().strip());
+                if (okCount == 0) {
+                    if (active.isEmpty()) {
+                        ssh.sudo(PATH_FIX + "rm -f " + CONF + " " + TMPFILES, Duration.ofSeconds(20));
+                    }
+                    store.insertTuning(g.getId(), g.getName(), user, "FAILED", changes, err);
+                    String msg = err == null ? "значения не изменились" : err;
+                    op.finish(false, msg);
+                    return "не применилось: " + msg + " (в контейнерах и ограниченных окружениях это нормально)";
+                }
+
+                // Записываем CONF и TMPFILES только для применившихся параметров через приватный временный каталог
+                StringBuilder conf = new StringBuilder("# Настройки ядра от k6-lab (профилирование хоста). Откат - в админке.\n");
+                StringBuilder tmpfiles = new StringBuilder("# Настройки /sys от k6-lab. Откат - в админке.\n");
+                int sysctlCount = 0;
+                int sysCount = 0;
+                for (Map.Entry<String, String> e : succeeded.entrySet()) {
+                    if (TuningAnalyzer.SYS_KEYS.contains(e.getKey())) {
+                        tmpfiles.append("w ").append(e.getKey().equals(TuningAnalyzer.THP) ? THP_FILE : GOV_GLOB)
+                                .append(" - - - - ").append(e.getValue()).append('\n');
+                        sysCount++;
+                    } else {
+                        conf.append(e.getKey()).append(" = ").append(e.getValue()).append('\n');
+                        sysctlCount++;
+                    }
+                }
+                String tmpDir = null;
+                try {
+                    var mk = ssh.exec("mktemp -d /tmp/k6lab-tune.XXXXXX", Duration.ofSeconds(15));
+                    if (!mk.ok() || mk.stdoutTrim().isEmpty()) {
+                        throw new IllegalStateException("Не удалось создать временный каталог на хосте");
+                    }
+                    tmpDir = mk.stdoutTrim();
+                    ssh.exec("chmod 700 " + SshConnection.quote(tmpDir), Duration.ofSeconds(15));
+                    StringBuilder persistCmd = new StringBuilder(PATH_FIX);
+                    if (sysctlCount > 0) {
+                        String confTmp = tmpDir + "/tuning.conf";
+                        ssh.uploadText(conf.toString(), confTmp);
+                        persistCmd.append("install -m 644 ").append(SshConnection.quote(confTmp)).append(' ').append(CONF).append("; ");
+                    } else {
+                        persistCmd.append("rm -f ").append(CONF).append("; ");
+                    }
+                    if (sysCount > 0) {
+                        String tfTmp = tmpDir + "/tmpfiles.conf";
+                        ssh.uploadText(tmpfiles.toString(), tfTmp);
+                        persistCmd.append("install -m 644 ").append(SshConnection.quote(tfTmp)).append(' ').append(TMPFILES).append("; ");
+                    } else {
+                        persistCmd.append("rm -f ").append(TMPFILES).append("; ");
+                    }
+                    ssh.sudo(persistCmd.toString(), Duration.ofSeconds(30));
+                } finally {
+                    if (tmpDir != null) {
+                        try {
+                            ssh.exec("rm -rf " + SshConnection.quote(tmpDir), Duration.ofSeconds(15));
+                        } catch (RuntimeException ignored) {
+                            // best-effort cleanup
+                        }
+                    }
+                }
+
+                // новая запись заменяет прежние: исходные значения перенесены в неё
+                store.markReplaced(g.getId());
+                store.insertTuning(g.getId(), g.getName(), user, "APPLIED", changes, err);
+                audit.record("host.tuning.apply", "generator", g.getId(), Map.of("changes", changes.size(), "by", String.valueOf(user)));
+                op.finish(true, err);
+                return "применено параметров: " + okCount + " из " + changes.size() + (err == null ? "" : " (" + op.masker.mask(err) + ")");
+            } catch (RuntimeException e) {
+                String safeMsg = op.masker.mask(message(e));
+                op.step("Применение", "FAILED", safeMsg);
+                op.finish(false, safeMsg);
+                return "ошибка: " + safeMsg;
             }
-            String err = r.ok() ? null : (r.stderr().isBlank() ? "команда вернула код " + r.exitCode() : r.stderr().strip());
-            if (okCount == 0) {
-                ssh.sudo(PATH_FIX + "rm -f " + CONF + " " + TMPFILES, Duration.ofSeconds(20));
-                store.insertTuning(g.getId(), g.getName(), user, "FAILED", changes, err);
-                String msg = err == null ? "значения не изменились" : err;
-                op.finish(false, msg);
-                return "не применилось: " + msg + " (в контейнерах и ограниченных окружениях это нормально)";
-            }
-            // новая запись заменяет прежние: исходные значения перенесены в неё
-            store.markReplaced(g.getId());
-            store.insertTuning(g.getId(), g.getName(), user, "APPLIED", changes, err);
-            audit.record("host.tuning.apply", "generator", g.getId(), Map.of("changes", changes.size(), "by", String.valueOf(user)));
-            op.finish(true, err);
-            return "применено параметров: " + okCount + " из " + changes.size() + (err == null ? "" : " (" + err + ")");
-        } catch (RuntimeException e) {
-            op.step("Применение", "FAILED", message(e));
-            op.finish(false, message(e));
-            return "ошибка: " + message(e);
+        } finally {
+            lock.unlock();
         }
     }
 
     private String rollbackOne(Generator g, String user) {
-        List<HostTuningStore.Tuning> active = store.activeTunings(g.getId());
-        if (active.isEmpty()) {
-            return "нечего откатывать";
-        }
-        Map<String, String> original = new LinkedHashMap<>();
-        for (HostTuningStore.Tuning t : active) {
-            for (JsonNode c : t.changes()) {
-                original.putIfAbsent(c.path("key").asText(), c.path("previous").asText());
+        ReentrantLock lock = hostLocks.computeIfAbsent(g.getId(), k -> new ReentrantLock());
+        lock.lock();
+        try {
+            List<HostTuningStore.Tuning> active = store.activeTunings(g.getId());
+            if (active.isEmpty()) {
+                return "нечего откатывать";
             }
-        }
-        Op op = new Op(g, Deployment.Operation.TUNE_ROLLBACK, user, Map.of("settings", original.size()));
-        try (SshConnection ssh = connect(g)) {
-            op.step("Подключение по SSH", "OK", g.getHost());
-            StringBuilder cmd = new StringBuilder(PATH_FIX).append("rm -f ").append(CONF).append(' ').append(TMPFILES).append("; rc=0; ");
-            for (Map.Entry<String, String> e : original.entrySet()) {
-                String v = norm(e.getValue());
-                if (!TuningAnalyzer.valid(e.getKey(), v)) {
-                    continue; // исходное значение не прочитано: параметр не трогаем
+            Map<String, String> original = new LinkedHashMap<>();
+            for (HostTuningStore.Tuning t : active) {
+                for (JsonNode c : t.changes()) {
+                    original.putIfAbsent(c.path("key").asText(), c.path("previous").asText());
                 }
-                cmd.append(writeCmd(e.getKey(), v));
             }
-            cmd.append("exit $rc");
-            var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(60));
-            Map<String, String> after = read(ssh, new ArrayList<>(original.keySet()));
-            List<String> notRestored = new ArrayList<>();
-            original.forEach((k, v) -> {
-                boolean ok = norm(v).isEmpty() || norm(after.getOrDefault(k, "")).equals(norm(v));
-                if (!ok) {
-                    notRestored.add(k);
+            Op op = new Op(g, Deployment.Operation.TUNE_ROLLBACK, user, Map.of("settings", original.size()));
+            try (SshConnection ssh = connect(g, op.masker)) {
+                op.step("Подключение по SSH", "OK", g.getHost());
+                StringBuilder cmd = new StringBuilder(PATH_FIX).append("rm -f ").append(CONF).append(' ').append(TMPFILES).append("; rc=0; ");
+                for (Map.Entry<String, String> e : original.entrySet()) {
+                    String v = norm(e.getValue());
+                    if (!TuningAnalyzer.valid(e.getKey(), v)) {
+                        continue; // исходное значение не прочитано: параметр не трогаем
+                    }
+                    cmd.append(writeCmd(e.getKey(), v));
                 }
-                op.step("Параметр " + k, ok ? "OK" : "FAILED", after.getOrDefault(k, "") + (ok ? " (исходное)" : " (ожидалось " + norm(v) + ")"));
-            });
-            op.step("Файлы настроек удалены", "OK", CONF);
-            store.markRolledBack(g.getId());
-            audit.record("host.tuning.rollback", "generator", g.getId(), Map.of("by", String.valueOf(user)));
-            if (!notRestored.isEmpty()) {
-                String msg = "не вернулись: " + String.join(", ", notRestored) + (r.stderr().isBlank() ? "" : " (" + r.stderr().strip() + ")");
-                op.finish(false, msg);
-                return "откат выполнен, но " + msg;
+                cmd.append("exit $rc");
+                var r = ssh.sudo(cmd.toString(), Duration.ofSeconds(60));
+                Map<String, String> after = read(ssh, new ArrayList<>(original.keySet()));
+                List<String> notRestored = new ArrayList<>();
+                original.forEach((k, v) -> {
+                    boolean ok = norm(v).isEmpty() || norm(after.getOrDefault(k, "")).equals(norm(v));
+                    if (!ok) {
+                        notRestored.add(k);
+                    }
+                    op.step("Параметр " + k, ok ? "OK" : "FAILED", after.getOrDefault(k, "") + (ok ? " (исходное)" : " (ожидалось " + norm(v) + ")"));
+                });
+                op.step("Файлы настроек удалены", "OK", CONF);
+                audit.record("host.tuning.rollback", "generator", g.getId(), Map.of("by", String.valueOf(user)));
+                if (!notRestored.isEmpty()) {
+                    String msg = "не вернулись: " + String.join(", ", notRestored) + (r.stderr().isBlank() ? "" : " (" + r.stderr().strip() + ")");
+                    op.finish(false, msg);
+                    return "откат выполнен частично, " + op.masker.mask(msg) + " (запись оставлена активной для повторного отката)";
+                }
+                store.markRolledBack(g.getId());
+                op.finish(true, null);
+                return "возвращено параметров: " + original.size() + ", файлы настроек удалены";
+            } catch (RuntimeException e) {
+                String safeMsg = op.masker.mask(message(e));
+                op.step("Откат", "FAILED", safeMsg);
+                op.finish(false, safeMsg);
+                return "ошибка: " + safeMsg;
             }
-            op.finish(true, null);
-            return "возвращено параметров: " + original.size() + ", файлы настроек удалены";
-        } catch (RuntimeException e) {
-            op.step("Откат", "FAILED", message(e));
-            op.finish(false, message(e));
-            return "ошибка: " + message(e);
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -446,11 +513,15 @@ public class HostTuningService {
         }
         return out;
     }
-    private SshConnection connect(Generator g) {
+    private SshConnection connect(Generator g, SecretMasker masker) {
         if (g.getSshCredentialId() == null) {
             throw new IllegalStateException("У генератора не задана SSH-учётка");
         }
-        return connector.open(g.getHost(), g.getSshPort(), credentials.resolve(g.getSshCredentialId()), CONNECT);
+        ResolvedCredential cred = credentials.resolve(g.getSshCredentialId());
+        for (ResolvedCredential c = cred; c != null; c = c.jump()) {
+            masker.add(c.secret(), c.passphrase(), c.sudoPassword());
+        }
+        return connector.open(g.getHost(), g.getSshPort(), cred, CONNECT);
     }
 
     private List<Generator> load(List<Long> ids) {
@@ -463,12 +534,17 @@ public class HostTuningService {
     private List<String> runAll(List<Generator> gens, Function<Generator, String> task) {
         Map<Generator, Future<String>> futures = new LinkedHashMap<>();
         for (Generator g : gens) {
-            futures.put(g, pool.submit(() -> task.apply(g)));
+            futures.put(g, actionPool.submit(() -> task.apply(g)));
         }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
         List<String> out = new ArrayList<>();
         futures.forEach((g, f) -> {
+            long remNs = Math.max(0L, deadline - System.nanoTime());
             try {
-                out.add(g.getName() + ": " + f.get(120, TimeUnit.SECONDS));
+                out.add(g.getName() + ": " + f.get(remNs, TimeUnit.NANOSECONDS));
+            } catch (TimeoutException e) {
+                f.cancel(true);
+                out.add(g.getName() + ": ошибка: таймаут операции (120 с)");
             } catch (Exception e) {
                 out.add(g.getName() + ": ошибка: " + message(e));
             }

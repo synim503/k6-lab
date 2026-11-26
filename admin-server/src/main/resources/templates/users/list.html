@@ -38,7 +38,7 @@
             <td><form class="d-flex gap-2" th:action="@{/users/{id}/password(id=${u.id})}" method="post" autocomplete="off">
                 <input class="form-control form-control-sm" style="max-width:200px" type="password" name="password" placeholder="новый пароль" aria-label="Новый пароль" autocomplete="new-password">
                 <button class="btn btn-sm btn-outline-secondary">Сменить</button></form></td>
-            <td class="text-end"><form th:action="@{/users/{id}/delete(id=${u.id})}" method="post" onsubmit="return confirm('Удалить пользователя?')">
+            <td class="text-end"><form th:action="@{/users/{id}/delete(id=${u.id})}" method="post" data-confirm="Удалить пользователя?">
                 <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form></td>
         </tr></tbody></table></div></div>
 </th:block>

@@ -74,20 +74,17 @@ public class LoadController {
         LoadForm f = load.toForm(id);
         Long loadedProfileId = null;
         if (profile != null) {
-            // профиль открывается в форме, но нагрузка скрипта не меняется, пока не нажато «Сохранить нагрузку»
+            // профиль открывается в форме независимо от базовой нагрузки скрипта
             var p = profiles.find(id, profile);
             if (p.isPresent()) {
                 try {
                     f = LoadJson.fromJson(p.get().data());
                     load.completeWithScriptFunctions(id, f);
-                    load.applyBaseOverridesToProfileForm(id, f);
                     loadedProfileId = p.get().id();
                     model.addAttribute("loadedProfile", p.get().name());
                     model.addAttribute("loadedProfileId", loadedProfileId);
                     model.addAttribute("formDirty", true);
-                    model.addAttribute("info", "Открыт профиль «" + p.get().name() + "»"
-                            + (f.isBaseProfileActive() ? " (общие параметры применены из базового профиля скрипта)" : "")
-                            + ". Изменения сохраняются в этот профиль кнопкой «Сохранить профиль» внизу или вверху страницы.");
+                    model.addAttribute("info", "Открыт профиль «" + p.get().name() + "». Изменения сохраняются в этот профиль кнопкой «Сохранить профиль».");
                 } catch (IllegalArgumentException e) {
                     model.addAttribute("error", "Профиль «" + p.get().name() + "» не открывается: " + e.getMessage());
                 }
@@ -127,16 +124,7 @@ public class LoadController {
             LoadForm toStore = LoadJson.fromJson(LoadJson.toJson(f));
             var saved = profiles.save(id, name, LoadJson.toJson(toStore), user == null ? "system" : user.getName());
             savedProfileId = saved.id();
-            var script = scripts.get(id);
-            load.readBaseConfigIntoForm(script, f);
             String msg = saved.updated() ? "Профиль «" + name + "» обновлён" : "Профиль «" + name + "» сохранён";
-            if (f.isBaseProfileActive() && f.isBaseOverrideEnv() && script.getEnv() != null && !script.getEnv().isEmpty()) {
-                List<String> overriddenKeys = parsedEnv.keySet().stream().filter(script.getEnv()::containsKey).toList();
-                if (!overriddenKeys.isEmpty()) {
-                    msg += " (переменные " + String.join(", ", overriddenKeys)
-                            + " также заданы в базовом профиле — при запуске базовые значения приоритетнее)";
-                }
-            }
             model.addAttribute("info", msg);
             model.addAttribute("loadedProfile", name);
             model.addAttribute("loadedProfileId", savedProfileId);
@@ -212,6 +200,24 @@ public class LoadController {
         return "redirect:/scripts/" + id + "/load";
     }
 
+    /** Массовое удаление выбранных профилей скрипта. */
+    @PostMapping("/load/profiles/bulk-delete")
+    public String bulkDeleteProfiles(@PathVariable Long id,
+                                     @RequestParam(name = "ids", required = false) List<Long> ids,
+                                     @RequestParam(required = false) Long currentProfile,
+                                     RedirectAttributes ra) {
+        int deleted = profiles.deleteMany(id, ids);
+        if (deleted > 0) {
+            ra.addFlashAttribute("info", "Удалено профилей: " + deleted);
+        } else {
+            ra.addFlashAttribute("error", "Не выбрано ни одного профиля для удаления");
+        }
+        if (currentProfile != null && (ids == null || !ids.contains(currentProfile))) {
+            return "redirect:/scripts/" + id + "/load?profile=" + currentProfile;
+        }
+        return "redirect:/scripts/" + id + "/load";
+    }
+
     @PostMapping("/load/profile/{pid}/duplicate")
     public String duplicateProfile(@PathVariable Long id, @PathVariable Long pid, java.security.Principal user, RedirectAttributes ra) {
         try {
@@ -248,11 +254,9 @@ public class LoadController {
     @PostMapping("/load")
     public String save(@PathVariable Long id, @ModelAttribute("form") LoadForm f, Model model, RedirectAttributes ra) {
         try {
+            f.setBaseProfileActive(false);
             load.save(id, f);
-            int pCnt = profiles.list(id).size();
-            ra.addFlashAttribute("info", f.isBaseProfileActive() && pCnt > 0
-                    ? "Базовая нагрузка сохранена и применена ко всем профилям (" + pCnt + ")"
-                    : "Нагрузка сохранена");
+            ra.addFlashAttribute("info", "Нагрузка сохранена");
             return "redirect:/scripts/" + id;
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
@@ -261,15 +265,26 @@ public class LoadController {
         }
     }
 
-    /** Сохраняет текущую форму как базовые параметры скрипта и сразу применяет выбранные общие разделы ко всем профилям, оставаясь на странице нагрузки. */
+    /**
+     * Ручная разовая отправка выбранных разделов базового профиля в остальные профили скрипта.
+     * Постоянная привязка не создаётся — после отправки каждый профиль остаётся независимым.
+     */
     @PostMapping("/load/apply-base")
     public String saveAndApplyBase(@PathVariable Long id, @ModelAttribute("form") LoadForm f,
                                    java.security.Principal user, Model model, RedirectAttributes ra) {
         try {
-            f.setBaseProfileActive(true);
+            boolean anySection = f.isBaseOverrideEnv() || f.isBaseOverrideStop() || f.isBaseOverrideSla()
+                    || f.isBaseOverrideWarmup() || f.isBaseOverrideData() || f.isBaseOverrideGenerators();
+            if (!anySection) {
+                throw new IllegalArgumentException("Выберите хотя бы один раздел для отправки в остальные профили");
+            }
+            f.setBaseConfigSubmitted(true);
+            f.setBaseProfileActive(false);
             load.save(id, f);
-            int pCnt = profiles.list(id).size();
-            ra.addFlashAttribute("info", "Базовый профиль сохранён и применён ко всем профилям (" + pCnt + ")");
+            int updated = load.syncBaseToAllProfiles(id, user == null ? "system" : user.getName());
+            ra.addFlashAttribute("info", updated > 0
+                    ? "Выбранные параметры отправлены в остальные профили (" + updated + "). Профили остаются независимыми."
+                    : "Базовая нагрузка сохранена (других профилей у скрипта пока нет)");
             return "redirect:/scripts/" + id + "/load";
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
@@ -400,7 +415,13 @@ public class LoadController {
         int gens = Math.max(1, generators);
         model.addAttribute("profiles", profList);
         model.addAttribute("profilesJson", profilesJson(profList));
-        model.addAttribute("formJson", LoadJson.toJson(f));
+        String fJson;
+        try {
+            fJson = LoadJson.toJson(f);
+        } catch (IllegalArgumentException e) {
+            fJson = "{}";
+        }
+        model.addAttribute("formJson", fJson);
         RunPlan plan = planFor(id, gens, loadedProfileId);
         boolean baseDefined = load.isDefined(id);
         boolean hasReadyProfile = !baseDefined && profList.stream().anyMatch(p -> {

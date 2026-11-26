@@ -27,7 +27,7 @@
                 <i class="bi bi-collection me-1"></i>Импорт профилей нагрузки
             </button>
             <form class="m-0" th:unless="${paused}" th:action="@{/schedule/pause}" method="post"
-                  onsubmit="return confirm('Поставить планировщик на паузу? Идущий тест закончится сам, новые запуски по расписанию не стартуют.')">
+                  data-confirm="Поставить планировщик на паузу? Идущий тест закончится сам, новые запуски по расписанию не стартуют.">
                 <button class="btn btn-outline-warning btn-sm"><i class="bi bi-pause-fill me-1"></i>Поставить на паузу</button>
             </form>
         </div>
@@ -221,7 +221,7 @@
                             </button>
                         </form>
                         <form class="m-0" th:action="@{/schedule/guards/{id}/run-ssh(id=${g.id})}" method="post"
-                              onsubmit="return confirm('Выполнить SSH-скрипт прямо сейчас независимо от значения метрики?')">
+                              data-confirm="Выполнить SSH-скрипт прямо сейчас независимо от значения метрики?">
                             <button type="submit" class="btn btn-sm btn-outline-warning py-0 px-2" title="Принудительно выполнить SSH-скрипт сейчас (для отладки)">
                                 <i class="bi bi-terminal me-1"></i>SSH
                             </button>
@@ -231,7 +231,7 @@
                             <i class="bi bi-pencil"></i>
                         </button>
                         <form class="m-0" th:action="@{/schedule/guards/{id}/delete(id=${g.id})}" method="post"
-                              onsubmit="return confirm('Удалить автопроверку?')">
+                              data-confirm="Удалить автопроверку?">
                             <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Удалить правило">
                                 <i class="bi bi-trash"></i>
                             </button>
@@ -277,7 +277,7 @@
                     <ul class="dropdown-menu dropdown-menu-end">
                         <li th:if="${pendingCount > 0}">
                             <form class="m-0" th:action="@{/schedule/cancel-all-pending}" method="post"
-                                  onsubmit="return confirm('Отменить ВСЕ ожидающие запуски в расписании?')">
+                                  data-confirm="Отменить ВСЕ ожидающие запуски в расписании?">
                                 <button type="submit" class="dropdown-item small text-danger">
                                     <i class="bi bi-x-circle me-2"></i>Отменить все ожидающие (<span th:text="${pendingCount}"></span>)
                                 </button>
@@ -285,7 +285,7 @@
                         </li>
                         <li th:if="${historyCount > 0}">
                             <form class="m-0" th:action="@{/schedule/clear-history}" method="post"
-                                  onsubmit="return confirm('Очистить историю завершённых, отменённых и упавших записей расписания? Ожидающие в очереди тесты останутся.')">
+                                  data-confirm="Очистить историю завершённых, отменённых и упавших записей расписания? Ожидающие в очереди тесты останутся.">
                                 <button type="submit" class="dropdown-item small">
                                     <i class="bi bi-trash3 me-2"></i>Очистить историю (<span th:text="${historyCount}"></span>)
                                 </button>
@@ -311,7 +311,7 @@
                     </button>
                 </form>
                 <form th:action="@{/schedule/bulk-cancel}" method="post" class="m-0 sch-bulk-form"
-                      onsubmit="return confirm('Отменить выбранные ожидающие записи расписания?')">
+                      data-confirm="Отменить выбранные ожидающие записи расписания?">
                     <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить выбранные ожидающие записи">
                         <i class="bi bi-x-lg me-1"></i>Отменить ожидающие
                     </button>
@@ -410,7 +410,7 @@
                             <!-- Управление позицией ожидающего теста в очереди + запуск прямо сейчас -->
                             <th:block th:if="${s.pending}">
                                 <form th:action="@{/schedule/{id}/start-now(id=${s.id})}" method="post" class="d-inline m-0"
-                                      onsubmit="return confirm('Запустить этот тест прямо сейчас (если генераторы свободны)? Остальные записи очереди сдвинутся следом.')">
+                                      data-confirm="Запустить этот тест прямо сейчас (если генераторы свободны)? Остальные записи очереди сдвинутся следом.">
                                     <button type="submit" class="btn btn-sm btn-outline-success py-0 px-1"
                                             title="Запустить прямо сейчас вне очереди (если генераторы свободны)">
                                         <i class="bi bi-play-fill"></i>
@@ -494,7 +494,7 @@
                             </div>
 
                             <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
-                                  onsubmit="return confirm('Отменить запланированный запуск?')">
+                                  data-confirm="Отменить запланированный запуск?">
                                 <button class="btn btn-sm btn-outline-danger py-0 px-1" title="Отменить"><i class="bi bi-x-lg"></i></button>
                             </form>
                         </div>

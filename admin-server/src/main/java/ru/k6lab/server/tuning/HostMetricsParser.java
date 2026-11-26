@@ -86,7 +86,10 @@ final class HostMetricsParser {
     private static void snap(Snap s, String line) {
         String[] t = line.split("\\s+");
         switch (t[0]) {
-            case "time" -> s.time = t.length > 1 ? Double.parseDouble(t[1]) : 0;
+            case "time" -> {
+                Double v = dbl(t.length > 1 ? t[1] : "");
+                s.time = v == null ? 0 : v;
+            }
             case "stat" -> {
                 // stat cpu user nice system idle iowait irq softirq steal ...
                 if (t.length > 3) {

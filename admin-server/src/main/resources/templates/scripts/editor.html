@@ -17,11 +17,12 @@
     <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post">
         <input type="hidden" name="file" th:value="${path}">
         <input type="hidden" name="content" id="content">
+        <div class="alert alert-danger py-2 small d-none" id="edit-err"></div>
         <div id="editor" style="height: 62vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden"
              th:attr="data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${path})}"></div>
         <div class="sticky-actions">
             <input class="form-control" style="max-width:420px" name="comment" placeholder="Что изменилось (необязательно)" aria-label="Комментарий к версии">
-            <button class="btn btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>Сохранить как новую версию</button>
+            <button class="btn btn-primary" id="edit-save" type="submit" disabled><i class="bi bi-check-lg me-1"></i>Сохранить как новую версию</button>
             <a class="btn btn-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}">Отмена</a>
         </div>
     </form>
@@ -31,6 +32,8 @@
     <script>
         (function () {
             var box = document.getElementById('editor');
+            var saveBtn = document.getElementById('edit-save');
+            var errBox = document.getElementById('edit-err');
             var base = location.origin + '/webjars/monaco-editor/min/vs';
             require.config({paths: {vs: base}});
             window.MonacoEnvironment = {
@@ -46,8 +49,11 @@
             require(['vs/editor/editor.main'], function () {
                 var path = new URLSearchParams(location.search).get('file') || '';
                 var lang = /\.(json)$/i.test(path) ? 'json' : 'javascript';
-                fetch(box.dataset.fileUrl).then(function (r) { return r.json(); }).then(function (data) {
-                    var editor = monaco.editor.create(box, {value: data.content, language: lang, automaticLayout: true,
+                fetch(box.dataset.fileUrl).then(function (r) {
+                    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+                    return r.json();
+                }).then(function (data) {
+                    var editor = monaco.editor.create(box, {value: data.content || '', language: lang, automaticLayout: true,
                         minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
                     var ts = monaco.languages.typescript;
                     ts.javascriptDefaults.setCompilerOptions({allowJs: true, checkJs: false, allowNonTsExtensions: true,
@@ -61,6 +67,12 @@
                     document.getElementById('edit-form').addEventListener('submit', function () {
                         document.getElementById('content').value = editor.getValue();
                     });
+                    if (saveBtn) { saveBtn.disabled = false; }
+                }).catch(function (e) {
+                    if (errBox) {
+                        errBox.textContent = 'Не удалось загрузить файл в редактор: ' + (e && e.message ? e.message : e);
+                        errBox.classList.remove('d-none');
+                    }
                 });
             });
         })();

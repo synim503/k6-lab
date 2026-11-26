@@ -157,14 +157,14 @@ public class SandboxController {
         return out;
     }
 
-    /** Сохранение набора файлов как обычного скрипта (версия 1). */
+    /** Сохранение набора файлов как обычного скрипта (версия 1) или новой версии без схлопывания каталогов. */
     @PostMapping("/save")
     @ResponseBody
     public ResponseEntity<Map<String, Object>> save(@RequestBody SaveRequest req) {
         try {
-            byte[] zip = SandboxService.zip(SandboxService.decode(req.files()));
+            Map<String, byte[]> files = SandboxService.decode(req.files());
             if (req.scriptId() != null) {
-                ScriptVersion nv = scripts.addVersionFromUpload(req.scriptId(), "sandbox.zip", new ByteArrayInputStream(zip),
+                ScriptVersion nv = scripts.addVersionFromFiles(req.scriptId(), files,
                         req.entrypoint() == null ? "" : req.entrypoint(),
                         req.comment() == null || req.comment().isBlank() ? "правка в режиме отладки" : req.comment());
                 if (req.env() != null) {
@@ -172,8 +172,8 @@ public class SandboxController {
                 }
                 return ResponseEntity.ok(Map.of("redirect", "/scripts/" + req.scriptId() + "/versions/" + nv.getId()));
             }
-            ScriptVersion v = scripts.createFromUpload(req.name() == null ? "" : req.name(),
-                    req.description() == null ? "" : req.description(), "sandbox.zip", new ByteArrayInputStream(zip),
+            ScriptVersion v = scripts.createFromFiles(req.name() == null ? "" : req.name(),
+                    req.description() == null ? "" : req.description(), files,
                     req.entrypoint() == null ? "" : req.entrypoint(), "создан в режиме отладки");
             if (req.env() != null && !req.env().isEmpty()) {
                 scripts.updateEnv(v.getScriptId(), cleanEnv(req.env()));

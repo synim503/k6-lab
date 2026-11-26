@@ -43,6 +43,7 @@ public class ProfileImportService {
     }
 
     /** scriptId != null - профили этого скрипта (поле script в JSON не нужно); null - скрипт берётся из поля script каждого профиля. */
+    @org.springframework.transaction.annotation.Transactional
     public List<Imported> importProfiles(Long scriptId, String json, String user) {
         JsonNode root;
         try {
@@ -71,17 +72,9 @@ public class ProfileImportService {
             }
         }
         List<Imported> out = new ArrayList<>();
-        Set<Long> affectedScripts = new HashSet<>();
         for (Ready r : ready) {
             var saved = profiles.save(r.script().getId(), r.name(), r.data(), user);
             out.add(new Imported(r.script().getId(), r.script().getName(), saved.id(), r.name(), saved.updated()));
-            affectedScripts.add(r.script().getId());
-        }
-        for (Long sid : affectedScripts) {
-            Script s = scripts.get(sid);
-            if (s.getSuccessCriteria() != null && Boolean.TRUE.equals(s.getSuccessCriteria().get("baseProfileActive"))) {
-                load.syncBaseToAllProfiles(sid, user);
-            }
         }
         return out;
     }

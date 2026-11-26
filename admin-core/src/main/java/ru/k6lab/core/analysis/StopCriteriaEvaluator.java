@@ -17,10 +17,20 @@ public class StopCriteriaEvaluator {
                          boolean errorsEnabled,
                          boolean rateEnabled, double minRatePct,
                          boolean droppedEnabled, double maxDroppedPct,
-                         int consecutive, int windowSec) {
+                         int consecutive, int windowSec,
+                         boolean extraStepOnMaxSearch) {
+
+        public Config(boolean percentileEnabled, double slaMultiplier,
+                      boolean errorsEnabled,
+                      boolean rateEnabled, double minRatePct,
+                      boolean droppedEnabled, double maxDroppedPct,
+                      int consecutive, int windowSec) {
+            this(percentileEnabled, slaMultiplier, errorsEnabled, rateEnabled, minRatePct,
+                    droppedEnabled, maxDroppedPct, consecutive, windowSec, true);
+        }
 
         public static Config defaults(boolean enabled) {
-            return new Config(enabled, 1.5, enabled, enabled, 90.0, enabled, 1.0, 3, 60);
+            return new Config(enabled, 1.5, enabled, enabled, 90.0, enabled, 1.0, 3, 60, true);
         }
 
         public boolean anyEnabled() {

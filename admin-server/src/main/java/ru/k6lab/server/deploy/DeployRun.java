@@ -68,12 +68,13 @@ public class DeployRun {
     }
 
     private synchronized void end(int n, String status, String message) {
+        String masked = message == null ? null : log.masker().mask(message);
         Deployment.StepInfo old = steps.get(n - 1);
-        steps.set(n - 1, new Deployment.StepInfo(n, old.name(), status, message, old.startedAt(), Instant.now()));
+        steps.set(n - 1, new Deployment.StepInfo(n, old.name(), status, masked, old.startedAt(), Instant.now()));
         log.line(switch (status) {
             case "OK" -> "✔ Шаг " + n + " выполнен";
-            case "SKIPPED" -> "– Шаг " + n + " пропущен" + (message == null ? "" : " (" + message + ")");
-            default -> "✖ Шаг " + n + " завершился ошибкой: " + message;
+            case "SKIPPED" -> "– Шаг " + n + " пропущен" + (masked == null ? "" : " (" + masked + ")");
+            default -> "✖ Шаг " + n + " завершился ошибкой: " + masked;
         });
         log.stepChanged();
         persist();

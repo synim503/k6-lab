@@ -300,7 +300,8 @@ public class ScriptController {
             return "redirect:/scripts/" + id + "/versions/" + v.getId();
         } catch (IllegalArgumentException | IllegalStateException | IOException e) {
             ra.addFlashAttribute("error", e.getMessage());
-            return "redirect:/scripts/" + id + "/versions/" + vid + "/edit?file=" + file;
+            String encFile = java.net.URLEncoder.encode(file == null ? "" : file, StandardCharsets.UTF_8);
+            return "redirect:/scripts/" + id + "/versions/" + vid + "/edit?file=" + encFile;
         }
     }
 

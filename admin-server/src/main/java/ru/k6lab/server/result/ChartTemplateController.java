@@ -355,8 +355,20 @@ public class ChartTemplateController {
     @ResponseBody
     public CustomChartService.PreviewResult apiPreview(@PathVariable Long id, @RequestBody PreviewReq req) {
         scripts.get(id);
-        List<ChartTemplateStore.Query> queries = toQueries(req.queries());
-        if (queries.isEmpty()) {
+        // Сохраняем 1:1 индексы строк (включая пустые), чтобы QueryDiag.index точно соответствовал строкам конструктора.
+        List<ChartTemplateStore.Query> queries = new ArrayList<>();
+        boolean anyNonEmpty = false;
+        if (req.queries() != null) {
+            for (QueryDto d : req.queries()) {
+                String q = d == null || d.promql() == null ? "" : d.promql().strip();
+                String l = d == null || d.legend() == null ? "" : d.legend().strip();
+                if (!q.isEmpty()) {
+                    anyNonEmpty = true;
+                }
+                queries.add(new ChartTemplateStore.Query(q, l));
+            }
+        }
+        if (!anyNonEmpty) {
             return new CustomChartService.PreviewResult(false, req.name() == null ? "" : req.name(), null, "", 0, 0,
                     "Добавьте хотя бы один PromQL-запрос для предпросмотра", List.of());
         }

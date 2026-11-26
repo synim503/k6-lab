@@ -24,7 +24,8 @@ public final class LoadCriteria {
                 bool(m, "errorsEnabled", d.errorsEnabled()),
                 bool(m, "rateEnabled", d.rateEnabled()), num(m, "minRatePct", d.minRatePct()),
                 bool(m, "droppedEnabled", d.droppedEnabled()), num(m, "maxDroppedPct", d.maxDroppedPct()),
-                (int) num(m, "consecutive", d.consecutive()), (int) num(m, "windowSec", d.windowSec()));
+                (int) num(m, "consecutive", d.consecutive()), (int) num(m, "windowSec", d.windowSec()),
+                bool(m, "extraStepOnMaxSearch", d.extraStepOnMaxSearch()));
     }
 
     public static Map<String, Object> stopToMap(StopCriteriaEvaluator.Config c) {
@@ -42,6 +43,7 @@ public final class LoadCriteria {
         m.put("maxDroppedPct", c.maxDroppedPct());
         m.put("consecutive", c.consecutive());
         m.put("windowSec", c.windowSec());
+        m.put("extraStepOnMaxSearch", c.extraStepOnMaxSearch());
         if (customChecks != null && !customChecks.isEmpty()) {
             java.util.List<Map<String, Object>> list = new java.util.ArrayList<>(customChecks.size());
             for (StepAnalysis.CustomCheck cc : customChecks) {

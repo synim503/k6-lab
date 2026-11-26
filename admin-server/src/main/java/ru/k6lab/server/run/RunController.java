@@ -93,6 +93,13 @@ public class RunController {
             for (RunLogService.Row r : logs.tail(id, 500)) {
                 fallback.add(new RunEventBroadcaster.Line(r.ts().toEpochMilli(), r.generatorId(), names.get(r.generatorId()), r.level(), r.line()));
             }
+            try {
+                if (runService.get(id).getStatus().isTerminal()) {
+                    return broadcaster.snapshotLogs(fallback);
+                }
+            } catch (IllegalArgumentException ignored) {
+                return broadcaster.snapshotLogs(fallback);
+            }
         }
         return broadcaster.subscribeLogs(id, fallback);
     }

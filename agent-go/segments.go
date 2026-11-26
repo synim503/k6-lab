@@ -109,24 +109,41 @@ func splitData(path string, start, end Fraction, header bool) (total, from, to i
 		line, rerr := r.ReadBytes('\n') // терминаторы строк сохраняются как есть
 		if len(line) > 0 {
 			if first && header {
-				_, _ = w.Write(line)
+				if _, werr := w.Write(line); werr != nil {
+					out.Close()
+					_ = os.Remove(tmp)
+					return total, from, to, werr
+				}
 			} else {
 				if idx >= from && idx < to {
-					_, _ = w.Write(line)
+					if _, werr := w.Write(line); werr != nil {
+						out.Close()
+						_ = os.Remove(tmp)
+						return total, from, to, werr
+					}
 				}
 				idx++
 			}
 			first = false
 		}
 		if rerr != nil {
+			if rerr != io.EOF {
+				out.Close()
+				_ = os.Remove(tmp)
+				return total, from, to, rerr
+			}
 			break
 		}
 	}
 	if err = w.Flush(); err != nil {
 		out.Close()
+		_ = os.Remove(tmp)
 		return
 	}
-	out.Close()
+	if err = out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
 	in.Close()
 	err = os.Rename(tmp, path)
 	return

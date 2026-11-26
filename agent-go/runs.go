@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -35,9 +36,11 @@ type RunManager struct {
 }
 
 type Run struct {
-	id   string
-	prep Prepare
-	dir  string
+	id     string
+	prep   Prepare
+	dir    string
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu            sync.Mutex
 	work          string
@@ -59,6 +62,13 @@ type Run struct {
 }
 
 func NewRunManager(cfg *Config, emit func(factory func(seq int64) any)) *RunManager {
+	// При старте чистим временные каталоги run, оставшиеся от прежнего аварийно завершившегося процесса
+	runsRoot := filepath.Join(cfg.Home, "runs")
+	if entries, err := os.ReadDir(runsRoot); err == nil {
+		for _, e := range entries {
+			_ = os.RemoveAll(filepath.Join(runsRoot, e.Name()))
+		}
+	}
 	return &RunManager{cfg: cfg, emit: emit, runs: map[string]*Run{}, httpc: &http.Client{}}
 }
 
@@ -119,7 +129,7 @@ func (m *RunManager) AgentRuns() []AgentRun {
 func (m *RunManager) ActiveRunIDs() []string {
 	out := []string{}
 	for _, r := range m.AgentRuns() {
-		if r.State == stRunning || r.State == stStopping {
+		if r.State == stStarting || r.State == stRunning || r.State == stStopping {
 			out = append(out, r.RunID)
 		}
 	}
@@ -172,10 +182,7 @@ func (m *RunManager) HandleCommand(typ string, raw []byte) CmdAck {
 		case "STOP":
 			err = m.stop(r)
 		case "ABORT":
-			r.mu.Lock()
-			r.aborted = true
-			r.mu.Unlock()
-			r.killQuietly()
+			m.abort(r)
 		case "PAUSE", "RESUME", "SCALE_VUS":
 			var api *K6Api
 			if api, err = r.apiClient(); err == nil {
@@ -209,13 +216,25 @@ func (r *Run) apiClient() (*K6Api, error) {
 	return r.api, nil
 }
 
+func validRunID(id string) bool {
+	if id == "" || strings.Contains(id, "..") || strings.ContainsAny(id, `/\`) {
+		return false
+	}
+	return filepath.Base(id) == id
+}
+
 func (m *RunManager) prepare(p Prepare) CmdAck {
+	if !validRunID(p.RunID) {
+		return ackErr(p.CmdID, "недопустимый runId: "+p.RunID)
+	}
 	m.mu.Lock()
 	if _, ok := m.runs[p.RunID]; ok {
 		m.mu.Unlock()
 		return ackOK(p.CmdID) // повторная доставка PREPARE: не готовим заново
 	}
-	r := &Run{id: p.RunID, prep: p, dir: filepath.Join(m.cfg.Home, "runs", p.RunID), state: stPreparing,
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &Run{id: p.RunID, prep: p, dir: filepath.Join(m.cfg.Home, "runs", p.RunID),
+		ctx: ctx, cancel: cancel, state: stPreparing,
 		env: map[string]string{}, masker: NewMasker(nil)}
 	m.runs[p.RunID] = r
 	m.mu.Unlock()
@@ -228,12 +247,14 @@ func (m *RunManager) start(s Start) CmdAck {
 	if r == nil {
 		return ackErr(s.CmdID, "run "+s.RunID+" не подготовлен")
 	}
-	switch st := r.getState(); st {
-	case stRunning:
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch r.state {
+	case stRunning, stStarting:
 		return ackOK(s.CmdID)
 	case stPrepared:
 	default:
-		return ackErr(s.CmdID, "run в состоянии "+st+", START возможен только после PREPARED")
+		return ackErr(s.CmdID, "run в состоянии "+r.state+", START возможен только после PREPARED")
 	}
 	delay := s.StartAt - time.Now().UnixMilli()
 	if delay < -2000 {
@@ -242,9 +263,10 @@ func (m *RunManager) start(s Start) CmdAck {
 	if delay < 0 {
 		delay = 0
 	}
-	r.mu.Lock()
+	if r.startTimer != nil {
+		r.startTimer.Stop()
+	}
 	r.startTimer = time.AfterFunc(time.Duration(delay)*time.Millisecond, func() { m.launch(r) })
-	r.mu.Unlock()
 	return ackOK(s.CmdID)
 }
 
@@ -253,19 +275,23 @@ func (m *RunManager) cancelPrepare(c RunCmd) CmdAck {
 	if r == nil {
 		return ackOK(c.CmdID)
 	}
-	if st := r.getState(); st == stRunning || st == stStopping {
-		// отмена пришла, когда k6 уже стартовал (сервер закрыл запуск в момент старта): сервер этот run больше не ведёт и остановить его
-		// будет некому, поэтому k6 завершается сразу, а не отрабатывает весь тест без присмотра
-		r.mu.Lock()
+	r.mu.Lock()
+	st := r.state
+	if st == stRunning || st == stStopping || st == stStarting {
+		// отмена пришла, когда k6 уже стартует или стартовал: сервер этот run больше не ведёт
+		r.cancelled = true
 		r.aborted = true
 		r.mu.Unlock()
 		r.killQuietly()
 		return ackOK(c.CmdID)
 	}
-	r.mu.Lock()
 	r.cancelled = true
 	if r.startTimer != nil {
 		r.startTimer.Stop()
+		r.startTimer = nil
+	}
+	if r.cancel != nil {
+		r.cancel()
 	}
 	r.state = stExited
 	r.mu.Unlock()
@@ -281,23 +307,24 @@ func (m *RunManager) doPrepare(r *Run) {
 	err := m.prepareSteps(r)
 	if err == nil {
 		r.mu.Lock()
-		cancelled := r.cancelled
-		r.mu.Unlock()
-		if cancelled {
+		if r.cancelled {
+			r.mu.Unlock()
+			_ = os.RemoveAll(r.dir)
 			return
 		}
-		r.setState(stPrepared)
+		r.state = stPrepared
+		r.mu.Unlock()
 		m.emit(func(seq int64) any { return Prepared{Type: "PREPARED", Seq: seq, Ts: nowMs(), RunID: p.RunID} })
 		logf("run %s подготовлен", p.RunID)
 		return
 	}
 	logf("PREPARE run %s не удался: %v", p.RunID, err)
-	r.setState(stExited)
-	m.remove(r)
-	_ = os.RemoveAll(r.dir)
 	r.mu.Lock()
 	cancelled := r.cancelled
+	r.state = stExited
 	r.mu.Unlock()
+	m.remove(r)
+	_ = os.RemoveAll(r.dir)
 	if !cancelled {
 		reason := err.Error()
 		m.emit(func(seq int64) any {
@@ -312,7 +339,7 @@ func (m *RunManager) prepareSteps(r *Run) error {
 		return err
 	}
 	archive := filepath.Join(r.dir, "script.zip")
-	if err := m.download(p.ArtifactURL, archive); err != nil {
+	if err := m.download(r.ctx, p.ArtifactURL, archive); err != nil {
 		return err
 	}
 	sum, err := sha256File(archive)
@@ -327,7 +354,11 @@ func (m *RunManager) prepareSteps(r *Run) error {
 		return err
 	}
 	_ = os.Remove(archive)
-	if st, err := os.Stat(filepath.Join(work, filepath.FromSlash(p.Entrypoint))); err != nil || st.IsDir() {
+	entryPath := filepath.Join(work, filepath.FromSlash(p.Entrypoint))
+	if rel, e := filepath.Rel(work, entryPath); e != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("Entrypoint %s выходит за пределы архива", p.Entrypoint)
+	}
+	if st, err := os.Stat(entryPath); err != nil || st.IsDir() {
 		return fmt.Errorf("Entrypoint %s не найден в архиве", p.Entrypoint)
 	}
 	r.mu.Lock()
@@ -396,9 +427,13 @@ func (m *RunManager) prepareSteps(r *Run) error {
 	return nil
 }
 
-func (m *RunManager) download(url, target string) error {
+func (m *RunManager) download(ctx context.Context, url, target string) error {
 	c := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := c.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("Не удалось скачать архив скрипта: %w", err)
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		return fmt.Errorf("Не удалось скачать архив скрипта: %w", err)
 	}
@@ -423,17 +458,22 @@ func (m *RunManager) launch(r *Run) {
 		r.mu.Unlock()
 		return
 	}
+	r.state = stStarting
 	r.mu.Unlock()
 	p := r.prep
 	summary := filepath.Join(r.dir, "summary.json")
+	var stdout, stderr io.ReadCloser
 	port, err := freePort(p.K6ApiPort)
 	if err == nil {
 		r.mu.Lock()
 		r.apiPort = port
-		r.mu.Unlock()
-		r.mu.Lock()
 		work, env, masker, notes := r.work, r.env, r.masker, r.notes
+		cancelledBeforeStart := r.cancelled
 		r.mu.Unlock()
+		if cancelledBeforeStart {
+			m.finishCancelledBeforeStart(r)
+			return
+		}
 		if pr := p.Prometheus; pr != nil && pr.ClassicHistograms && strings.TrimSpace(pr.URL) != "" {
 			// k6 шлёт метрики локальному приёмнику, тот переводит native histograms в классические и пересылает в Prometheus
 			proxy, perr := StartRWProxy(pr.URL, pr.Headers, pr.KeepHistograms...)
@@ -473,8 +513,12 @@ func (m *RunManager) launch(r *Run) {
 		}
 		r.mu.Lock()
 		r.logs = logs
+		cancelledBeforeStart = r.cancelled
 		r.mu.Unlock()
-		var stdout, stderr io.ReadCloser
+		if cancelledBeforeStart {
+			m.finishCancelledBeforeStart(r)
+			return
+		}
 		if stdout, err = cmd.StdoutPipe(); err == nil {
 			if stderr, err = cmd.StderrPipe(); err == nil {
 				err = cmd.Start()
@@ -505,18 +549,57 @@ func (m *RunManager) launch(r *Run) {
 		}
 	}
 failed:
+	if stdout != nil {
+		_ = stdout.Close()
+	}
+	if stderr != nil {
+		_ = stderr.Close()
+	}
 	logf("Не удалось запустить k6 для run %s: %v", p.RunID, err)
 	code := 127
 	r.mu.Lock()
 	r.state, r.exitCode = stExited, &code
 	logs := r.logs
+	proxy := r.proxy
+	r.proxy = nil
 	r.mu.Unlock()
-	m.emit(func(seq int64) any { return Exit{Type: "EXIT", Seq: seq, Ts: nowMs(), RunID: p.RunID, Code: 127} })
+	if proxy != nil {
+		proxy.Close()
+	}
 	if logs != nil {
 		logs.Add("agent", fmt.Sprintf("Не удалось запустить k6: %v", err))
 		logs.Close()
 	}
+	m.emit(func(seq int64) any { return Exit{Type: "EXIT", Seq: seq, Ts: nowMs(), RunID: p.RunID, Code: 127} })
 	m.scheduleCleanup(r)
+}
+
+func (m *RunManager) finishCancelledBeforeStart(r *Run) {
+	r.mu.Lock()
+	r.state = stExited
+	logs := r.logs
+	proxy := r.proxy
+	r.proxy = nil
+	aborted := r.aborted
+	stopReq := r.stopRequested
+	r.mu.Unlock()
+	if proxy != nil {
+		proxy.Close()
+	}
+	if logs != nil {
+		logs.Close()
+	}
+	m.remove(r)
+	_ = os.RemoveAll(r.dir)
+	if aborted {
+		m.emit(func(seq int64) any {
+			return Exit{Type: "EXIT", Seq: seq, Ts: nowMs(), RunID: r.id, Code: 137, Signal: strp("SIGKILL")}
+		})
+	} else if stopReq {
+		m.emit(func(seq int64) any {
+			return Exit{Type: "EXIT", Seq: seq, Ts: nowMs(), RunID: r.id, Code: 0, Signal: strp("CANCELLED")}
+		})
+	}
 }
 
 func pump(wg *sync.WaitGroup, logs *LogBatcher, in io.Reader, stream string) {
@@ -643,14 +726,17 @@ func (m *RunManager) stop(r *Run) error {
 	cmd := r.cmd
 	alive := cmd != nil && cmd.Process != nil && r.state != stExited
 	state := r.state
-	r.mu.Unlock()
 	if !alive {
-		if state == stPrepared {
-			// остановка до старта: просто отменяем; сервер ждёт EXIT каждого генератора
-			r.mu.Lock()
+		if state == stPreparing || state == stPrepared {
+			// остановка до старта: отменяем подготовку/таймер; сервер ждёт EXIT каждого генератора
 			r.cancelled = true
+			r.stopRequested = true
 			if r.startTimer != nil {
 				r.startTimer.Stop()
+				r.startTimer = nil
+			}
+			if r.cancel != nil {
+				r.cancel()
 			}
 			r.state = stExited
 			r.mu.Unlock()
@@ -659,10 +745,15 @@ func (m *RunManager) stop(r *Run) error {
 			m.emit(func(seq int64) any {
 				return Exit{Type: "EXIT", Seq: seq, Ts: nowMs(), RunID: r.id, Code: 0, Signal: strp("CANCELLED")}
 			})
+			return nil
 		}
+		if state == stStarting {
+			r.cancelled = true
+			r.stopRequested = true
+		}
+		r.mu.Unlock()
 		return nil
 	}
-	r.mu.Lock()
 	r.stopRequested = true
 	r.state = stStopping
 	r.mu.Unlock()
@@ -677,6 +768,44 @@ func (m *RunManager) stop(r *Run) error {
 		return cmd.Process.Kill()
 	}
 	return nil
+}
+
+// abort - принудительная остановка (SIGKILL) в любом состоянии, включая PREPARING/PREPARED/STARTING.
+func (m *RunManager) abort(r *Run) {
+	r.mu.Lock()
+	cmd := r.cmd
+	alive := cmd != nil && cmd.Process != nil && r.state != stExited
+	state := r.state
+	if !alive {
+		if state == stPreparing || state == stPrepared {
+			r.cancelled = true
+			r.aborted = true
+			if r.startTimer != nil {
+				r.startTimer.Stop()
+				r.startTimer = nil
+			}
+			if r.cancel != nil {
+				r.cancel()
+			}
+			r.state = stExited
+			r.mu.Unlock()
+			m.remove(r)
+			_ = os.RemoveAll(r.dir)
+			m.emit(func(seq int64) any {
+				return Exit{Type: "EXIT", Seq: seq, Ts: nowMs(), RunID: r.id, Code: 137, Signal: strp("SIGKILL")}
+			})
+			return
+		}
+		if state == stStarting {
+			r.cancelled = true
+			r.aborted = true
+		}
+		r.mu.Unlock()
+		return
+	}
+	r.aborted = true
+	r.mu.Unlock()
+	r.killQuietly()
 }
 
 func (r *Run) killQuietly() {

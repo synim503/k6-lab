@@ -43,4 +43,9 @@ public interface GeneratorRepository extends JpaRepository<Generator, Long> {
     @Modifying
     @Query("update Generator g set g.lastSeq = :seq where g.id = :id")
     void updateLastSeq(Long id, long seq);
+
+    /** Атомарное освобождение слота генератора без потери обновлений при параллельных reserve/release. */
+    @Modifying
+    @Query("update Generator g set g.activeRuns = case when g.activeRuns > 0 then g.activeRuns - 1 else 0 end where g.id = :id")
+    void decrementActiveRuns(Long id);
 }

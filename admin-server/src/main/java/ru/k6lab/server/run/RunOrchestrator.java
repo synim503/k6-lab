@@ -158,22 +158,28 @@ public class RunOrchestrator implements AgentEventListener {
             ctx.gens.put(rg.getGeneratorId(), genCtx(rg));
         }
         contexts.put(runId, ctx);
-        MDC.put("run_id", String.valueOf(runId));
-        try {
-            logs.addSystem(runId, "INFO", "Run " + runId + ": подготовка на " + ctx.gens.size() + " генераторах");
-            Map<String, String> secretValues = secrets.resolve(SecretService.referencedNames(snap.env()));
-            RunArtifactService.Artifact artifact = artifacts.forVersion(runService.versionOf(run));
-            for (RunGenerator rg : runService.generatorsOf(runId)) {
-                sendPrepare(ctx, run, snap, rg, artifact, secretValues);
+        synchronized (ctx) {
+            MDC.put("run_id", String.valueOf(runId));
+            try {
+                logs.addSystem(runId, "INFO", "Run " + runId + ": подготовка на " + ctx.gens.size() + " генераторах");
+                Map<String, String> secretValues = secrets.resolve(SecretService.referencedNames(snap.env()));
+                RunArtifactService.Artifact artifact = artifacts.forVersion(runService.versionOf(run));
+                for (RunGenerator rg : runService.generatorsOf(runId)) {
+                    sendPrepare(ctx, run, snap, rg, artifact, secretValues);
+                }
+                if (!ctx.finalized) {
+                    ctx.prepareTimeout = scheduler.schedule(() -> onPrepareTimeout(runId), run.getPrepareTimeoutSec(), TimeUnit.SECONDS);
+                }
+            } catch (Exception e) {
+                log.error("Run {}: не удалось отправить PREPARE", runId, e);
+                fail(ctx, "Не удалось подготовить запуск: " + e.getMessage());
+            } finally {
+                MDC.remove("run_id");
             }
-            ctx.prepareTimeout = scheduler.schedule(() -> onPrepareTimeout(runId), run.getPrepareTimeoutSec(), TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.error("Run {}: не удалось отправить PREPARE", runId, e);
-            fail(ctx, "Не удалось подготовить запуск: " + e.getMessage());
-        } finally {
-            MDC.remove("run_id");
+            if (!ctx.finalized) {
+                broadcaster.publishStatus(runId, RunStatus.PREPARING.name());
+            }
         }
-        broadcaster.publishStatus(runId, RunStatus.PREPARING.name());
     }
 
     private Ctx newCtx(Run run, RunSnapshot snap) {
@@ -648,7 +654,7 @@ public class RunOrchestrator implements AgentEventListener {
         } else if (!crashed.isEmpty() && !ctx.stopRequested) {
             target = RunStatus.FAILED;
             error = "k6 завершился аварийно на: " + String.join(", ", crashed);
-        } else if (!ctx.stopRequested && ctx.gens.values().stream().allMatch(g -> g.status == RunGenerator.Status.LOST)) {
+        } else if (ctx.gens.values().stream().allMatch(g -> g.status == RunGenerator.Status.LOST)) {
             // ни один генератор не довёл тест до конца: результата нет, это не успешное завершение
             target = RunStatus.FAILED;
             error = "Все генераторы потеряны: тест не доведён до конца";
@@ -785,6 +791,7 @@ public class RunOrchestrator implements AgentEventListener {
                 cancel(ctx.prepareTimeout);
                 reservation.release(ctx.gens.values().stream().map(g -> g.genId).toList());
                 contexts.remove(runId);
+                pendingCmds.values().removeIf(c -> c.runId() == runId);
                 broadcaster.publishStatus(runId, RunStatus.ABORTED.name());
                 scheduler.schedule(() -> broadcaster.close(runId), 30, TimeUnit.SECONDS);
                 publisher.publishEvent(new RunFinished(runId, RunStatus.ABORTED));
@@ -924,11 +931,12 @@ public class RunOrchestrator implements AgentEventListener {
             case "ABORT" -> new Messages.Abort(cmdId, rid);
             default -> new Messages.CancelPrepare(cmdId, rid);
         };
-        pendingCmds.put(cmdId, new CmdRef(runId, generatorId, kind));
         registry.get(generatorId).ifPresent(s -> {
             try {
+                pendingCmds.put(cmdId, new CmdRef(runId, generatorId, kind));
                 s.send(m);
             } catch (RuntimeException e) {
+                pendingCmds.remove(cmdId);
                 log.debug("{} не отправлен генератору {}: {}", kind, generatorId, e.getMessage());
             }
         });
@@ -1010,7 +1018,8 @@ public class RunOrchestrator implements AgentEventListener {
                     runService.updateGenerator(g.rgId, x -> x.setStatus(RunGenerator.Status.LOST));
                     logs.addSystem(ctx.runId, "ERROR", "Агент " + g.name + " не знает этот run (был перезапущен?): генератор потерян");
                     runService.update(ctx.runId, r -> r.setDegraded(true));
-                    if (ctx.policy == Run.FailurePolicy.STOP_ALL && !ctx.stopRequested) {
+                    boolean othersActive = ctx.gens.values().stream().anyMatch(x -> !x.status.isDone());
+                    if (othersActive && ctx.policy == Run.FailurePolicy.STOP_ALL && !ctx.stopRequested) {
                         stop(ctx.runId, "потеря генератора " + g.name + " (политика: остановить все)");
                     }
                     checkDone(ctx);
@@ -1166,8 +1175,44 @@ public class RunOrchestrator implements AgentEventListener {
             if (run.getStatus() == RunStatus.PREPARING && !ctx.startSent) {
                 // подготовка была прервана рестартом: безопаснее провалить, чем гадать
                 ctx.prepareTimeout = scheduler.schedule(() -> onPrepareTimeout(runId), 60, TimeUnit.SECONDS);
-            } else if (run.getStatus() == RunStatus.PREPARING) {
+            } else if (run.getStatus() == RunStatus.PREPARING && run.getPlannedStartAt() != null) {
                 ctx.startTimer = scheduler.schedule(() -> onStartTime(runId), Math.max(0, Duration.between(Instant.now(), run.getPlannedStartAt()).toMillis()), TimeUnit.MILLISECONDS);
+            } else if (run.getStatus() == RunStatus.STOPPING) {
+                ctx.stopRequested = true;
+                ctx.stopRequestedAt = Instant.now();
+                for (GenCtx g : ctx.gens.values()) {
+                    if (!g.status.isDone() && !g.offline) {
+                        sendQuietly(g.genId, runId, "STOP");
+                    }
+                }
+                ctx.escalation = scheduler.schedule(() -> escalate(runId), ctx.gracefulStopSec + 60L, TimeUnit.SECONDS);
+            }
+            // сверка с агентами, которые успели переподключиться до recoverAll()
+            synchronized (ctx) {
+                if (!ctx.finalized) {
+                    boolean changed = false;
+                    for (GenCtx g : ctx.gens.values()) {
+                        if (g.status.isDone()) {
+                            continue;
+                        }
+                        var sOpt = registry.get(g.genId);
+                        if (sOpt.isPresent() && sOpt.get().lastHello() != null) {
+                            Messages.Hello hello = sOpt.get().lastHello();
+                            boolean known = hello.runs() != null && hello.runs().stream()
+                                    .anyMatch(r -> r.runId().equals(String.valueOf(runId)));
+                            if (!known) {
+                                g.status = RunGenerator.Status.LOST;
+                                runService.updateGenerator(g.rgId, x -> x.setStatus(RunGenerator.Status.LOST));
+                                logs.addSystem(runId, "ERROR", "Агент " + g.name + " после рестарта не знает этот run: генератор потерян");
+                                runService.update(runId, r -> r.setDegraded(true));
+                                changed = true;
+                            }
+                        }
+                    }
+                    if (changed) {
+                        checkDone(ctx);
+                    }
+                }
             }
             return ctx;
         }

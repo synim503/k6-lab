@@ -44,23 +44,12 @@ public class SshConnector {
         this.knownHosts = knownHosts;
     }
 
+    private static final int MAX_JUMP_DEPTH = 4;
+
     public SshConnection open(String host, int port, ResolvedCredential credential, Duration timeout) {
         List<AutoCloseable> closers = new ArrayList<>();
         try {
-            String connectHost = host;
-            int connectPort = port;
-            if (credential.jump() != null && credential.jumpHost() != null) {
-                int jumpPort = credential.jumpPort() == null ? 22 : credential.jumpPort();
-                ClientSession jump = connectAndAuth(credential.jumpHost(), jumpPort, credential.jumpHost(), jumpPort,
-                        credential.jump(), timeout, closers);
-                closers.add(() -> jump.close(true).await(1500L));
-                SshdSocketAddress bound = jump.startLocalPortForwarding(
-                        new SshdSocketAddress("127.0.0.1", 0), new SshdSocketAddress(host, port));
-                closers.add(() -> jump.stopLocalPortForwarding(bound));
-                connectHost = "127.0.0.1";
-                connectPort = bound.getPort();
-            }
-            ClientSession session = connectAndAuth(connectHost, connectPort, host, port, credential, timeout, closers);
+            ClientSession session = openSession(host, port, credential, timeout, closers, 0);
             return new SshConnection(host, credential, session, closers);
         } catch (SshFailure e) {
             closeAll(closers);
@@ -69,6 +58,25 @@ public class SshConnector {
             closeAll(closers);
             throw new SshFailure("Не удалось подключиться к " + host + ":" + port + ": " + rootMessage(e), e);
         }
+    }
+
+    private ClientSession openSession(String host, int port, ResolvedCredential credential, Duration timeout,
+                                      List<AutoCloseable> closers, int depth) throws Exception {
+        if (depth > MAX_JUMP_DEPTH) {
+            throw new SshFailure("Слишком длинная цепочка jump-host (максимум " + MAX_JUMP_DEPTH + ")");
+        }
+        String connectHost = host;
+        int connectPort = port;
+        if (credential.jump() != null && credential.jumpHost() != null) {
+            int jumpPort = credential.jumpPort() == null ? 22 : credential.jumpPort();
+            ClientSession jump = openSession(credential.jumpHost(), jumpPort, credential.jump(), timeout, closers, depth + 1);
+            SshdSocketAddress bound = jump.startLocalPortForwarding(
+                    new SshdSocketAddress("127.0.0.1", 0), new SshdSocketAddress(host, port));
+            closers.add(() -> jump.stopLocalPortForwarding(bound));
+            connectHost = "127.0.0.1";
+            connectPort = bound.getPort();
+        }
+        return connectAndAuth(connectHost, connectPort, host, port, credential, timeout, closers);
     }
 
     private ClientSession connectAndAuth(String connectHost, int connectPort, String identityHost, int identityPort,

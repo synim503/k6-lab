@@ -88,6 +88,15 @@ func main() {
 		if err != nil {
 			return err
 		}
+		if strings.HasSuffix(h.Name, ".sh") {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			data = []byte(strings.ReplaceAll(string(data), "\r\n", "\n"))
+			_, err = w.Write(data)
+			return err
+		}
 		in, err := os.Open(p)
 		if err != nil {
 			return err

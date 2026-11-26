@@ -240,8 +240,9 @@ public class PrometheusDiagnostics implements AgentEventListener {
         String url = props.getPublicUrl().replaceAll("/+$", "");
         // тот же хост:порт, что и у WebSocket агента, - гарантированно доступен с генератора
         java.net.URI ws = java.net.URI.create(generators.findById(pend.generatorId).orElseThrow().getServerUrl());
-        String artifactUrl = ("wss".equals(ws.getScheme()) ? "https" : "http") + "://" + ws.getHost() + ":" + ws.getPort()
-                + "/agent/diag/" + pend.token;
+        String scheme = "wss".equals(ws.getScheme()) ? "https" : "http";
+        int port = ws.getPort() > 0 ? ws.getPort() : ("https".equals(scheme) ? 443 : 80);
+        String artifactUrl = scheme + "://" + ws.getHost() + ":" + port + "/agent/diag/" + pend.token;
         ObjectNode cfg = MAPPER.createObjectNode();
         ObjectNode sc = cfg.putObject("scenarios").putObject("diag");
         sc.put("executor", "constant-arrival-rate");
@@ -432,9 +433,13 @@ public class PrometheusDiagnostics implements AgentEventListener {
             p.prepared.completeExceptionally(new IllegalStateException(x.reason()));
         } else if (message instanceof Messages.Exit x) {
             p.exit.complete(x);
-        } else if (message instanceof Messages.LogBatch x) {
+        } else if (message instanceof Messages.LogBatch x && x.lines() != null) {
             synchronized (p.out) {
-                x.lines().forEach(l -> p.out.append(l.line()).append('\n'));
+                x.lines().forEach(l -> {
+                    if (l != null && l.line() != null) {
+                        p.out.append(l.line()).append('\n');
+                    }
+                });
             }
         }
     }

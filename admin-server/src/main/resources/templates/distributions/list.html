@@ -46,7 +46,7 @@
             <td class="text-end text-nowrap row-actions">
                 <form class="d-inline" th:if="${!a.default and a.kind.name() != 'XK6'}" th:action="@{/distributions/{id}/default(id=${a.id})}" method="post">
                     <button class="btn btn-sm btn-outline-success" title="Использовать для новых установок и обновлений">По умолчанию</button></form>
-                <form class="d-inline" th:action="@{/distributions/{id}/delete(id=${a.id})}" method="post" onsubmit="return confirm('Удалить версию?')">
+                <form class="d-inline" th:action="@{/distributions/{id}/delete(id=${a.id})}" method="post" data-confirm="Удалить версию?">
                     <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
             </td>
         </tr></tbody>

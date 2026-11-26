@@ -6,6 +6,8 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.session.SessionInformation;
+import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -28,12 +30,15 @@ public class UserService implements UserDetailsService {
     private final PasswordEncoder encoder;
     private final AppProperties props;
     private final AuditService audit;
+    private final SessionRegistry sessions;
 
-    public UserService(UserRepository users, PasswordEncoder encoder, AppProperties props, AuditService audit) {
+    public UserService(UserRepository users, PasswordEncoder encoder, AppProperties props, AuditService audit,
+                       SessionRegistry sessions) {
         this.users = users;
         this.encoder = encoder;
         this.props = props;
         this.audit = audit;
+        this.sessions = sessions;
     }
 
     @Override
@@ -48,16 +53,20 @@ public class UserService implements UserDetailsService {
 
     @Transactional
     public AppUser create(String username, String rawPassword, Role role) {
-        if (users.existsByUsername(username)) {
-            throw new IllegalArgumentException("Пользователь «" + username + "» уже существует");
+        String trimmed = username == null ? "" : username.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Укажите имя пользователя");
+        }
+        if (users.existsByUsername(trimmed)) {
+            throw new IllegalArgumentException("Пользователь «" + trimmed + "» уже существует");
         }
         validatePassword(rawPassword);
         AppUser u = new AppUser();
-        u.setUsername(username.trim());
+        u.setUsername(trimmed);
         u.setPasswordHash(encoder.encode(rawPassword));
         u.setRole(role);
         AppUser saved = users.save(u);
-        audit.record("user.create", "user", saved.getId(), java.util.Map.of("username", username, "role", role));
+        audit.record("user.create", "user", saved.getId(), java.util.Map.of("username", trimmed, "role", role));
         return saved;
     }
 
@@ -67,6 +76,7 @@ public class UserService implements UserDetailsService {
         AppUser u = users.findById(id).orElseThrow();
         u.setPasswordHash(encoder.encode(rawPassword));
         audit.record("user.password", "user", id, null);
+        expireUserSessions(u.getUsername());
     }
 
     @Transactional
@@ -77,9 +87,13 @@ public class UserService implements UserDetailsService {
         if (lastAdminLost) {
             throw new IllegalStateException("Нельзя лишить прав или отключить последнего администратора");
         }
+        boolean mustExpire = !enabled || u.getRole() != role;
         u.setRole(role);
         u.setEnabled(enabled);
         audit.record("user.update", "user", id, java.util.Map.of("role", role, "enabled", enabled));
+        if (mustExpire) {
+            expireUserSessions(u.getUsername());
+        }
     }
 
     @Transactional
@@ -93,6 +107,20 @@ public class UserService implements UserDetailsService {
         }
         users.delete(u);
         audit.record("user.delete", "user", id, java.util.Map.of("username", u.getUsername()));
+        expireUserSessions(u.getUsername());
+    }
+
+    private void expireUserSessions(String username) {
+        if (sessions == null || username == null) {
+            return;
+        }
+        for (Object principal : sessions.getAllPrincipals()) {
+            if (principal instanceof UserDetails ud && username.equals(ud.getUsername())) {
+                for (SessionInformation info : sessions.getAllSessions(principal, false)) {
+                    info.expireNow();
+                }
+            }
+        }
     }
 
     private static void validatePassword(String p) {

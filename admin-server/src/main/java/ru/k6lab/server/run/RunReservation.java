@@ -117,11 +117,12 @@ public class RunReservation {
         return missing;
     }
 
-    /** Освобождает генераторы run (active_runs - 1). Вызывается ровно один раз при завершении. */
+    /** Освобождает генераторы run (active_runs - 1) атомарным UPDATE в стабильном порядке id. Вызывается ровно один раз при завершении. */
     @Transactional
     public void release(List<Long> generatorIds) {
-        for (Long id : generatorIds) {
-            generators.findById(id).ifPresent(g -> g.setActiveRuns(Math.max(0, g.getActiveRuns() - 1)));
+        if (generatorIds == null || generatorIds.isEmpty()) {
+            return;
         }
+        generatorIds.stream().filter(java.util.Objects::nonNull).sorted().forEach(generators::decrementActiveRuns);
     }
 }

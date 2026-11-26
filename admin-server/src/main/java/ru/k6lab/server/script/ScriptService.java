@@ -157,14 +157,51 @@ public class ScriptService {
         }
     }
 
+    public ScriptVersion createFromFiles(String name, String description, Map<String, byte[]> rawFiles,
+                                         String entrypoint, String comment) throws IOException {
+        Script s = tx.execute(st -> {
+            requireName(name);
+            if (scripts.existsByNameIgnoreCase(name.trim())) {
+                throw new IllegalArgumentException("Скрипт с таким именем уже есть");
+            }
+            Script n = new Script();
+            n.setName(name.trim());
+            n.setDescription(blankToNull(description));
+            Script saved = scripts.save(n);
+            audit.record("script.create", "script", saved.getId(), Map.of("name", saved.getName()));
+            return saved;
+        });
+        try {
+            return addVersionFromFiles(s.getId(), rawFiles, entrypoint, comment);
+        } catch (IOException | RuntimeException e) {
+            tx.executeWithoutResult(st -> scripts.deleteById(s.getId()));
+            throw e;
+        }
+    }
+
+    public ScriptVersion addVersionFromFiles(Long scriptId, Map<String, byte[]> rawFiles, String entrypoint,
+                                             String comment) throws IOException {
+        Script s = get(scriptId);
+        Map<String, byte[]> clean = sanitizeFileMap(rawFiles);
+        String entry = chooseEntrypoint(clean, entrypoint, null);
+        return finalizeVersion(s, clean, entry, Source.UPLOAD, comment, null, null, null, null, null, new ArrayList<>());
+    }
+
     public ScriptVersion addVersionFromUpload(Long scriptId, String filename, InputStream content, String entrypoint,
                                               String comment) throws IOException {
         Script s = get(scriptId);
         byte[] data = readLimited(content);
         List<String> notes = new ArrayList<>();
-        Map<String, byte[]> files = normalizeUpload(filename, data, notes);
-        String entry = chooseEntrypoint(files, entrypoint, filename);
-        return finalizeVersion(s, files, entry, Source.UPLOAD, comment, null, null, null, null, null, notes);
+        NormalizedUpload norm = normalizeUploadWithPrefix(filename, data, notes);
+        String effectiveEntry = entrypoint;
+        if (effectiveEntry != null && !effectiveEntry.isBlank() && norm.strippedPrefix() != null) {
+            String safeReq = ZipUtil.safePath(effectiveEntry.trim());
+            if (safeReq != null && !norm.files().containsKey(safeReq) && safeReq.startsWith(norm.strippedPrefix())) {
+                effectiveEntry = safeReq.substring(norm.strippedPrefix().length());
+            }
+        }
+        String entry = chooseEntrypoint(norm.files(), effectiveEntry, filename);
+        return finalizeVersion(s, norm.files(), entry, Source.UPLOAD, comment, null, null, null, null, null, notes);
     }
 
     /** Сохранение из редактора = новая версия. */
@@ -228,8 +265,8 @@ public class ScriptService {
             });
         } else {
             s = get(scriptId);
-            Optional<ScriptVersion> same = versions.findByScriptIdAndCommitHash(s.getId(), commit)
-                    .filter(v -> v.getEntrypoint().equals(entrypoint.trim()));
+            Optional<ScriptVersion> same = versions.findFirstByScriptIdAndCommitHashAndEntrypointOrderByNumberDesc(
+                    s.getId(), commit, entrypoint.trim());
             if (same.isPresent()) {
                 return same.get();
             }
@@ -504,21 +541,46 @@ public class ScriptService {
         return out.toByteArray();
     }
 
+    private record NormalizedUpload(Map<String, byte[]> files, String strippedPrefix) {
+    }
+
     static Map<String, byte[]> normalizeUpload(String filename, byte[] data, List<String> notes) throws IOException {
+        return normalizeUploadWithPrefix(filename, data, notes).files();
+    }
+
+    private static NormalizedUpload normalizeUploadWithPrefix(String filename, byte[] data, List<String> notes) throws IOException {
         String fn = filename == null ? "script.js" : filename.replace('\\', '/');
         fn = fn.substring(fn.lastIndexOf('/') + 1);
         String lower = fn.toLowerCase();
         Map<String, byte[]> files;
+        String strippedPrefix = null;
         if (lower.endsWith(".js") || lower.endsWith(".mjs")) {
             files = new LinkedHashMap<>();
             files.put(fn, data);
         } else if (lower.endsWith(".zip")) {
-            files = ZipUtil.stripSingleTopDir(ZipUtil.readAll(new ByteArrayInputStream(data)));
+            Map<String, byte[]> raw = ZipUtil.readAll(new ByteArrayInputStream(data));
+            files = ZipUtil.stripSingleTopDir(raw);
+            strippedPrefix = detectStrippedPrefix(raw, files);
         } else if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz") || lower.endsWith(".tar")) {
-            files = ZipUtil.stripSingleTopDir(readTar(data, !lower.endsWith(".tar")));
+            Map<String, byte[]> raw = readTar(data, !lower.endsWith(".tar"));
+            files = ZipUtil.stripSingleTopDir(raw);
+            strippedPrefix = detectStrippedPrefix(raw, files);
         } else {
             throw new IllegalArgumentException("Поддерживаются файлы .js, .mjs и архивы .zip, .tar.gz, .tgz");
         }
+        return new NormalizedUpload(sanitizeFileMap(files), strippedPrefix);
+    }
+
+    private static String detectStrippedPrefix(Map<String, byte[]> raw, Map<String, byte[]> stripped) {
+        if (raw == stripped || raw.isEmpty() || stripped.isEmpty()) {
+            return null;
+        }
+        String firstRaw = raw.keySet().iterator().next();
+        int slash = firstRaw.indexOf('/');
+        return slash > 0 ? firstRaw.substring(0, slash + 1) : null;
+    }
+
+    private static Map<String, byte[]> sanitizeFileMap(Map<String, byte[]> files) {
         Map<String, byte[]> clean = new LinkedHashMap<>();
         for (Map.Entry<String, byte[]> e : files.entrySet()) {
             String p = ZipUtil.safePath(e.getKey());
@@ -539,6 +601,7 @@ public class ScriptService {
     private static Map<String, byte[]> readTar(byte[] data, boolean gz) throws IOException {
         Map<String, byte[]> files = new LinkedHashMap<>();
         long total = 0;
+        byte[] buf = new byte[64 * 1024];
         InputStream raw = new ByteArrayInputStream(data);
         try (TarArchiveInputStream tar = new TarArchiveInputStream(gz ? new GzipCompressorInputStream(raw) : raw)) {
             TarArchiveEntry e;
@@ -546,12 +609,19 @@ public class ScriptService {
                 if (!e.isFile()) {
                     continue; // каталоги, симлинки и устройства пропускаем
                 }
-                byte[] b = tar.readAllBytes();
-                total += b.length;
-                if (total > ZipUtil.MAX_TOTAL_BYTES || files.size() > ZipUtil.MAX_ENTRIES) {
+                if (files.size() >= ZipUtil.MAX_ENTRIES) {
                     throw new IllegalArgumentException("Архив слишком большой");
                 }
-                files.put(e.getName(), b);
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                int n;
+                while ((n = tar.read(buf)) > 0) {
+                    total += n;
+                    if (total > ZipUtil.MAX_TOTAL_BYTES) {
+                        throw new IllegalArgumentException("Архив слишком большой");
+                    }
+                    bos.write(buf, 0, n);
+                }
+                files.put(e.getName(), bos.toByteArray());
             }
         }
         return files;

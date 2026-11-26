@@ -40,18 +40,29 @@ public class RunLogService {
 
     private final JdbcTemplate jdbc;
     private final SettingsService settings;
+    private final org.springframework.transaction.support.TransactionTemplate readOnlyTx;
     private final Queue<Row> queue = new ConcurrentLinkedQueue<>();
 
-    public RunLogService(JdbcTemplate jdbc, SettingsService settings) {
+    public RunLogService(JdbcTemplate jdbc, SettingsService settings,
+                         org.springframework.transaction.PlatformTransactionManager txm) {
         this.jdbc = jdbc;
         this.settings = settings;
+        this.readOnlyTx = new org.springframework.transaction.support.TransactionTemplate(txm);
+        this.readOnlyTx.setReadOnly(true);
     }
 
     /** Преобразует строки агента в записи лога (уровень определяется по k6-формату level=...). */
     public List<Row> add(long runId, Long generatorId, List<Messages.LogLine> lines) {
+        if (lines == null || lines.isEmpty()) {
+            return List.of();
+        }
         List<Row> rows = new ArrayList<>(lines.size());
         for (Messages.LogLine l : lines) {
-            Row r = new Row(runId, generatorId, Instant.ofEpochMilli(l.ts()), level(l), l.line());
+            if (l == null) {
+                continue;
+            }
+            String text = l.line() == null ? "" : l.line();
+            Row r = new Row(runId, generatorId, Instant.ofEpochMilli(l.ts()), level(text), text);
             queue.add(r);
             rows.add(r);
         }
@@ -65,7 +76,11 @@ public class RunLogService {
     }
 
     static String level(Messages.LogLine l) {
-        Matcher m = LEVEL.matcher(l.line());
+        return l == null || l.line() == null ? "INFO" : level(l.line());
+    }
+
+    static String level(String line) {
+        Matcher m = LEVEL.matcher(line);
         if (m.find()) {
             String v = m.group(1).toLowerCase();
             return switch (v) {
@@ -115,12 +130,11 @@ public class RunLogService {
         return rows;
     }
 
-    /** Полный лог потоком (скачивание): читаем из БД курсором, не загружая всё в память. */
-    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    /** Полный лог потоком (скачивание): сбрасываем буфер вне read-only транзакции, затем читаем из БД курсором. */
     public void writeFull(long runId, OutputStream out) throws IOException {
         flush();
         try {
-            jdbc.query(con -> {
+            readOnlyTx.executeWithoutResult(st -> jdbc.query(con -> {
                 var ps = con.prepareStatement("select ts, generator_id, level, line from run_log where run_id = ? order by ts, id",
                         java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY);
                 ps.setLong(1, runId);
@@ -133,7 +147,7 @@ public class RunLogService {
                 } catch (IOException e) {
                     throw new java.io.UncheckedIOException(e);
                 }
-            });
+            }));
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         }

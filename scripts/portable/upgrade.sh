@@ -11,6 +11,11 @@ OLD="$1"
 cd "$(dirname "$0")"
 NEW="$(pwd)"
 [ "$(cd "$OLD" && pwd)" != "$NEW" ] || { echo "Старая и новая установки - один каталог, переносить нечего"; exit 0; }
+if [ -f "$NEW/config/k6lab.properties" ] && [ -d "$OLD/config" ]; then
+  BAK="config.bak.$(date +%Y%m%d%H%M%S)"
+  cp -a "$NEW/config" "$NEW/$BAK"
+  echo "Внимание: существующий config/ сохранён в $BAK/"
+fi
 for d in config data; do
   if [ -d "$OLD/$d" ]; then
     mkdir -p "$d"

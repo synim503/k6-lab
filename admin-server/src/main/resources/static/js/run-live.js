@@ -100,17 +100,26 @@
         }
     });
 
+    var isFinal = root.dataset.final === 'true';
     var logEs = new EventSource(root.dataset.logStream);
-    logEs.addEventListener('log', function (ev) { append(JSON.parse(ev.data)); });
+    logEs.addEventListener('log', function (ev) {
+        append(JSON.parse(ev.data));
+        // Для уже завершённого запуска сервер шлёт один снимок логов и завершает стрим;
+        // закрываем EventSource, чтобы браузер не переподключался и не дублировал все строки.
+        if (isFinal) { logEs.close(); }
+    });
+    logEs.onerror = function () {
+        if (isFinal) { logEs.close(); }
+    };
 
     // Блок статуса обновляется по событиям SSE и по таймеру. Запросы не должны перекрываться: при нескольких запросах в полёте ответ
     // более раннего мог прийти позже и затереть свежие значения старыми, поэтому в полёте не больше одного, а пропущенное обновление повторяется после ответа.
     var inflight = false, again = false;
     function refreshStatus() {
-        if (!window.htmx || document.hidden) { return; } // в фоновой вкладке не обновляем: при возврате сработает ближайший таймер
+        if (isFinal || !window.htmx || document.hidden) { return; } // в фоновой вкладке не обновляем: при возврате сработает ближайший таймер
         if (inflight) { again = true; return; }
         inflight = true;
-        var finish = function () { inflight = false; if (again) { again = false; refreshStatus(); } };
+        var finish = function () { inflight = false; if (again && !isFinal) { again = false; refreshStatus(); } };
         var p = htmx.ajax('GET', root.dataset.statusUrl, {target: '#run-status', swap: 'outerHTML'});
         if (p && typeof p.then === 'function') { p.then(finish, finish); } else { setTimeout(finish, 1500); }
         setTimeout(function () { if (inflight) { finish(); } }, 8000); // запрос завис: не блокируем обновления навсегда
@@ -122,12 +131,19 @@
     }
     var statusEs = null;
     var statusTimer = null;
-    if (root.dataset.final !== 'true') {
+    var pending = null;
+    function stopLiveStreams() {
+        isFinal = true;
+        if (pending) { clearTimeout(pending); pending = null; }
+        if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+        if (statusEs) { statusEs.close(); statusEs = null; }
+        setTimeout(function () { logEs.close(); }, 2000);
+    }
+    if (!isFinal) {
         statusEs = new EventSource(root.dataset.statusStream);
-        var pending = null;
         statusEs.addEventListener('status', function () {
             // события идут часто: обновляем блок не чаще раза в секунду
-            if (pending) { return; }
+            if (pending || isFinal) { return; }
             pending = setTimeout(function () { pending = null; refreshStatus(); }, 1000);
         });
         statusTimer = setInterval(refreshStatus, 5000);
@@ -138,10 +154,18 @@
     document.addEventListener('toggle', function (e) {
         if (e.target && e.target.id === 'gens-box') { try { sessionStorage.setItem('run-gens-open', e.target.open ? '1' : '0'); } catch (x) { /* без сохранения */ } }
     }, true);
-    document.body.addEventListener('htmx:afterSwap', function () { applyGens(); stampUpdated(); });
+    document.body.addEventListener('htmx:afterSwap', function () {
+        applyGens();
+        stampUpdated();
+        var stEl = document.getElementById('run-status');
+        var st = stEl && stEl.dataset ? stEl.dataset.runStatus : '';
+        if (!isFinal && (st === 'FINISHED' || st === 'FAILED' || st === 'ABORTED')) {
+            stopLiveStreams();
+        }
+    });
     document.body.addEventListener('htmx:afterSettle', applyGens);
     applyGens();
-    if (root.dataset.final !== 'true') { stampUpdated(); }
+    if (!isFinal) { stampUpdated(); }
     window.addEventListener('beforeunload', function () {
         logEs.close();
         if (statusEs) { statusEs.close(); }

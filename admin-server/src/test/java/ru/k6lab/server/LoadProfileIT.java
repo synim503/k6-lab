@@ -147,40 +147,99 @@ class LoadProfileIT extends AbstractIT {
     }
 
     @Test
-    void bottomSaveButtonTargetsOpenedProfileAndPreservesProfileVariablesWithBaseOverrides() throws Exception {
+    void profilesAreIndependentAndManualPushOnlyUpdatesBaseEnvKeysWithoutDeletingExtraVars() throws Exception {
         Script s = script();
-        mvc.perform(saveProfile(s, "Стрим-10", 30, "BATCH=10\nSTREAMS=5")).andExpect(status().isOk());
-        long pid = profiles.list(s.getId()).get(0).id();
+        mvc.perform(saveProfile(s, "Стрим-10", 30, "STAND=dev\nBATCH=10\nSTREAMS=5\nEXTRA_ONLY_HERE=keep")).andExpect(status().isOk());
+        mvc.perform(saveProfile(s, "Стрим-20", 60, "STAND=dev")).andExpect(status().isOk());
+        long pid10 = profiles.list(s.getId()).stream().filter(p -> p.name().equals("Стрим-10")).findFirst().orElseThrow().id();
+        long pid20 = profiles.list(s.getId()).stream().filter(p -> p.name().equals("Стрим-20")).findFirst().orElseThrow().id();
 
-        // Включаем базовый профиль с общей переменной STAND=prod
+        // 1. Сохранение базовой нагрузки НЕ меняет сохранённые профили (привязки к базовому профилю больше нет)
         LoadForm baseForm = load.toForm(s.getId());
-        baseForm.setBaseConfigSubmitted(true);
-        baseForm.setBaseProfileActive(true);
-        baseForm.setBaseOverrideEnv(true);
-        baseForm.setEnvText("STAND=prod");
+        baseForm.setEnvText("STAND=prod\nBASE_ADDED=yes");
         load.save(s.getId(), baseForm);
 
-        // Открываем профиль: нижняя основная кнопка сохранения должна вести на /load/profile,
-        // а переменные должны объединять базовые (STAND=prod) и собственные переменные профиля (BATCH=10, STREAMS=5)
-        String html = mvc.perform(get("/scripts/" + s.getId() + "/load").param("profile", String.valueOf(pid)))
+        var beforePush = load.fromProfile(s.getId(), pid10);
+        assertThat(beforePush.env())
+                .containsEntry("STAND", "dev")
+                .containsEntry("BATCH", "10")
+                .containsEntry("STREAMS", "5")
+                .containsEntry("EXTRA_ONLY_HERE", "keep")
+                .doesNotContainKey("BASE_ADDED");
+
+        // Открытие профиля показывает его собственные переменные и единый переключатель профилей (без дублирующего select#profile-pick) + кастомный попап
+        String html = mvc.perform(get("/scripts/" + s.getId() + "/load").param("profile", String.valueOf(pid10)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(html)
                 .contains("id=\"ld-primary-save\"")
                 .contains("formaction=\"/scripts/" + s.getId() + "/load/profile\"")
-                .contains("Сохранить профиль")
-                .contains("STAND=prod")
-                .contains("BATCH=10")
-                .contains("STREAMS=5");
+                .contains("id=\"ld-prof-switcher-btn\"")
+                .contains("id=\"ld-profiles-modal\"")
+                .contains("id=\"k6-confirm-modal\"")
+                .doesNotContain("id=\"profile-pick\"")
+                .contains("STAND=dev")
+                .contains("EXTRA_ONLY_HERE=keep");
 
-        // Сохраняем обновлённую переменную профиля через POST /load/profile и проверяем, что она сохранилась
-        mvc.perform(saveProfile(s, "Стрим-10", 35, "BATCH=20\nSTREAMS=8\nCUSTOM_FLAG=yes")).andExpect(status().isOk());
-        var built = load.fromProfile(s.getId(), pid);
-        assertThat(built.env())
+        // 2. Ручная разовая отправка ТОЛЬКО env из базового профиля:
+        //    в более полном профиле «Стрим-10» обновляются только ключи из базы (STAND, BASE_ADDED), а BATCH/STREAMS/EXTRA_ONLY_HERE сохраняются!
+        mvc.perform(post("/scripts/" + s.getId() + "/load/apply-base").with(csrf())
+                        .param("baseConfigSubmitted", "true")
+                        .param("_baseOverrideEnv", "on").param("baseOverrideEnv", "true")
+                        .param("_baseOverrideStop", "on")
+                        .param("_baseOverrideSla", "on")
+                        .param("_baseOverrideWarmup", "on")
+                        .param("_baseOverrideData", "on")
+                        .param("_baseOverrideGenerators", "on")
+                        .param("holdMinutes", "5").param("levelPct", "100")
+                        .param("envText", "STAND=prod\nBASE_ADDED=yes"))
+                .andExpect(status().is3xxRedirection());
+
+        var afterPush10 = load.fromProfile(s.getId(), pid10);
+        assertThat(afterPush10.env())
                 .containsEntry("STAND", "prod")
+                .containsEntry("BASE_ADDED", "yes")
+                .containsEntry("BATCH", "10")
+                .containsEntry("STREAMS", "5")
+                .containsEntry("EXTRA_ONLY_HERE", "keep");
+
+        var afterPush20 = load.fromProfile(s.getId(), pid20);
+        assertThat(afterPush20.env())
+                .containsEntry("STAND", "prod")
+                .containsEntry("BASE_ADDED", "yes");
+
+        // 3. После отправки профиль остаётся независимым: изменение профиля сохраняется как есть и не перекрывается базой
+        mvc.perform(saveProfile(s, "Стрим-10", 35, "STAND=custom\nBATCH=20\nSTREAMS=8\nCUSTOM_FLAG=yes")).andExpect(status().isOk());
+        var afterEdit = load.fromProfile(s.getId(), pid10);
+        assertThat(afterEdit.env())
+                .containsEntry("STAND", "custom")
                 .containsEntry("BATCH", "20")
                 .containsEntry("STREAMS", "8")
                 .containsEntry("CUSTOM_FLAG", "yes");
+    }
+
+    @Test
+    void profilesCanBeBulkDeleted() throws Exception {
+        Script s = script();
+        mvc.perform(saveProfile(s, "П1", 10, "A=1")).andExpect(status().isOk());
+        mvc.perform(saveProfile(s, "П2", 20, "A=2")).andExpect(status().isOk());
+        mvc.perform(saveProfile(s, "П3", 30, "A=3")).andExpect(status().isOk());
+        var all = profiles.list(s.getId());
+        assertThat(all).hasSize(3);
+
+        long id1 = all.stream().filter(p -> p.name().equals("П1")).findFirst().orElseThrow().id();
+        long id2 = all.stream().filter(p -> p.name().equals("П2")).findFirst().orElseThrow().id();
+        long id3 = all.stream().filter(p -> p.name().equals("П3")).findFirst().orElseThrow().id();
+
+        mvc.perform(post("/scripts/" + s.getId() + "/load/profiles/bulk-delete").with(csrf())
+                        .param("ids", String.valueOf(id1), String.valueOf(id2))
+                        .param("currentProfile", String.valueOf(id3)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/scripts/" + s.getId() + "/load?profile=" + id3));
+
+        assertThat(profiles.list(s.getId()))
+                .extracting(LoadProfileStore.Profile::name)
+                .containsExactly("П3");
     }
 
     @Test

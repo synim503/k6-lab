@@ -129,6 +129,7 @@
     var metricNames = null; // null = not fetched yet
     var metricFetchInFlight = false;
     var previewController = null;
+    var previewSeq = 0;
     var dragSrcId = null;
 
     // ==================== DOM refs ====================
@@ -201,11 +202,12 @@
         }, 3200);
     }
 
-    function api(path, method, body) {
+    function api(path, method, body, signal) {
         var opts = {
             method: method || 'POST',
             headers: { 'Accept': 'application/json' }
         };
+        if (signal) { opts.signal = signal; }
         if (csrfToken) { opts.headers['X-CSRF-TOKEN'] = csrfToken; }
         if (body !== undefined) {
             opts.headers['Content-Type'] = 'application/json';
@@ -362,9 +364,14 @@
         }
     }
 
-    function confirmDiscardIfDirty() {
-        if (!isDirty()) { return true; }
-        return confirm('В текущем графике есть несохранённые изменения. Продолжить без сохранения?');
+    function withDiscardCheck(fn) {
+        if (!isDirty()) { fn(); return; }
+        window.k6Confirm({
+            title: 'Есть несохранённые изменения',
+            message: 'В текущем графике есть несохранённые изменения. Продолжить без сохранения?',
+            confirmText: 'Продолжить без сохранения',
+            variant: 'warning'
+        }).then(function (ok) { if (ok) { fn(); } });
     }
 
     // ==================== Render: Summary & Variables ====================
@@ -789,6 +796,14 @@
             minutes = parseInt(srcVal.slice(4), 10) || 30;
         }
 
+        if (previewController) {
+            try { previewController.abort(); } catch (e) {}
+            previewController = null;
+        }
+        var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        previewController = ctrl;
+        var mySeq = ++previewSeq;
+
         elPreviewStage.classList.add('loading');
         elPreviewBtn.disabled = true;
 
@@ -799,7 +814,9 @@
             variables: draft.variables,
             runId: runId,
             minutes: minutes
-        }).then(function (res) {
+        }, ctrl ? ctrl.signal : null).then(function (res) {
+            if (mySeq !== previewSeq) { return; }
+            previewController = null;
             elPreviewStage.classList.remove('loading');
             elPreviewBtn.disabled = false;
             var p = res.data;
@@ -837,7 +854,9 @@
                     : 'Prometheus не вернул данных за выбранный период (' + (p.windowLabel || '') + '). Проверьте метки, {run_id}, переменные или выберите другой запуск.');
                 renderPreviewError(errMsg, p.windowLabel, p.elapsedMs);
             }
-        }).catch(function () {
+        }).catch(function (err) {
+            if (mySeq !== previewSeq || (err && err.name === 'AbortError')) { return; }
+            previewController = null;
             elPreviewStage.classList.remove('loading');
             elPreviewBtn.disabled = false;
             renderPreviewError('Сетевая ошибка при обращении к серверу');
@@ -902,30 +921,38 @@
 
     function duplicateCurrent() {
         if (!selectedId) { return; }
-        if (!confirmDiscardIfDirty()) { return; }
-        api('/api/' + selectedId + '/duplicate', 'POST').then(function (res) {
-            if (!res.ok || !res.data.ok) {
-                toast((res.data && res.data.error) || 'Не удалось дублировать', 'err');
-                return;
-            }
-            templates = res.data.templates || templates;
-            toast(res.data.message || 'Создана копия', 'ok');
-            if (res.data.template) { loadTemplate(res.data.template.id, false); }
+        withDiscardCheck(function () {
+            api('/api/' + selectedId + '/duplicate', 'POST').then(function (res) {
+                if (!res.ok || !res.data.ok) {
+                    toast((res.data && res.data.error) || 'Не удалось дублировать', 'err');
+                    return;
+                }
+                templates = res.data.templates || templates;
+                toast(res.data.message || 'Создана копия', 'ok');
+                if (res.data.template) { loadTemplate(res.data.template.id, false); }
+            });
         });
     }
 
     function deleteCurrent() {
         if (!selectedId) { return; }
         var cur = templates.find(function (t) { return t.id === selectedId; });
-        if (!confirm('Удалить график «' + (cur ? cur.name : '') + '»?')) { return; }
-        var delId = selectedId;
-        api('/api/' + delId + '/delete', 'POST').then(function (res) {
-            if (!res.ok) { toast('Не удалось удалить график', 'err'); return; }
-            templates = res.data.templates || templates.filter(function (t) { return t.id !== delId; });
-            checkedIds.delete(delId);
-            toast('График удалён', 'info');
-            if (templates.length > 0) { loadTemplate(templates[0].id, false); }
-            else { loadNew(); }
+        window.k6Confirm({
+            title: 'Удалить график?',
+            message: 'График «' + (cur ? cur.name : '') + '» будет удалён безвозвратно.',
+            confirmText: 'Удалить',
+            variant: 'danger'
+        }).then(function (ok) {
+            if (!ok) { return; }
+            var delId = selectedId;
+            api('/api/' + delId + '/delete', 'POST').then(function (res) {
+                if (!res.ok) { toast('Не удалось удалить график', 'err'); return; }
+                templates = res.data.templates || templates.filter(function (t) { return t.id !== delId; });
+                checkedIds.delete(delId);
+                toast('График удалён', 'info');
+                if (templates.length > 0) { loadTemplate(templates[0].id, false); }
+                else { loadNew(); }
+            });
         });
     }
 
@@ -1069,18 +1096,18 @@
         menu.addEventListener('click', function (e) {
             var btn = e.target.closest('[data-preset-g]');
             if (!btn) { return; }
-            if (!confirmDiscardIfDirty()) { return; }
             var p = CHART_PRESETS[+btn.dataset.presetG].items[+btn.dataset.presetI];
-            loadNew(p);
-            toast('Шаблон «' + p.name + '» подставлен — проверьте и сохраните', 'info');
+            withDiscardCheck(function () {
+                loadNew(p);
+                toast('Шаблон «' + p.name + '» подставлен — проверьте и сохраните', 'info');
+            });
         });
     }
 
     // ==================== Event Listeners ====================
     // New chart button
     document.getElementById('cb-new-btn').addEventListener('click', function () {
-        if (!confirmDiscardIfDirty()) { return; }
-        loadNew();
+        withDiscardCheck(function () { loadNew(); });
     });
 
     // Duplicate & delete in studio header
@@ -1117,18 +1144,25 @@
     document.getElementById('cb-bulk-delete').addEventListener('click', function () {
         var ids = Array.from(checkedIds);
         if (ids.length === 0) { return; }
-        if (!confirm('Удалить выбранные графики (' + ids.length + ')?')) { return; }
-        api('/api/delete-selected', 'POST', { ids: ids }).then(function (res) {
-            if (!res.ok) { toast('Не удалось удалить выбранные', 'err'); return; }
-            templates = res.data.templates || [];
-            checkedIds.clear();
-            toast('Удалено графиков: ' + (res.data.count || ids.length), 'info');
-            if (selectedId && !templates.some(function (t) { return t.id === selectedId; })) {
-                if (templates.length > 0) { loadTemplate(templates[0].id, false); }
-                else { loadNew(); }
-            } else {
-                renderList();
-            }
+        window.k6Confirm({
+            title: 'Удалить выбранные графики?',
+            message: 'Выбранные графики (' + ids.length + ' шт.) будут удалены безвозвратно.',
+            confirmText: 'Удалить (' + ids.length + ')',
+            variant: 'danger'
+        }).then(function (ok) {
+            if (!ok) { return; }
+            api('/api/delete-selected', 'POST', { ids: ids }).then(function (res) {
+                if (!res.ok) { toast('Не удалось удалить выбранные', 'err'); return; }
+                templates = res.data.templates || [];
+                checkedIds.clear();
+                toast('Удалено графиков: ' + (res.data.count || ids.length), 'info');
+                if (selectedId && !templates.some(function (t) { return t.id === selectedId; })) {
+                    if (templates.length > 0) { loadTemplate(templates[0].id, false); }
+                    else { loadNew(); }
+                } else {
+                    renderList();
+                }
+            });
         });
     });
 
@@ -1151,13 +1185,23 @@
     document.getElementById('cb-enable-all').addEventListener('click', function () {
         if (templates.length === 0) { return; }
         api('/api/bulk-toggle', 'POST', { ids: templates.map(function (t) { return t.id; }), enabled: true }).then(function (res) {
-            if (res.ok && res.data.templates) { templates = res.data.templates; renderList(); toast('Все графики включены в отчёт', 'ok'); }
+            if (res.ok && res.data.templates) {
+                templates = res.data.templates;
+                if (selectedId && !isDirty()) { elEnabled.checked = true; markBaseline(); }
+                renderList();
+                toast('Все графики включены в отчёт', 'ok');
+            }
         });
     });
     document.getElementById('cb-disable-all').addEventListener('click', function () {
         if (templates.length === 0) { return; }
         api('/api/bulk-toggle', 'POST', { ids: templates.map(function (t) { return t.id; }), enabled: false }).then(function (res) {
-            if (res.ok && res.data.templates) { templates = res.data.templates; renderList(); toast('Все графики скрыты из отчёта', 'info'); }
+            if (res.ok && res.data.templates) {
+                templates = res.data.templates;
+                if (selectedId && !isDirty()) { elEnabled.checked = false; markBaseline(); }
+                renderList();
+                toast('Все графики скрыты из отчёта', 'info');
+            }
         });
     });
 
@@ -1184,8 +1228,7 @@
         if (!item) { return; }
         var id = +item.dataset.id;
         if (id === selectedId) { return; }
-        if (!confirmDiscardIfDirty()) { return; }
-        loadTemplate(id, true);
+        withDiscardCheck(function () { loadTemplate(id, true); });
     });
 
     elList.addEventListener('change', function (e) {
@@ -1537,13 +1580,21 @@
         if (e.target.closest('.cb-var-save')) {
             saveVariable(item.dataset.vname, item.querySelector('.cb-var-in').value);
         } else if (e.target.closest('.cb-var-del')) {
-            if (!confirm('Удалить переменную $' + item.dataset.vname + '?')) { return; }
-            api('/api/variables/' + item.dataset.vid + '/delete', 'POST').then(function (res) {
-                if (res.ok && res.data.variables) {
-                    variables = res.data.variables;
-                    renderVariables(); renderChartVars(); renderQueries(); renderList();
-                    toast('Переменная $' + item.dataset.vname + ' удалена', 'info');
-                }
+            var vname = item.dataset.vname, vid = item.dataset.vid;
+            window.k6Confirm({
+                title: 'Удалить переменную?',
+                message: 'Переменная $' + vname + ' будет удалена.',
+                confirmText: 'Удалить',
+                variant: 'danger'
+            }).then(function (ok) {
+                if (!ok) { return; }
+                api('/api/variables/' + vid + '/delete', 'POST').then(function (res) {
+                    if (res.ok && res.data.variables) {
+                        variables = res.data.variables;
+                        renderVariables(); renderChartVars(); renderQueries(); renderList();
+                        toast('Переменная $' + vname + ' удалена', 'info');
+                    }
+                });
             });
         }
     });
@@ -1785,15 +1836,16 @@
                 var src = currentSourceScript();
                 var tpl = src && src.templates ? src.templates.find(function (t) { return t.id === +draftBtn.dataset.csDraft; }) : null;
                 if (!tpl) { return; }
-                if (!confirmDiscardIfDirty()) { return; }
-                bootstrap.Modal.getOrCreateInstance(elCsModal).hide();
-                loadNew({
-                    name: tpl.name,
-                    unit: tpl.unit || '',
-                    queries: tpl.queries || [],
-                    variables: tpl.variables || {}
+                withDiscardCheck(function () {
+                    bootstrap.Modal.getOrCreateInstance(elCsModal).hide();
+                    loadNew({
+                        name: tpl.name,
+                        unit: tpl.unit || '',
+                        queries: tpl.queries || [],
+                        variables: tpl.variables || {}
+                    });
+                    toast('График «' + tpl.name + '» из скрипта «' + src.name + '» подставлен в конструктор — проверьте и сохраните', 'info');
                 });
-                toast('График «' + tpl.name + '» из скрипта «' + src.name + '» подставлен в конструктор — проверьте и сохраните', 'info');
                 return;
             }
             var toggleArea = e.target.closest('[data-cs-toggle]');
@@ -1844,7 +1896,10 @@
     var fileIn = document.getElementById('cb-grafana-file');
     var dzLabel = document.getElementById('cb-grafana-dz-lbl');
     if (dz && fileIn) {
-        dz.addEventListener('click', function () { fileIn.click(); });
+        dz.addEventListener('click', function (e) {
+            if (e.target === fileIn || (e.target && e.target.closest && e.target.closest('input[type="file"]'))) { return; }
+            fileIn.click();
+        });
         dz.addEventListener('dragover', function (e) { e.preventDefault(); dz.classList.add('drag'); });
         dz.addEventListener('dragleave', function () { dz.classList.remove('drag'); });
         dz.addEventListener('drop', function (e) {

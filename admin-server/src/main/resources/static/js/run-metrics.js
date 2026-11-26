@@ -304,7 +304,7 @@
                     return '<tr class="' + (c.violation ? 'table-danger' : '') + '">' +
                         '<td class="fw-semibold">' + esc(c.name) + '</td>' +
                         '<td>' + valTxt + '</td>' +
-                        '<td>' + esc(c.thresholdText || (c.cmp + ' ' + c.threshold + u)) + '</td>' +
+                        '<td>' + esc(c.thresholdText || (c.cmp + ' ' + c.threshold + (c.unit ? ' ' + c.unit : ''))) + '</td>' +
                         '<td class="small text-muted">' + esc(c.worstSeries || '—') + '</td>' +
                         '<td class="small">' + role + '</td>' +
                         '<td>' + statusHtml + '</td></tr>';
@@ -313,6 +313,20 @@
         }
         var ph = document.getElementById('metric-phase');
         var isFinal = root.dataset.final === 'true';
+        var banner = document.getElementById('autostop-pending-banner');
+        if (banner) {
+            if (!isFinal && m.autoStopPending) {
+                var ap = m.autoStopPending;
+                var rem = ap.remainingSec != null ? ' (осталось ≈ ' + span(ap.remainingSec) + ')' : '';
+                var msg = ap.stopAfterStep > ap.triggerStep
+                    ? '<b>Автостоп сработал на ступени ' + esc(ap.triggerStep) + '</b> (' + esc(ap.reason) + ') — поиск максимума: проходим контрольную ступень <b>' + esc(ap.stopAfterStep) + '</b> и останавливаем тест' + rem + '.'
+                    : '<b>Автостоп сработал на последней ступени ' + esc(ap.triggerStep) + '</b> (' + esc(ap.reason) + ') — завершаем ступень до конца' + rem + '.';
+                banner.innerHTML = '<i class="bi bi-exclamation-triangle-fill me-1"></i>' + msg;
+                banner.classList.remove('d-none');
+            } else {
+                banner.classList.add('d-none');
+            }
+        }
         if (ph && !isFinal && m.phase === 'init') {
             ph.textContent = 'Инициализация скрипта k6: ' + m.initSec + ' с';
         } else if (ph) {

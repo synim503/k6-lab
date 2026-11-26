@@ -16,7 +16,7 @@
 
     <div class="alert alert-info d-flex justify-content-between align-items-center gap-3 flex-wrap" th:if="${running}">
         <span><span class="dot dot-busy me-2"></span><strong>Скрипт сейчас выполняется.</strong> Новый запуск начнётся после завершения текущего.</span>
-        <form th:action="@{/scripts/{id}/stop(id=${script.id})}" method="post" onsubmit="return confirm('Остановить выполняющийся скрипт?')">
+        <form th:action="@{/scripts/{id}/stop(id=${script.id})}" method="post" data-confirm="Остановить выполняющийся скрипт?">
             <button class="btn btn-sm btn-outline-danger"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form></div>
 
     <!-- ============ Обзор ============ -->
@@ -249,7 +249,7 @@
                 <details class="danger-zone">
                     <summary class="text-danger fw-semibold">Удаление скрипта</summary>
                     <p class="small text-muted mt-2 mb-2">Скрипт, все его версии и описание нагрузки будут удалены без возможности восстановления. История запусков сохранится.</p>
-                    <form th:action="@{/scripts/{id}/delete(id=${script.id})}" method="post" onsubmit="return confirm('Удалить скрипт и все его версии? Это нельзя отменить.')">
+                    <form th:action="@{/scripts/{id}/delete(id=${script.id})}" method="post" data-confirm="Удалить скрипт и все его версии? Это нельзя отменить.">
                         <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash me-1"></i>Удалить скрипт</button></form>
                 </details>
             </div>

@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"sync/atomic"
@@ -169,6 +170,10 @@ type RWProxy struct {
 
 // keepHistograms - имена гистограмм, которые пересылать (пусто - все).
 func StartRWProxy(upstream string, headers map[string]string, keepHistograms ...string) (*RWProxy, error) {
+	u, err := url.Parse(upstream)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("некорректный URL Prometheus remote write: %q", upstream)
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -226,7 +231,12 @@ func (p *RWProxy) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload := snappy.Encode(nil, encodeWriteRequest(out))
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, p.upstream, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, p.upstream, bytes.NewReader(payload))
+	if err != nil {
+		p.Failed.Add(1)
+		http.Error(w, "upstream request: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	req.Header.Set("Content-Encoding", "snappy")
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("X-Prometheus-Remote-Write-Version", "0.1.0")

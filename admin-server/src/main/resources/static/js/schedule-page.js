@@ -50,8 +50,8 @@
         tbody.querySelectorAll('tr.sch-row').forEach(function (tr) {
             var st = tr.dataset.status || '';
             var matchSt = activeFilter === 'all'
-                || (activeFilter === 'pending' && (st === 'PENDING' || st === 'STARTING'))
-                || (activeFilter === 'started' && st === 'STARTED')
+                || (activeFilter === 'pending' && st === 'PENDING')
+                || (activeFilter === 'started' && (st === 'STARTED' || st === 'STARTING'))
                 || (activeFilter === 'other' && (st === 'FAILED' || st === 'CANCELLED'));
             var matchQ = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
             var ok = matchSt && matchQ;
@@ -60,6 +60,7 @@
         });
         var emptyRow = document.getElementById('sch-filter-empty');
         if (emptyRow) { emptyRow.classList.toggle('d-none', shown > 0); }
+        syncBulkBar();
     }
 
     if (searchEl) { searchEl.addEventListener('input', applyFilter); }
@@ -231,7 +232,10 @@
     function wireDropzone(dzId, fileId, lblId, modalId) {
         var dz = document.getElementById(dzId), fi = document.getElementById(fileId), lb = document.getElementById(lblId);
         if (dz && fi && lb) {
-            dz.addEventListener('click', function () { fi.click(); });
+            dz.addEventListener('click', function (e) {
+                if (e.target === fi || (e.target && e.target.closest && e.target.closest('input[type="file"]'))) { return; }
+                fi.click();
+            });
             dz.addEventListener('dragover', function (e) { e.preventDefault(); dz.classList.add('drag'); });
             dz.addEventListener('dragleave', function () { dz.classList.remove('drag'); });
             dz.addEventListener('drop', function (e) {
@@ -330,8 +334,10 @@
         var ov = pendingRepeatOverrides;
         pendingRepeatOverrides = null;
         if (ov.pct && qOpsBox) {
+            var inputs = Array.prototype.slice.call(qOpsBox.querySelectorAll('input[name^="pct_"]'));
             Object.keys(ov.pct).forEach(function (op) {
-                var inp = qOpsBox.querySelector('input[name="pct_' + op + '"]');
+                var targetName = 'pct_' + op;
+                var inp = inputs.find(function (el) { return el.name === targetName; });
                 if (inp) { inp.value = ov.pct[op]; }
             });
         }
@@ -347,8 +353,11 @@
         }
     }
 
+    var metaSeq = 0;
+
     function loadScriptMeta(scriptId, wantedProfileId, wantedCount) {
         if (!scriptId) { return; }
+        var mySeq = ++metaSeq;
         qForm.action = qForm.dataset.actionTpl.replace('__ID__', String(scriptId));
         if (qMeta) { qMeta.innerHTML = '<span class="spinner-border spinner-border-sm text-primary"></span>'; }
         if (qErr) { qErr.classList.add('d-none'); qErr.textContent = ''; }
@@ -357,6 +366,7 @@
         fetch(qForm.dataset.metaBase + '/' + encodeURIComponent(scriptId), {credentials: 'same-origin'})
             .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
             .then(function (d) {
+                if (mySeq !== metaSeq) { return; }
                 currentMeta = d;
                 qCount.value = wantedCount || d.defaultCount || 1;
                 var baseErrs = Array.isArray(d.errors) && d.errors.length > 0;
@@ -375,6 +385,7 @@
                 applyRepeatOverrides();
             })
             .catch(function () {
+                if (mySeq !== metaSeq) { return; }
                 if (qErr) { qErr.textContent = 'Не удалось загрузить параметры скрипта.'; qErr.classList.remove('d-none'); }
                 if (qMeta) { qMeta.innerHTML = ''; }
             });
@@ -443,6 +454,11 @@
             qModalEl.querySelectorAll('input[name="generatorId"]').forEach(function (cb) {
                 cb.checked = presetGens.indexOf(String(cb.value)) >= 0;
             });
+            var envScriptReset = document.getElementById('qm-env-script');
+            if (envScriptReset && qEnv) {
+                envScriptReset.checked = true;
+                qEnv.disabled = true;
+            }
             if (presetScript) { qScript.value = presetScript; }
             qAt.value = '';
             qIso.value = '';

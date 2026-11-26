@@ -94,6 +94,20 @@ public class RunEventBroadcaster {
 
     // ------------------------------------------------------------------ подписка
 
+    /** Одноразовая выдача логов для завершённого run без регистрации в channels (без утечки памяти). */
+    public SseEmitter snapshotLogs(List<Line> lines) {
+        SseEmitter e = new SseEmitter(5_000L);
+        try {
+            if (lines != null && !lines.isEmpty()) {
+                e.send(SseEmitter.event().name("log").data(toJson(lines)));
+            }
+            e.complete();
+        } catch (IOException | IllegalStateException ex) {
+            e.completeWithError(ex);
+        }
+        return e;
+    }
+
     public SseEmitter subscribeLogs(long runId, List<Line> fallbackFromDb) {
         Channel c = ch(runId);
         SseEmitter e = new SseEmitter(0L);

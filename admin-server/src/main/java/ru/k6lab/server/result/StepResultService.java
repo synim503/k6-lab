@@ -162,17 +162,18 @@ public class StepResultService {
         Run run = runService.get(runId);
         RunSnapshot snap = runService.snapshot(run);
         List<StepAnalysis.CustomCheck> expected = getEffectiveCustomChecks(run, snap);
+        Map<String, String> vars = varsForRun(run, snap);
         Optional<ResultData> opt = load(runId);
         if (opt.isPresent()) {
             ResultData d = opt.get();
-            if (!needsCustomChecksRecompute(d, expected)) {
+            if (!needsCustomChecksRecompute(d, expected, vars)) {
                 return d;
             }
         }
         return compute(runId);
     }
 
-    private static boolean needsCustomChecksRecompute(ResultData d, List<StepAnalysis.CustomCheck> expected) {
+    private static boolean needsCustomChecksRecompute(ResultData d, List<StepAnalysis.CustomCheck> expected, Map<String, String> vars) {
         if (expected.isEmpty()) {
             return false;
         }
@@ -180,7 +181,7 @@ public class StepResultService {
             return true;
         }
         List<String> expSig = expected.stream()
-                .map(c -> c.name() + "|" + c.promql() + "|" + c.normalizedCmp() + "|" + c.threshold())
+                .map(c -> CustomChartService.title(c.name(), vars) + "|" + c.promql() + "|" + c.normalizedCmp() + "|" + c.threshold())
                 .toList();
         for (ResultData.StepRow s : d.steps()) {
             List<ResultData.CustomMetricRow> actual = s.customChecks();
@@ -496,21 +497,44 @@ public class StepResultService {
             StepAnalysis.CustomCheck effectiveRule = new StepAnalysis.CustomCheck(
                     renderedName, rule.promql(), rule.normalizedCmp(), rule.threshold(), rule.unit(), rule.stepSla(), rule.autoStop());
             boolean upperBound = "LTE".equals(effectiveRule.normalizedCmp()) || "LT".equals(effectiveRule.normalizedCmp());
+            boolean usesRangeWindow = rule.promql() != null
+                    && (rule.promql().contains("{range}") || rule.promql().contains("$__range") || rule.promql().contains("${__range"));
+            boolean canRange = winStart != null && winEnd != null && winEnd.isAfter(winStart);
             Double worstVal = null;
             String worstLabel = "";
             String queryError = null;
             try {
-                List<PrometheusClient.Sample> samples = prom.query(p, q, winEnd);
-                for (PrometheusClient.Sample s : samples) {
-                    if (!Double.isFinite(s.value())) {
-                        continue;
-                    }
-                    if (worstVal == null || (upperBound ? s.value() > worstVal : s.value() < worstVal)) {
-                        worstVal = s.value();
-                        worstLabel = formatSampleLabels(s.labels());
+                if (!usesRangeWindow && canRange) {
+                    // мгновенные метрики (gauge, без {range}): сканируем всё окно ступени, чтобы не пропустить пики/провалы в середине ступени
+                    int push = Math.max(5, settings.pushIntervalSec());
+                    long rangeWin = Math.max(30, 3L * push);
+                    int step = (int) Math.max(push, Math.max(1, winSec / 60));
+                    String qRange = CustomChartService.expand(rule.promql(), runId, rangeWin, vars);
+                    for (PrometheusClient.Series sr : prom.rangeSeries(p, qRange, winStart, winEnd, step)) {
+                        for (PrometheusClient.Point pt : sr.points()) {
+                            if (!Double.isFinite(pt.value())) {
+                                continue;
+                            }
+                            if (worstVal == null || (upperBound ? pt.value() > worstVal : pt.value() < worstVal)) {
+                                worstVal = pt.value();
+                                worstLabel = formatSampleLabels(sr.labels());
+                            }
+                        }
                     }
                 }
-                if (worstVal == null && winStart != null && winEnd != null && winEnd.isAfter(winStart)) {
+                if (worstVal == null) {
+                    List<PrometheusClient.Sample> samples = prom.query(p, q, winEnd);
+                    for (PrometheusClient.Sample s : samples) {
+                        if (!Double.isFinite(s.value())) {
+                            continue;
+                        }
+                        if (worstVal == null || (upperBound ? s.value() > worstVal : s.value() < worstVal)) {
+                            worstVal = s.value();
+                            worstLabel = formatSampleLabels(s.labels());
+                        }
+                    }
+                }
+                if (worstVal == null && usesRangeWindow && canRange) {
                     int push = Math.max(5, settings.pushIntervalSec());
                     long rangeWin = Math.max(30, 3L * push);
                     int step = (int) Math.max(push, Math.max(1, winSec / 60));

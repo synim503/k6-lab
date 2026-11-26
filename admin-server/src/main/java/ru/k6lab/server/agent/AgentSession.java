@@ -28,6 +28,7 @@ public class AgentSession {
     private volatile long lastSeq;
     private volatile long lastAckedToAgent;
     private volatile boolean helloReceived;
+    private volatile Messages.Hello lastHello;
     private volatile Messages.Heartbeat lastHeartbeat;
     private volatile Instant lastHeartbeatAt;
 
@@ -58,7 +59,7 @@ public class AgentSession {
     private record OffsetSample(long offsetMs, long rttMs, long atMs) {
     }
 
-    private final Deque<OffsetSample> samples = new ConcurrentLinkedDeque<>();
+    private final Deque<OffsetSample> samples = new java.util.ArrayDeque<>();
     private volatile long lastPingAtMs;
 
     /**
@@ -66,11 +67,14 @@ public class AgentSession {
      * (как в NTP: чем короче путь, тем меньше ошибка из-за несимметричной задержки). Одиночный медленный ответ не искажает оценку.
      */
     public long addOffsetSample(long offsetMs, long rttMs) {
-        samples.addLast(new OffsetSample(offsetMs, Math.max(0, rttMs), System.currentTimeMillis()));
-        while (samples.size() > 8) {
-            samples.pollFirst();
+        synchronized (samples) {
+            samples.addLast(new OffsetSample(offsetMs, Math.max(0, rttMs), System.currentTimeMillis()));
+            while (samples.size() > 8) {
+                samples.pollFirst();
+            }
+            Long best = clockOffsetMs();
+            return best == null ? offsetMs : best;
         }
-        return clockOffsetMs();
     }
 
     /** Совместимость: замер без измеренной задержки. */
@@ -80,19 +84,25 @@ public class AgentSession {
 
     /** Текущая оценка смещения часов агента (агент минус сервер, мс) либо null, если замеров ещё нет. */
     public Long clockOffsetMs() {
-        return samples.stream().min(java.util.Comparator.comparingLong(OffsetSample::rttMs).thenComparing(
-                java.util.Comparator.comparingLong(OffsetSample::atMs).reversed())).map(OffsetSample::offsetMs).orElse(null);
+        synchronized (samples) {
+            return samples.stream().min(java.util.Comparator.comparingLong(OffsetSample::rttMs).thenComparing(
+                    java.util.Comparator.comparingLong(OffsetSample::atMs).reversed())).map(OffsetSample::offsetMs).orElse(null);
+        }
     }
 
     /** Сколько мс назад был последний замер; Long.MAX_VALUE, если замеров нет. */
     public long lastSampleAgeMs() {
-        OffsetSample last = samples.peekLast();
-        return last == null ? Long.MAX_VALUE : System.currentTimeMillis() - last.atMs();
+        synchronized (samples) {
+            OffsetSample last = samples.peekLast();
+            return last == null ? Long.MAX_VALUE : System.currentTimeMillis() - last.atMs();
+        }
     }
 
     /** Забывает прежние замеры (часы могли уйти или быть выровнены после них). */
     public void resetOffsetSamples() {
-        samples.clear();
+        synchronized (samples) {
+            samples.clear();
+        }
     }
 
     public long lastPingAtMs() {
@@ -145,6 +155,14 @@ public class AgentSession {
 
     public void helloReceived(boolean v) {
         this.helloReceived = v;
+    }
+
+    public Messages.Hello lastHello() {
+        return lastHello;
+    }
+
+    public void lastHello(Messages.Hello hello) {
+        this.lastHello = hello;
     }
 
     public Messages.Heartbeat lastHeartbeat() {

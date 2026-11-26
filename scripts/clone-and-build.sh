@@ -73,9 +73,15 @@ fi
 echo "== [1/3] Получение исходников ($REPO_URL, ветка $BRANCH)"
 if [ -d "$WORK_DIR/.git" ]; then
   cd "$WORK_DIR"
-  git fetch origin "$BRANCH" || true
+  if ! git fetch origin "$BRANCH"; then
+    echo "⚠ Не удалось выполнить git fetch origin $BRANCH (продолжаю с локальным состоянием)" >&2
+  fi
   git checkout "$BRANCH"
-  git pull --ff-only origin "$BRANCH" || true
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "⚠ Рабочее дерево содержит локальные изменения — пропускаю git pull" >&2
+  elif ! git pull --ff-only origin "$BRANCH"; then
+    echo "⚠ git pull --ff-only не выполнен (локальная ветка расходится с origin/$BRANCH)" >&2
+  fi
 else
   GIT_LFS_SKIP_SMUDGE=1 git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$WORK_DIR"
   cd "$WORK_DIR"
@@ -84,7 +90,7 @@ fi
 if [ "$JAR_ONLY" -eq 1 ]; then
   echo "== [2/3] Сборка только k6-lab-admin.jar"
   APP_BUILD="$(git describe --tags --always 2>/dev/null || echo local)"
-  MVN="./mvnw -DskipTests -Dapp.build=$APP_BUILD"
+  MVN=(./mvnw -DskipTests "-Dapp.build=$APP_BUILD")
   if [ "$ONLINE" -eq 0 ] && command -v git-lfs >/dev/null 2>&1; then
     git lfs pull --include="vendor/maven/*"
     VM_ZIP="vendor/maven/apache-maven-3.9.11-bin.zip"
@@ -96,18 +102,18 @@ if [ "$JAR_ONLY" -eq 1 ]; then
         rm -rf .m2-vendor && mkdir -p .m2-vendor && tar -xzf "$VM_REPO" -C .m2-vendor && touch .m2-vendor/.ready
       fi
       find .m2-vendor \( -name "_remote.repositories" -o -name "resolver-status.properties" \) -delete 2>/dev/null || true
-      for f in $(find .m2-vendor -name "maven-metadata-central-https.xml" 2>/dev/null); do
+      while IFS= read -r -d '' f; do
         dir="${f%/*}"
         [ -f "$dir/maven-metadata-central.xml" ] || cp "$f" "$dir/maven-metadata-central.xml"
         [ -f "$dir/maven-metadata-local.xml" ] || cp "$f" "$dir/maven-metadata-local.xml"
-      done
+      done < <(find .m2-vendor -name "maven-metadata-central-https.xml" -print0 2>/dev/null)
       printf '<settings/>\n' > .m2-vendor/empty-settings.xml
       HOST_PWD="$(pwd -W 2>/dev/null || pwd)"
-      MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.legacyLocalRepo=true -s $HOST_PWD/.m2-vendor/empty-settings.xml -Dmaven.repo.local=$HOST_PWD/.m2-vendor -DskipTests -Dapp.build=$APP_BUILD"
+      MVN=(bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.legacyLocalRepo=true -s "$HOST_PWD/.m2-vendor/empty-settings.xml" "-Dmaven.repo.local=$HOST_PWD/.m2-vendor" -DskipTests "-Dapp.build=$APP_BUILD")
     fi
   fi
   chmod +x mvnw 2>/dev/null || true
-  $MVN -pl admin-server -am package
+  "${MVN[@]}" -pl admin-server -am package
   echo "== [3/3] Копирование результата"
   cp -f admin-server/target/k6-lab-admin.jar "$OUT_DIR/k6-lab-admin.jar"
   echo

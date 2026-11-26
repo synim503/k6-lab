@@ -38,7 +38,14 @@ public final class ScenarioScaler {
                 changed |= num(sc, "startVUs", factor);
                 changed |= stages(sc, factor);
             }
-            case "shared-iterations" -> changed |= num(sc, "iterations", factor);
+            case "shared-iterations" -> {
+                changed |= num(sc, "iterations", factor);
+                if (sc.path("iterations").isNumber() && sc.path("vus").isNumber()
+                        && sc.get("vus").asLong() > sc.get("iterations").asLong()) {
+                    sc.put("vus", sc.get("iterations").asLong());
+                    changed = true;
+                }
+            }
             default -> {
             }
         }

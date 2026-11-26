@@ -406,10 +406,10 @@ public final class K6ConfigGenerator {
                 params.put("vus", (long) gens);
                 sc.put("vus", (long) gens);
             }
-            if (params.get("maxVUs") instanceof Number mx && params.get("preAllocatedVUs") instanceof Number pr && mx.longValue() < pr.longValue()) {
-                params.put("maxVUs", pr.longValue());
-                sc.put("maxVUs", pr.longValue());
-            }
+        }
+        if (params.get("maxVUs") instanceof Number mx && params.get("preAllocatedVUs") instanceof Number pr && mx.longValue() < pr.longValue()) {
+            params.put("maxVUs", pr.longValue());
+            sc.put("maxVUs", pr.longValue());
         }
         putExec(sc, op);
         Map<String, String> envMap = new java.util.TreeMap<>(op.env());

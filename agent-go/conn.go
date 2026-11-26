@@ -24,8 +24,9 @@ type Conn struct {
 	metrics *SystemMetrics
 	backoff *Backoff
 
-	mu     sync.Mutex // защищает ws и запись
+	mu     sync.Mutex // защищает ws, запись и порядок seq при Emit/Replay
 	ws     *websocket.Conn
+	recMu  sync.Mutex // защищает дедупликацию cmdId
 	recent []string
 	recSet map[string]bool
 
@@ -39,11 +40,36 @@ func NewConn(cfg *Config, j *Journal, runs *RunManager, metrics *SystemMetrics) 
 		recSet: map[string]bool{}}
 }
 
+// Emit атомарно записывает событие в журнал (назначая следующий seq) и, если соединение готово после HELLO/replay,
+// немедленно отправляет его в том же порядке seq.
+func (c *Conn) Emit(factory func(seq int64) any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	raw := c.journal.Append(factory)
+	if raw == nil || c.ws == nil {
+		return
+	}
+	c.writeLocked(c.ws, raw)
+}
+
 // Publish - событие уже записано в журнал, здесь только отправка при наличии связи.
 func (c *Conn) Publish(raw []byte) {
 	if raw != nil {
 		c.send(raw)
 	}
+}
+
+func (c *Conn) writeLocked(ws *websocket.Conn, raw []byte) error {
+	_ = ws.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	if err := ws.WriteMessage(websocket.TextMessage, raw); err != nil {
+		debugf("Ошибка отправки: %v", err)
+		_ = ws.Close()
+		if c.ws == ws {
+			c.ws = nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Conn) send(raw []byte) {
@@ -52,10 +78,7 @@ func (c *Conn) send(raw []byte) {
 	if c.ws == nil {
 		return
 	}
-	_ = c.ws.SetWriteDeadline(time.Now().Add(15 * time.Second))
-	if err := c.ws.WriteMessage(websocket.TextMessage, raw); err != nil {
-		debugf("Ошибка отправки: %v", err)
-	}
+	_ = c.writeLocked(c.ws, raw)
 }
 
 func (c *Conn) sendJSON(v any) {
@@ -102,17 +125,32 @@ func (c *Conn) session(ctx context.Context) {
 		logf("Не удалось подключиться к серверу: %v", err)
 		return
 	}
-	c.mu.Lock()
-	c.ws = ws
-	c.mu.Unlock()
 	c.backoff.Reset()
 	logf("Соединение с сервером установлено")
 	defer func() {
 		c.mu.Lock()
-		c.ws = nil
+		if c.ws == ws {
+			c.ws = nil
+		}
 		c.mu.Unlock()
-		ws.Close()
+		_ = ws.Close()
 	}()
+
+	readTimeout := 3 * c.cfg.HeartbeatInterval
+	if readTimeout < 90*time.Second {
+		readTimeout = 90 * time.Second
+	}
+	ws.SetPongHandler(func(string) error {
+		_ = ws.SetReadDeadline(time.Now().Add(readTimeout))
+		return nil
+	})
+
+	// Отправляем HELLO и все неподтверждённые события ДО публикации c.ws и запуска heartbeat,
+	// удерживая c.mu: параллельный Emit не вклинится между HELLO и replay и не нарушит порядок seq.
+	if err := c.sendHelloAndReplayLocked(ws); err != nil {
+		logf("Ошибка отправки HELLO/replay: %v", err)
+		return
+	}
 
 	stop := make(chan struct{})
 	defer close(stop)
@@ -126,14 +164,14 @@ func (c *Conn) session(ctx context.Context) {
 			case <-stop:
 				return
 			case <-ctx.Done():
-				ws.Close()
+				_ = ws.Close()
 				return
 			}
 		}
 	}()
 
-	c.sendHelloAndReplay()
 	for {
+		_ = ws.SetReadDeadline(time.Now().Add(readTimeout))
 		_, data, err := ws.ReadMessage()
 		if err != nil {
 			if ce, ok := err.(*websocket.CloseError); ok {
@@ -150,12 +188,24 @@ func (c *Conn) session(ctx context.Context) {
 	}
 }
 
-func (c *Conn) sendHelloAndReplay() {
-	c.sendJSON(Hello{Type: "HELLO", ProtocolVersion: protocolVersion, AgentVersion: version, K6Version: c.k6Version(),
+func (c *Conn) sendHelloAndReplayLocked(ws *websocket.Conn) error {
+	helloBytes, err := json.Marshal(Hello{Type: "HELLO", ProtocolVersion: protocolVersion, AgentVersion: version, K6Version: c.k6Version(),
 		AgentTime: time.Now().UnixMilli(), LastAckedSeq: c.journal.AckedSeq(), LastSeq: c.journal.LastSeq(), Runs: c.runs.AgentRuns()})
-	for _, e := range c.journal.Unacked() {
-		c.send(e)
+	if err != nil {
+		return err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.writeLocked(ws, helloBytes); err != nil {
+		return err
+	}
+	for _, e := range c.journal.Unacked() {
+		if err := c.writeLocked(ws, e); err != nil {
+			return err
+		}
+	}
+	c.ws = ws
+	return nil
 }
 
 // onMessage возвращает true, если соединение нужно закрыть.
@@ -169,7 +219,10 @@ func (c *Conn) onMessage(data []byte, receivedAt int64) bool {
 	case "REGISTERED":
 		var r Registered
 		_ = json.Unmarshal(data, &r)
-		c.cfg.SavePermanent(r.PermanentToken)
+		if err := c.cfg.SavePermanent(r.PermanentToken); err != nil {
+			logf("Не удалось сохранить постоянный токен, остаёмся на одноразовом для повтора: %v", err)
+			return false
+		}
 		logf("Агент зарегистрирован на сервере, переподключаемся с постоянным токеном")
 		// Переподключение доказывает серверу, что постоянный токен сохранён и работает; только после этого сервер гасит одноразовый.
 		c.mu.Lock()
@@ -200,9 +253,9 @@ func (c *Conn) handleCommand(typ string, data []byte) {
 		CmdID string `json:"cmdId"`
 	}
 	_ = json.Unmarshal(data, &base)
-	c.mu.Lock()
+	c.recMu.Lock()
 	if c.recSet[base.CmdID] {
-		c.mu.Unlock()
+		c.recMu.Unlock()
 		c.sendJSON(ackOK(base.CmdID)) // повторная доставка: команду не выполняем, подтверждаем успешно
 		return
 	}
@@ -212,7 +265,7 @@ func (c *Conn) handleCommand(typ string, data []byte) {
 		delete(c.recSet, c.recent[0])
 		c.recent = c.recent[1:]
 	}
-	c.mu.Unlock()
+	c.recMu.Unlock()
 	c.sendJSON(c.runs.HandleCommand(typ, data))
 }
 

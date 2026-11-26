@@ -23,12 +23,10 @@ public class AuditController {
 
     @GetMapping
     public String list(@RequestParam(defaultValue = "0") int page, @RequestParam(required = false) String q, Model model) {
-        var p = repository.findAll(PageRequest.of(Math.max(0, page), PAGE_SIZE, Sort.by(Sort.Direction.DESC, "ts", "id")));
-        var items = p.getContent().stream()
-                .filter(a -> q == null || q.isBlank() || (a.getAction() + " " + a.getUsername() + " " + a.getEntityType() + " " + a.getEntityId())
-                        .toLowerCase().contains(q.toLowerCase()))
-                .toList();
-        model.addAttribute("items", items);
+        var pageable = PageRequest.of(Math.max(0, page), PAGE_SIZE, Sort.by(Sort.Direction.DESC, "ts", "id"));
+        String query = q == null ? "" : q.trim();
+        var p = query.isEmpty() ? repository.findAll(pageable) : repository.search(query, pageable);
+        model.addAttribute("items", p.getContent());
         model.addAttribute("page", p.getNumber());
         model.addAttribute("hasNext", p.hasNext());
         model.addAttribute("q", q);

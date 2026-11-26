@@ -115,6 +115,24 @@ func loadConfig(args []string) (*Config, error) {
 	if v := props["agent.journal-max-bytes"]; v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil {
 			c.JournalMaxBytes = n
+		} else if perr == nil {
+			perr = fmt.Errorf("agent.journal-max-bytes: %w", e)
+		}
+	}
+	if perr == nil {
+		if c.HeartbeatInterval <= 0 {
+			perr = fmt.Errorf("agent.heartbeat-interval должен быть положительным")
+		} else if c.ReconnectMin <= 0 {
+			perr = fmt.Errorf("agent.reconnect-min должен быть положительным")
+		} else if c.ReconnectMax <= 0 {
+			perr = fmt.Errorf("agent.reconnect-max должен быть положительным")
+		} else {
+			if c.ReconnectMax < c.ReconnectMin {
+				c.ReconnectMax = c.ReconnectMin
+			}
+			if c.JournalMaxBytes < 1<<20 {
+				c.JournalMaxBytes = 1 << 20
+			}
 		}
 	}
 	return c, perr
@@ -138,11 +156,13 @@ func (c *Config) CurrentToken() string {
 	return c.Token
 }
 
-// SavePermanent запоминает постоянный токен и записывает его в agent.properties (права 600).
-func (c *Config) SavePermanent(token string) {
+// SavePermanent записывает постоянный токен в agent.properties (атомарно, права 600) и только после успеха обновляет память.
+func (c *Config) SavePermanent(token string) error {
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("получен пустой постоянный токен")
+	}
 	c.mu.Lock()
-	c.Token = token
-	c.mu.Unlock()
+	defer c.mu.Unlock()
 	path := filepath.Join(c.Home, "agent.properties")
 	var out []string
 	replaced := false
@@ -163,14 +183,30 @@ func (c *Config) SavePermanent(token string) {
 		out = append(out, "agent.token="+token)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strings.Join(out, "\n")+"\n"), 0o600); err != nil {
-		logf("Не удалось сохранить постоянный токен: %v", err)
-		return
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("create tmp: %w", err)
+	}
+	if _, err := f.WriteString(strings.Join(out, "\n") + "\n"); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write tmp: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sync tmp: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close tmp: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		logf("Не удалось сохранить постоянный токен: %v", err)
-		return
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename tmp: %w", err)
 	}
 	_ = os.Chmod(path, 0o600)
+	c.Token = token
 	logf("Постоянный токен сохранён в %s", path)
+	return nil
 }

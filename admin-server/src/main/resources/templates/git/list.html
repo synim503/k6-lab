@@ -25,7 +25,7 @@
                         hx-target="#refs-box" hx-indicator="#refs-box" title="Подключиться к репозиторию и получить список веток и тегов"><i class="bi bi-plug me-1"></i>Проверить доступ</button>
                 <a sec:authorize="hasRole('ADMIN')" class="btn btn-sm btn-outline-secondary btn-icon" th:href="@{/git-repos/{id}/edit(id=${r.id})}" title="Изменить" aria-label="Изменить"><i class="bi bi-pencil"></i></a>
                 <form sec:authorize="hasRole('ADMIN')" class="d-inline" th:action="@{/git-repos/{id}/delete(id=${r.id})}" method="post"
-                      onsubmit="return confirm('Удалить репозиторий? Уже загруженные версии скриптов останутся.')">
+                      data-confirm="Удалить репозиторий? Уже загруженные версии скриптов останутся.">
                     <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
             </td></tr></tbody></table></div></div>
     <div id="refs-box"></div>

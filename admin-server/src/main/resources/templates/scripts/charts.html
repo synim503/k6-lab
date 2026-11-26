@@ -133,7 +133,7 @@
                                 <li><hr class="dropdown-divider"></li>
                                 <li>
                                     <form th:action="@{/scripts/{id}/charts/delete-all(id=${script.id})}" method="post" class="m-0"
-                                          onsubmit="return confirm('Удалить ВСЕ свои графики этого скрипта? Это действие нельзя отменить.')">
+                                          data-confirm="Удалить ВСЕ свои графики этого скрипта? Это действие нельзя отменить.">
                                         <button type="submit" class="dropdown-item small text-danger"><i class="bi bi-trash me-2"></i>Удалить все графики</button>
                                     </form>
                                 </li>

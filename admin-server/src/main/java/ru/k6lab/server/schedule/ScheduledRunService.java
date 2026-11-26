@@ -111,64 +111,73 @@ public class ScheduledRunService {
         return schedule(scriptId, runAt, generatorIds, count, env, intensityPct, profileId, user, false);
     }
 
+    /** Выполняет пакетную операцию планирования под общим замком планировщика (исключает гонку с tick/schedule/import). */
+    <T> T withLock(java.util.function.Supplier<T> fn) {
+        synchronized (schedulerLock) {
+            return fn.get();
+        }
+    }
+
     /** shiftForward: если генераторы освободились раньше (ранняя остановка предыдущего запуска), запись переносится на более раннее время. */
     public long schedule(long scriptId, Instant runAt, List<Long> generatorIds, Integer count, Map<String, String> env,
                          Map<String, Double> intensityPct, Long profileId, String user, boolean shiftForward) {
-        var script = scripts.get(scriptId);
-        if (runAt != null && runAt.isBefore(Instant.now().plus(MIN_LEAD))) {
-            throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
-        }
-        List<Long> ids = generatorIds == null ? List.of() : generatorIds.stream().distinct().sorted().toList();
-        int n = !ids.isEmpty() ? ids.size() : count == null ? script.getGeneratorCount() : count;
-        if (n < 1) {
-            throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
-        }
-        for (Long id : ids) {
-            if (!generators.existsById(id)) {
-                throw new IllegalArgumentException("Генератор не найден");
+        synchronized (schedulerLock) {
+            var script = scripts.get(scriptId);
+            if (runAt != null && runAt.isBefore(Instant.now().plus(MIN_LEAD))) {
+                throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
             }
-        }
-        LoadService.BuiltLoad built = profileId == null ? null : load.fromProfile(scriptId, profileId);
-        RunPlan plan = planner.plan(scriptId, n, built);
-        if (!plan.ok()) {
-            throw new IllegalArgumentException("Скрипт нельзя запустить: " + String.join("; ", plan.errors()));
-        }
-        Set<String> ops = new HashSet<>();
-        plan.operations().forEach(o -> ops.add(o.getName()));
-        Map<String, Double> pct = new LinkedHashMap<>();
-        if (intensityPct != null) {
-            intensityPct.forEach((op, v) -> {
-                if (!ops.contains(op)) {
-                    throw new IllegalArgumentException("Операции «" + op + "» нет в нагрузке скрипта");
+            List<Long> ids = generatorIds == null ? List.of() : generatorIds.stream().distinct().sorted().toList();
+            int n = !ids.isEmpty() ? ids.size() : count == null ? script.getGeneratorCount() : count;
+            if (n < 1) {
+                throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
+            }
+            for (Long id : ids) {
+                if (!generators.existsById(id)) {
+                    throw new IllegalArgumentException("Генератор не найден");
                 }
-                if (v == null || !Double.isFinite(v) || v < MIN_PCT || v > MAX_PCT) {
-                    throw new IllegalArgumentException("Интенсивность операции «" + op + "»: от " + (int) MIN_PCT + " до " + (int) MAX_PCT + " %");
-                }
-                if (Math.abs(v - 100) > 1e-9) {
-                    pct.put(op, v);
-                }
-            });
+            }
+            LoadService.BuiltLoad built = profileId == null ? null : load.fromProfile(scriptId, profileId);
+            RunPlan plan = planner.plan(scriptId, n, built);
+            if (!plan.ok()) {
+                throw new IllegalArgumentException("Скрипт нельзя запустить: " + String.join("; ", plan.errors()));
+            }
+            Set<String> ops = new HashSet<>();
+            plan.operations().forEach(o -> ops.add(o.getName()));
+            Map<String, Double> pct = new LinkedHashMap<>();
+            if (intensityPct != null) {
+                intensityPct.forEach((op, v) -> {
+                    if (!ops.contains(op)) {
+                        throw new IllegalArgumentException("Операции «" + op + "» нет в нагрузке скрипта");
+                    }
+                    if (v == null || !Double.isFinite(v) || v < MIN_PCT || v > MAX_PCT) {
+                        throw new IllegalArgumentException("Интенсивность операции «" + op + "»: от " + (int) MIN_PCT + " до " + (int) MAX_PCT + " %");
+                    }
+                    if (Math.abs(v - 100) > 1e-9) {
+                        pct.put(op, v);
+                    }
+                });
+            }
+            Map<String, String> cleanEnv = env == null ? null : cleanEnv(env);
+            if (cleanEnv != null) {
+                secrets.requireExist(SecretService.referencedNames(cleanEnv));
+            }
+            int dur = plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC;
+            ScheduleTimelineService.Snapshot snap = timeline.snapshot();
+            if (runAt == null) {
+                // время не выбрано: самое раннее, когда нужные генераторы свободны на весь запуск
+                runAt = timeline.earliestSlot(snap, ids, n, dur, Instant.now().plus(MIN_LEAD).plusSeconds(30));
+            }
+            if (!ids.isEmpty()) {
+                timeline.requireFree(snap, ids, runAt, dur);
+            } else {
+                // «любые свободные»: генераторы бронируются сразу, чтобы другие запуски и записи расписания их не заняли
+                ids = timeline.pickFree(snap, runAt, dur, n).stream().sorted().toList();
+            }
+            long id = store.create(scriptId, script.getName(), runAt, user, ids, null, cleanEnv, pct, profileId,
+                    built == null ? null : built.profileName(), shiftForward);
+            audit.record("run.schedule", "script", scriptId, Map.of("scheduleId", id, "runAt", runAt.toString()));
+            return id;
         }
-        Map<String, String> cleanEnv = env == null ? null : cleanEnv(env);
-        if (cleanEnv != null) {
-            secrets.requireExist(SecretService.referencedNames(cleanEnv));
-        }
-        int dur = plan.totalSec() > 0 ? plan.totalSec() : ScheduleTimelineService.FALLBACK_SEC;
-        ScheduleTimelineService.Snapshot snap = timeline.snapshot();
-        if (runAt == null) {
-            // время не выбрано: самое раннее, когда нужные генераторы свободны на весь запуск
-            runAt = timeline.earliestSlot(snap, ids, n, dur, Instant.now().plus(MIN_LEAD).plusSeconds(30));
-        }
-        if (!ids.isEmpty()) {
-            timeline.requireFree(snap, ids, runAt, dur);
-        } else {
-            // «любые свободные»: генераторы бронируются сразу, чтобы другие запуски и записи расписания их не заняли
-            ids = timeline.pickFree(snap, runAt, dur, n).stream().sorted().toList();
-        }
-        long id = store.create(scriptId, script.getName(), runAt, user, ids, null, cleanEnv, pct, profileId,
-                built == null ? null : built.profileName(), shiftForward);
-        audit.record("run.schedule", "script", scriptId, Map.of("scheduleId", id, "runAt", runAt.toString()));
-        return id;
     }
 
     /** Результат пакетного создания записи расписания (без повторного чтения из БД). */
@@ -214,7 +223,7 @@ public class ScheduledRunService {
         }
         long id = store.create(script.getId(), script.getName(), slot, user, ids, null, cleanEnv, Map.of(), profileId,
                 built == null ? null : built.profileName(), shiftForward);
-        snap.book(id, ids, slot, dur);
+        snap.book(id, ids, n, slot, dur);
         audit.record("run.schedule", "script", script.getId(), Map.of("scheduleId", id, "runAt", slot.toString()));
         return new BatchCreated(id, slot, ids, dur);
     }
@@ -232,41 +241,43 @@ public class ScheduledRunService {
      */
     public List<Long> scheduleSequential(List<SequentialSpec> items, Instant firstRunAt, Integer countOverride,
                                          int gapSec, boolean shiftForward, String user) {
-        if (items == null || items.isEmpty()) {
-            throw new IllegalArgumentException("Список тестов для планирования пуст");
-        }
-        if (firstRunAt != null && firstRunAt.isBefore(Instant.now().plus(MIN_LEAD))) {
-            throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
-        }
-        if (countOverride != null && countOverride < 1) {
-            throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
-        }
-        int pauseSec = Math.max(ScheduleTimelineService.TAIL_SEC, Math.min(24 * 3600, gapSec));
-        Instant cursor = firstRunAt != null ? firstRunAt : Instant.now().plus(MIN_LEAD).plusSeconds(30);
-        ScheduleTimelineService.Snapshot snap = timeline.snapshot();
-        Map<String, RunPlan> planCache = new java.util.HashMap<>();
-        Map<String, LoadService.BuiltLoad> builtCache = new java.util.HashMap<>();
-        Map<Long, ru.k6lab.server.script.Script> scriptCache = new java.util.HashMap<>();
-        List<Long> created = new ArrayList<>();
-        List<Long> prevBooked = List.of();
-        try {
-            for (SequentialSpec spec : items) {
-                var script = scriptCache.computeIfAbsent(spec.scriptId(), scripts::get);
-                int n = countOverride != null ? countOverride : Math.max(1, script.getGeneratorCount());
-                List<Long> targetIds = !prevBooked.isEmpty() && n <= prevBooked.size() ? prevBooked.subList(0, n) : List.of();
-                boolean itemShift = shiftForward && (created.isEmpty() || !targetIds.isEmpty());
-                BatchCreated res = scheduleInBatch(snap, planCache, builtCache, script, null, cursor, targetIds, n,
-                        null, spec.profileId(), user, itemShift);
-                created.add(res.id());
-                if (!res.generatorIds().isEmpty()) {
-                    prevBooked = res.generatorIds();
-                }
-                cursor = res.runAt().plusSeconds((long) res.durationSec() + pauseSec);
+        synchronized (schedulerLock) {
+            if (items == null || items.isEmpty()) {
+                throw new IllegalArgumentException("Список тестов для планирования пуст");
             }
-            return created;
-        } catch (RuntimeException e) {
-            created.forEach(id -> cancel(id, user));
-            throw e;
+            if (firstRunAt != null && firstRunAt.isBefore(Instant.now().plus(MIN_LEAD))) {
+                throw new IllegalArgumentException("Время запуска должно быть в будущем, не раньше чем через " + MIN_LEAD.toSeconds() + " секунд");
+            }
+            if (countOverride != null && countOverride < 1) {
+                throw new IllegalArgumentException("Число генераторов должно быть не меньше 1");
+            }
+            int pauseSec = Math.max(ScheduleTimelineService.TAIL_SEC, Math.min(24 * 3600, gapSec));
+            Instant cursor = firstRunAt != null ? firstRunAt : Instant.now().plus(MIN_LEAD).plusSeconds(30);
+            ScheduleTimelineService.Snapshot snap = timeline.snapshot();
+            Map<String, RunPlan> planCache = new java.util.HashMap<>();
+            Map<String, LoadService.BuiltLoad> builtCache = new java.util.HashMap<>();
+            Map<Long, ru.k6lab.server.script.Script> scriptCache = new java.util.HashMap<>();
+            List<Long> created = new ArrayList<>();
+            List<Long> prevBooked = List.of();
+            try {
+                for (SequentialSpec spec : items) {
+                    var script = scriptCache.computeIfAbsent(spec.scriptId(), scripts::get);
+                    int n = countOverride != null ? countOverride : Math.max(1, script.getGeneratorCount());
+                    List<Long> targetIds = !prevBooked.isEmpty() && n <= prevBooked.size() ? prevBooked.subList(0, n) : List.of();
+                    boolean itemShift = shiftForward && (created.isEmpty() || !targetIds.isEmpty());
+                    BatchCreated res = scheduleInBatch(snap, planCache, builtCache, script, null, cursor, targetIds, n,
+                            null, spec.profileId(), user, itemShift);
+                    created.add(res.id());
+                    if (!res.generatorIds().isEmpty()) {
+                        prevBooked = res.generatorIds();
+                    }
+                    cursor = res.runAt().plusSeconds((long) res.durationSec() + pauseSec);
+                }
+                return created;
+            } catch (RuntimeException e) {
+                created.forEach(id -> cancel(id, user));
+                throw e;
+            }
         }
     }
 
@@ -406,14 +417,7 @@ public class ScheduledRunService {
         synchronized (schedulerLock) {
             var script = scripts.get(scriptId);
             Long validProfileId = profileId;
-            LoadService.BuiltLoad built = null;
-            if (validProfileId != null) {
-                try {
-                    built = load.fromProfile(scriptId, validProfileId);
-                } catch (IllegalArgumentException e) {
-                    validProfileId = null;
-                }
-            }
+            LoadService.BuiltLoad built = validProfileId == null ? null : load.fromProfile(scriptId, validProfileId);
             List<Long> validGenIds = new ArrayList<>();
             if (generatorIds != null) {
                 for (Long gid : generatorIds) {
@@ -434,7 +438,13 @@ public class ScheduledRunService {
             Map<String, Double> pct = new LinkedHashMap<>();
             if (intensityPct != null) {
                 intensityPct.forEach((op, v) -> {
-                    if (ops.contains(op) && v != null && Double.isFinite(v) && v >= MIN_PCT && v <= MAX_PCT && Math.abs(v - 100) > 1e-9) {
+                    if (!ops.contains(op)) {
+                        throw new IllegalArgumentException("Операции «" + op + "» нет в нагрузке скрипта");
+                    }
+                    if (v == null || !Double.isFinite(v) || v < MIN_PCT || v > MAX_PCT) {
+                        throw new IllegalArgumentException("Интенсивность операции «" + op + "»: от " + (int) MIN_PCT + " до " + (int) MAX_PCT + " %");
+                    }
+                    if (Math.abs(v - 100) > 1e-9) {
                         pct.put(op, v);
                     }
                 });
@@ -480,7 +490,7 @@ public class ScheduledRunService {
                     : timeline.pickFree(snap, firstSlot, dur, n).stream().sorted().toList();
             long newId = store.create(scriptId, script.getName(), firstSlot, user, chosenIds, null, cleanEnv, pct,
                     validProfileId, built == null ? null : built.profileName(), true);
-            snap.book(newId, chosenIds, firstSlot, dur);
+            snap.book(newId, chosenIds, n, firstSlot, dur);
 
             Instant prevEnd = firstSlot.plusSeconds((long) dur + ScheduleTimelineService.TAIL_SEC);
             int shifted = 0;
@@ -493,7 +503,7 @@ public class ScheduledRunService {
                 if (!slot.equals(item.runAt()) && store.reschedule(item.id(), slot)) {
                     shifted++;
                 }
-                snap.book(item.id(), item.generatorIds(), slot, itemDur);
+                snap.book(item.id(), item.generatorIds(), itemN, slot, itemDur);
                 prevEnd = slot.plusSeconds((long) itemDur + ScheduleTimelineService.TAIL_SEC);
             }
             audit.record("run.schedule", "script", scriptId,
@@ -599,20 +609,35 @@ public class ScheduledRunService {
                 throw new IllegalStateException("Запись #" + scheduleId + " уже захвачена другим потоком");
             }
             ScheduledRunStore.Item fresh = store.find(target.id()).orElse(target);
-            startOne(fresh);
+            startOne(fresh, true, null);
             ScheduledRunStore.Item after = store.find(target.id()).orElse(fresh);
             if (after.status() != ScheduledRunStore.Status.STARTED || after.runId() == null) {
                 throw new IllegalStateException(after.error() != null ? after.error() : "Не удалось запустить тест");
             }
+            int targetDur = timeline.durationSecFor(target);
+            Instant afterTarget = now.plusSeconds((long) targetDur + ScheduleTimelineService.TAIL_SEC);
             List<ScheduledRunStore.Item> remaining = store.active().stream()
                     .filter(ScheduledRunStore.Item::pending)
                     .toList();
-            int moved = reflowPendingOrder(remaining);
+            int moved = reflowPendingOrder(remaining, afterTarget);
             String title = target.profileName() == null || target.profileName().isBlank()
                     ? target.scriptName() : target.scriptName() + " · " + target.profileName();
             audit.record("run.schedule_start_now", "scheduled_run", scheduleId,
                     Map.of("runId", after.runId(), "moved", moved, "by", String.valueOf(user)));
             return new ResumeResult(scheduleId, after.runId(), title, moved);
+        }
+    }
+
+    /** Отменяет все ожидающие записи расписания (без ограничения в 100 записей). */
+    public int cancelAllPending(String user) {
+        synchronized (schedulerLock) {
+            int n = 0;
+            for (ScheduledRunStore.Item item : store.active()) {
+                if (item.pending() && cancel(item.id(), user)) {
+                    n++;
+                }
+            }
+            return n;
         }
     }
 
@@ -676,8 +701,13 @@ public class ScheduledRunService {
 
     /** Перекладывает список ожидающих записей строго в переданном порядке после текущего выполняющегося теста. */
     private int reflowPendingOrder(List<ScheduledRunStore.Item> orderedPending) {
+        return reflowPendingOrder(orderedPending, Instant.now().plus(MIN_LEAD).plusSeconds(30));
+    }
+
+    private int reflowPendingOrder(List<ScheduledRunStore.Item> orderedPending, Instant minPrevEnd) {
         ScheduleTimelineService.Snapshot snap = timeline.snapshotRunningWithCooldown();
-        Instant prevEnd = Instant.now().plus(MIN_LEAD).plusSeconds(30);
+        Instant floor = Instant.now().plus(MIN_LEAD).plusSeconds(30);
+        Instant prevEnd = minPrevEnd != null && minPrevEnd.isAfter(floor) ? minPrevEnd : floor;
         int shifted = 0;
         for (ScheduledRunStore.Item item : orderedPending) {
             int n = !item.generatorIds().isEmpty() ? item.generatorIds().size()
@@ -687,7 +717,7 @@ public class ScheduledRunService {
             if (!slot.equals(item.runAt()) && store.reschedule(item.id(), slot)) {
                 shifted++;
             }
-            snap.book(item.id(), item.generatorIds(), slot, dur);
+            snap.book(item.id(), item.generatorIds(), n, slot, dur);
             prevEnd = slot.plusSeconds((long) dur + ScheduleTimelineService.TAIL_SEC);
         }
         return shifted;
@@ -751,7 +781,6 @@ public class ScheduledRunService {
                 return new ResumeResult(null, null, null, 0);
             }
 
-            Instant now = Instant.now();
             ScheduledRunStore.Item first = pending.get(0);
             Long startedScheduleId = null;
             Long startedRunId = null;
@@ -759,16 +788,20 @@ public class ScheduledRunService {
             int moved = 0;
 
             boolean startedFirst = false;
+            boolean claimedFirst = false;
+            Instant now = Instant.now();
             if (canStartNow(first)) {
                 ScheduleGuardService.BeforeStartResult guardRes = guards.runBeforeStartGuards(first.id());
                 if (guardRes.blocked()) {
                     settings.set(PAUSE_REASON_KEY, guardRes.reason());
                     throw new IllegalStateException("Не удалось снять с паузы — автопроверка заблокировала старт: " + guardRes.reason());
                 }
+                now = Instant.now();
                 store.reschedule(first.id(), now);
                 if (store.claim(first.id())) {
+                    claimedFirst = true;
                     ScheduledRunStore.Item fresh = store.find(first.id()).orElse(first);
-                    startOne(fresh);
+                    startOne(fresh, true, null);
                     ScheduledRunStore.Item after = store.find(first.id()).orElse(fresh);
                     if (after.status() == ScheduledRunStore.Status.STARTED) {
                         startedFirst = true;
@@ -788,6 +821,11 @@ public class ScheduledRunService {
                 int firstDur = timeline.durationSecFor(first);
                 delta = Duration.between(first.runAt(), now);
                 prevEnd = now.plusSeconds((long) firstDur + ScheduleTimelineService.TAIL_SEC);
+                startIdx = 1;
+            } else if (claimedFirst) {
+                // первая запись была захвачена, но старт не удался (FAILED) — не переносим и не бронируем её повторно
+                delta = null;
+                prevEnd = now.plus(MIN_LEAD).plusSeconds(30);
                 startIdx = 1;
             } else {
                 delta = null;
@@ -814,7 +852,7 @@ public class ScheduledRunService {
                 if (!slot.equals(item.runAt()) && store.reschedule(item.id(), slot)) {
                     moved++;
                 }
-                snap.book(item.id(), item.generatorIds(), slot, dur);
+                snap.book(item.id(), item.generatorIds(), n, slot, dur);
                 prevEnd = slot.plusSeconds((long) dur + ScheduleTimelineService.TAIL_SEC);
             }
 
@@ -833,17 +871,10 @@ public class ScheduledRunService {
         }
     }
 
-    /** Проверяет, свободны ли нужные генераторы прямо сейчас (без учёта остывания уже завершившихся тестов). */
+    /** Проверяет, свободны ли нужные генераторы прямо сейчас (с учётом активных и QUEUED запусков, но без остывания завершившихся). */
     private boolean canStartNow(ScheduledRunStore.Item item) {
         List<Generator> all = generators.findAll();
-        Map<Long, Integer> activeByGen = new java.util.HashMap<>();
-        for (Run r : runs.activeRuns()) {
-            for (var rg : runs.generatorsOf(r.getId())) {
-                if (rg.getGeneratorId() != null && !rg.getStatus().isDone()) {
-                    activeByGen.merge(rg.getGeneratorId(), 1, Integer::sum);
-                }
-            }
-        }
+        Map<Long, Integer> activeByGen = activeSlotsByGenerator(null);
         java.util.function.Predicate<Generator> freeNow = g -> g.isAvailableForRuns()
                 && activeByGen.getOrDefault(g.getId(), 0) < Math.max(1, g.getMaxConcurrentRuns());
         if (!item.generatorIds().isEmpty()) {
@@ -858,6 +889,19 @@ public class ScheduledRunService {
         int n = item.generatorCount() == null ? 1 : Math.max(1, item.generatorCount());
         long free = all.stream().filter(freeNow).count();
         return free >= n;
+    }
+
+    private Map<Long, Integer> activeSlotsByGenerator(Map<Long, Integer> extraReserved) {
+        Map<Long, Integer> activeByGen = new java.util.HashMap<>();
+        for (Run r : runs.activeAndQueuedRuns()) {
+            for (Long gid : timeline.activeGeneratorIdsOf(r)) {
+                activeByGen.merge(gid, 1, Integer::sum);
+            }
+        }
+        if (extraReserved != null) {
+            extraReserved.forEach((gid, cnt) -> activeByGen.merge(gid, cnt, Integer::sum));
+        }
+        return activeByGen;
     }
 
     private Instant findSlotOrFallback(ScheduleTimelineService.Snapshot snap, List<Long> genIds, int n, int dur, Instant notBefore) {
@@ -875,7 +919,16 @@ public class ScheduledRunService {
                 return; // на паузе: ничего не стартуем и не помечаем просроченным
             }
             shiftQueue();
-            for (ScheduledRunStore.Item item : store.due(Instant.now())) {
+            Instant tickNow = Instant.now();
+            Map<Long, Integer> reservedInTick = new java.util.HashMap<>();
+            for (ScheduledRunStore.Item item : store.due(tickNow)) {
+                Duration late = Duration.between(item.runAt(), tickNow);
+                if (late.compareTo(MAX_LATE) > 0) {
+                    if (store.claim(item.id())) {
+                        store.failed(item.id(), "Пропущено: назначенное время прошло " + Math.max(1, late.toMinutes()) + " мин назад (сервер был недоступен)");
+                    }
+                    continue;
+                }
                 ScheduleGuardService.BeforeStartResult guardRes = guards.runBeforeStartGuards(item.id());
                 if (guardRes.blocked()) {
                     log.warn("Расписание #{}: старт заблокирован автопроверкой ({}); планировщик поставлен на паузу",
@@ -884,7 +937,7 @@ public class ScheduledRunService {
                     return;
                 }
                 if (store.claim(item.id())) {
-                    startOne(item);
+                    startOne(item, true, reservedInTick);
                 }
             }
         }
@@ -916,13 +969,22 @@ public class ScheduledRunService {
     }
 
     void startOne(ScheduledRunStore.Item item) {
+        startOne(item, false, null);
+    }
+
+    void startOne(ScheduledRunStore.Item item, boolean skipLateCheck, Map<Long, Integer> reservedInTick) {
         try {
-            Duration late = Duration.between(item.runAt(), Instant.now());
-            if (late.compareTo(MAX_LATE) > 0) {
-                store.failed(item.id(), "Пропущено: назначенное время прошло " + Math.max(1, late.toMinutes()) + " мин назад (сервер был недоступен)");
-                return;
+            if (!skipLateCheck) {
+                Duration late = Duration.between(item.runAt(), Instant.now());
+                if (late.compareTo(MAX_LATE) > 0) {
+                    store.failed(item.id(), "Пропущено: назначенное время прошло " + Math.max(1, late.toMinutes()) + " мин назад (сервер был недоступен)");
+                    return;
+                }
             }
             List<Generator> all = generators.findAll();
+            Map<Long, Integer> usedSlots = activeSlotsByGenerator(reservedInTick);
+            java.util.function.Predicate<Generator> freeNow = g -> g.isAvailableForRuns()
+                    && usedSlots.getOrDefault(g.getId(), 0) < Math.max(1, g.getMaxConcurrentRuns());
             List<Long> chosen;
             if (!item.generatorIds().isEmpty()) {
                 List<String> busy = new ArrayList<>();
@@ -930,7 +992,7 @@ public class ScheduledRunService {
                     Generator g = all.stream().filter(x -> x.getId().equals(id)).findFirst().orElse(null);
                     if (g == null) {
                         busy.add("#" + id + " (удалён)");
-                    } else if (!g.isAvailableForRuns()) {
+                    } else if (!freeNow.test(g)) {
                         busy.add(g.getName());
                     }
                 }
@@ -941,7 +1003,7 @@ public class ScheduledRunService {
                 chosen = item.generatorIds();
             } else {
                 int n = item.generatorCount() == null ? 1 : item.generatorCount();
-                List<Long> free = all.stream().filter(Generator::isAvailableForRuns).sorted(Comparator.comparing(Generator::getName))
+                List<Long> free = all.stream().filter(freeNow).sorted(Comparator.comparing(Generator::getName))
                         .map(Generator::getId).toList();
                 if (free.size() < n) {
                     store.failed(item.id(), "Пропущено: свободных генераторов " + free.size() + ", а нужно " + n);
@@ -952,6 +1014,11 @@ public class ScheduledRunService {
             List<RunService.GeneratorSel> sel = chosen.stream().map(g -> new RunService.GeneratorSel(g, 1)).toList();
             Run run = runs.create(new RunService.CreateRequest(item.scriptId(), sel, Run.FailurePolicy.CONTINUE, 120, List.of(),
                     new RunService.Overrides(item.env(), item.intensity(), item.id(), item.createdBy(), item.profileId(), item.profileName())));
+            if (reservedInTick != null) {
+                for (Long gid : chosen) {
+                    reservedInTick.merge(gid, 1, Integer::sum);
+                }
+            }
             store.started(item.id(), run.getId());
             log.info("Запуск по расписанию #{}: создан run {}", item.id(), run.getId());
         } catch (IOException | RuntimeException e) {

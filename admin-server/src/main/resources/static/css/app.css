@@ -697,5 +697,39 @@ tr.sch-row.sch-row-highlight > td { background: #eef0ff !important; transition: 
 .run-mode-tabs .btn { border: 0; background: transparent; color: var(--k6-muted); border-radius: 9px; padding: .42rem 1rem; font-weight: 600; box-shadow: none; }
 .run-mode-tabs .btn.active { background: #fff; color: var(--k6-primary); box-shadow: 0 2px 6px rgba(16, 24, 40, .12); }
 
+/* ---------- кастомные попапы подтверждения и ввода ---------- */
+.k6-top-modal { z-index: 1080; }
+.modal-backdrop.k6-top-backdrop { z-index: 1075; }
+.k6-confirm-dialog { max-width: 450px; }
+.k6-confirm-content { border: 1px solid var(--k6-border); border-radius: 16px; box-shadow: 0 20px 50px rgba(15, 23, 42, .22); }
+.k6-confirm-icon { flex: 0 0 42px; width: 42px; height: 42px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; font-size: 1.25rem; }
+.k6-confirm-icon.is-danger { background: #fee2e2; color: #dc2626; }
+.k6-confirm-icon.is-warning { background: #fef3c7; color: #d97706; }
+.k6-confirm-icon.is-primary { background: #e0e7ff; color: #4f46e5; }
+.k6-confirm-msg { white-space: pre-line; line-height: 1.45; }
+.k6-confirm-list { max-height: 160px; overflow: auto; padding-left: 1.15rem; font-size: .78rem; color: #374151; background: #f8fafc; border: 1px solid var(--k6-border); border-radius: 8px; padding-top: .4rem; padding-bottom: .4rem; padding-right: .6rem; }
+
+/* ---------- единый переключатель и менеджер профилей ---------- */
+.ld-prof-trigger { display: inline-flex; align-items: center; gap: .5rem; max-width: 360px; padding: .32rem .75rem;
+  border: 1px solid #c7c4f8; border-radius: 10px; background: #f6f7ff; color: var(--k6-text);
+  font-size: .86rem; font-weight: 600; transition: all .14s; text-align: left; }
+.ld-prof-trigger:hover { background: #eef0ff; border-color: var(--k6-primary); color: var(--k6-primary); }
+.ld-prof-trigger .ld-pt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld-prof-modal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; padding: .65rem 1rem;
+  background: #f8f9fc; border-bottom: 1px solid var(--k6-border); }
+.ld-prof-bulkbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .48rem 1rem;
+  background: #eef0ff; border-bottom: 1px solid #c7c4f8; font-size: .84rem; }
+.ld-prof-base-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .65rem .9rem; border: 1px dashed #c7c4f8; border-radius: 11px; background: #fafbff; cursor: pointer;
+  margin-bottom: .75rem; transition: all .14s; }
+.ld-prof-base-row:hover { border-color: var(--k6-primary); background: #f1f3ff; }
+.ld-prof-base-row.active { border-style: solid; border-color: var(--k6-primary); background: #eef0ff; }
+.ld-prof-card.is-checked { border-color: #ef4444; background: #fff5f5; }
+.ld-prof-check-wrap { display: inline-flex; align-items: center; padding-top: 2px; cursor: pointer; }
+.ld-prof-name-btn { border: 0; background: transparent; padding: 0; text-align: left; font-weight: 650; font-size: .92rem;
+  line-height: 1.25; color: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.ld-prof-name-btn:hover { color: var(--k6-primary); text-decoration: underline; }
+
+
 
 

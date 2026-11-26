@@ -334,12 +334,7 @@ public class ScheduleController {
     @PostMapping("/schedule/cancel-all-pending")
     public String cancelAllPending(Principal user, RedirectAttributes ra) {
         String by = user == null ? "system" : user.getName();
-        int n = 0;
-        for (var item : service.recent()) {
-            if (item.pending() && service.cancel(item.id(), by)) {
-                n++;
-            }
-        }
+        int n = service.cancelAllPending(by);
         ra.addFlashAttribute(n > 0 ? "info" : "error", n > 0 ? "Отменено ожидающих запусков: " + n : "Нет ожидающих запусков для отмены");
         return "redirect:/schedule";
     }

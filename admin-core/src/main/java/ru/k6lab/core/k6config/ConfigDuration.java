@@ -72,12 +72,13 @@ public final class ConfigDuration {
         if (text == null || text.isBlank()) {
             return def;
         }
-        Matcher m = PART.matcher(text.trim());
+        String trimmed = text.trim();
+        Matcher m = PART.matcher(trimmed);
         double sum = 0;
         int matched = 0;
         int end = 0;
         while (m.find()) {
-            if (m.start() != end && !text.substring(end, m.start()).isBlank()) {
+            if (m.start() != end && !trimmed.substring(end, m.start()).isBlank()) {
                 return def;
             }
             double v = Double.parseDouble(m.group(1));
@@ -90,6 +91,6 @@ public final class ConfigDuration {
             matched++;
             end = m.end();
         }
-        return matched == 0 || !text.substring(end).isBlank() ? def : sum;
+        return matched == 0 || !trimmed.substring(end).isBlank() ? def : sum;
     }
 }

@@ -9,12 +9,14 @@ import org.springframework.context.event.EventListener;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import ru.k6lab.server.agent.AgentSessionRegistry;
 import ru.k6lab.server.audit.AuditService;
 import ru.k6lab.server.common.SecretMasker;
 import ru.k6lab.server.config.AppProperties;
 import ru.k6lab.server.deploy.DeployEngine.RolledBack;
 import ru.k6lab.server.deploy.DeployEngine.Target;
 import ru.k6lab.server.generator.Generator;
+import ru.k6lab.server.generator.GeneratorMetricsService;
 import ru.k6lab.server.generator.GeneratorRepository;
 import ru.k6lab.server.ssh.KnownHostService;
 import ru.k6lab.server.ssh.SshCredentialRepository;
@@ -55,6 +57,8 @@ public class DeployService {
     private final SshCredentialRepository credentialsRepo;
     private final KnownHostService knownHosts;
     private final AuditService audit;
+    private final AgentSessionRegistry sessions;
+    private final GeneratorMetricsService metrics;
     private final ThreadPoolExecutor executor;
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "deploy-log-cleaner");
@@ -65,13 +69,15 @@ public class DeployService {
 
     public DeployService(DeployEngine engine, DeployStore store, GeneratorRepository generators,
                          SshCredentialRepository credentialsRepo, KnownHostService knownHosts, AuditService audit,
-                         AppProperties props) {
+                         AgentSessionRegistry sessions, GeneratorMetricsService metrics, AppProperties props) {
         this.engine = engine;
         this.store = store;
         this.generators = generators;
         this.credentialsRepo = credentialsRepo;
         this.knownHosts = knownHosts;
         this.audit = audit;
+        this.sessions = sessions;
+        this.metrics = metrics;
         int n = Math.max(1, props.getDeploy().getMaxParallel());
         this.executor = new ThreadPoolExecutor(n, n, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(1000), r -> {
             Thread t = new Thread(r, "deploy-worker");
@@ -200,7 +206,7 @@ public class DeployService {
     /** Подтверждение fingerprint пользователем -> запись в known_host и повторный запуск операции. */
     public void confirmHostKey(Long deploymentId, String user) {
         Deployment d = store.load(deploymentId);
-        if (d.getStatus() != Deployment.Status.WAITING_HOST_KEY) {
+        if (!store.claimHostKeyConfirm(deploymentId)) {
             throw new IllegalStateException("Операция не ждёт подтверждения ключа хоста");
         }
         knownHosts.confirm(d.getHostKeyHost(), d.getHostKeyPort(), d.getHostKeyType(), d.getHostKeyFingerprint(),
@@ -289,7 +295,12 @@ public class DeployService {
                 case UNINSTALL -> {
                     Generator g = store.loadGenerator(d.getGeneratorId());
                     engine.uninstall(run, targetOf(g));
-                    // отзыв токена и удаление записи: агент больше не сможет подключиться
+                    // закрываем активную WebSocket-сессию, чистим метрики и удаляем запись: агент больше не подключится
+                    sessions.get(g.getId()).ifPresent(s -> {
+                        sessions.unregister(s);
+                        s.close("generator uninstalled");
+                    });
+                    metrics.forget(g.getId());
                     store.deleteGenerator(g.getId());
                     dlog.line("Генератор удалён, токены отозваны");
                 }

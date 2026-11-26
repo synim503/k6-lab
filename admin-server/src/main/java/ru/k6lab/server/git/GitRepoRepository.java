@@ -9,4 +9,6 @@ public interface GitRepoRepository extends JpaRepository<GitRepo, Long> {
     List<GitRepo> findAllByOrderByNameAsc();
 
     boolean existsByNameIgnoreCase(String name);
+
+    boolean existsBySshCredentialId(Long sshCredentialId);
 }

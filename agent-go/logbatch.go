@@ -104,6 +104,9 @@ func (b *LogBatcher) Flush() {
 	batch, d := b.buf, b.dropped
 	b.buf, b.dropped = nil, 0
 	b.mu.Unlock()
+	if batch == nil {
+		batch = []LogLine{}
+	}
 	b.emit(func(seq int64) any {
 		return LogBatch{Type: "LOG_BATCH", Seq: seq, Ts: time.Now().UnixMilli(), RunID: b.runID, Lines: batch, Dropped: d}
 	})

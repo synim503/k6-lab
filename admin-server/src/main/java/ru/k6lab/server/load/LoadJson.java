@@ -49,6 +49,19 @@ final class LoadJson {
                 n.set("ops", ops);
             }
             LoadForm f = MAPPER.treeToValue(n, LoadForm.class);
+            if (f.getOps() == null) {
+                f.setOps(new java.util.ArrayList<>());
+            } else {
+                f.getOps().removeIf(java.util.Objects::isNull);
+            }
+            if (f.getDataFiles() == null) {
+                f.setDataFiles(new java.util.ArrayList<>());
+            } else {
+                f.getDataFiles().removeIf(java.util.Objects::isNull);
+            }
+            if (f.getStop() == null) {
+                f.setStop(new LoadForm.StopForm());
+            }
             Map<String, String> kv = new java.util.LinkedHashMap<>();
             if (env != null && !env.isNull()) {
                 if (!env.isObject()) {
@@ -57,7 +70,7 @@ final class LoadJson {
                 Iterator<Map.Entry<String, JsonNode>> it = env.fields();
                 while (it.hasNext()) {
                     var e = it.next();
-                    kv.put(e.getKey(), e.getValue().asText());
+                    kv.put(e.getKey(), e.getValue() == null || e.getValue().isNull() ? "" : e.getValue().asText());
                 }
             }
             f.setEnvText(LoadForm.formatKv(kv));

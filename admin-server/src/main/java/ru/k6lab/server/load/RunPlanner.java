@@ -159,7 +159,7 @@ public class RunPlanner {
                 for (GeneratedConfig.Warning w : gen.warnings()) {
                     warnings.add((w.operation() == null ? "" : w.operation() + ": ") + w.message());
                 }
-                dataWarnings(script, version, gen, steps, generatorCount, warnings, built == null ? load.dataFiles(script.getId()) : built.dataFiles());
+                dataWarnings(script, version, finalConfig, gen, steps, generatorCount, warnings, built == null ? load.dataFiles(script.getId()) : built.dataFiles());
             } catch (IllegalArgumentException | JsonProcessingException e) {
                 errors.add(e.getMessage());
             }
@@ -169,12 +169,13 @@ public class RunPlanner {
     }
 
     /** Предупреждение: после нарезки на генератор приходится меньше строк, чем ожидаемых итераций. */
-    private void dataWarnings(Script script, ScriptVersion v, GeneratedConfig gen, List<StepPlan> steps, int generators,
+    private void dataWarnings(Script script, ScriptVersion v, com.fasterxml.jackson.databind.JsonNode finalConfig,
+                              GeneratedConfig gen, List<StepPlan> steps, int generators,
                               List<String> warnings, List<ScriptDataFile> files) {
         if (files.stream().noneMatch(f -> f.getMode() == ScriptDataFile.Mode.SPLIT && f.isConsumed())) {
             return;
         }
-        double total = IterationEstimator.total(gen, steps);
+        double total = IterationEstimator.totalFromConfig(finalConfig, gen, steps);
         double perGenerator = total / Math.max(1, generators);
         byte[] zip;
         try {

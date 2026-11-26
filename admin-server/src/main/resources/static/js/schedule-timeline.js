@@ -135,6 +135,8 @@
                     tr.scrollIntoView({behavior: 'smooth', block: 'center'});
                     document.querySelectorAll('tr.sch-row.sch-row-highlight').forEach(function (r) { r.classList.remove('sch-row-highlight'); });
                     tr.classList.add('sch-row-highlight');
+                } else {
+                    location.href = (root.dataset.scheduleUrl || '/schedule') + '#sch-row-' + encodeURIComponent(sid);
                 }
             });
         }

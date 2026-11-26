@@ -52,10 +52,14 @@ public class ScheduleTimelineService {
         }
 
         void book(long scheduleId, List<Long> genIds, Instant runAt, int durationSec) {
+            book(scheduleId, genIds, 1, runAt, durationSec);
+        }
+
+        void book(long scheduleId, List<Long> genIds, int count, Instant runAt, int durationSec) {
             long from = runAt.toEpochMilli();
             long to = from + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
             if (genIds == null || genIds.isEmpty()) {
-                bars.add(new SlotBar(from, to, null, scheduleId, 1));
+                bars.add(new SlotBar(from, to, null, scheduleId, Math.max(1, count)));
             } else {
                 for (Long gid : genIds) {
                     bars.add(new SlotBar(from, to, gid, scheduleId, 1));
@@ -115,21 +119,20 @@ public class ScheduleTimelineService {
         out.put("generators", gens);
 
         List<Map<String, Object>> bars = new ArrayList<>();
-        for (Run r : runs.activeRuns()) {
+        for (Run r : runs.activeAndQueuedRuns()) {
             long from = (r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getStartedAt() != null ? r.getStartedAt() : r.getQueuedAt())
                     .toEpochMilli();
             long span = ConfigDuration.of(r.getK6Config()).totalSec();
             long to = Math.max(now + 30_000, from + (span + TAIL_SEC) * 1000);
             Object pn = r.getRequest() == null ? null : r.getRequest().get("loadProfileName");
             String profile = pn == null ? null : String.valueOf(pn);
-            List<RunGenerator> rgs = runs.generatorsOf(r.getId()).stream()
-                    .filter(rg -> rg.getGeneratorId() != null && !rg.getStatus().isDone()).toList();
-            String genNames = rgs.stream().map(RunGenerator::getGeneratorName).collect(Collectors.joining(", "));
-            for (RunGenerator rg : rgs) {
-                Map<String, Object> b = bar("run", rg.getGeneratorId(), 1, r.getScriptName(), profile, from, to, r.getId(), null);
+            List<Long> genIds = activeGeneratorIdsOf(r);
+            String genNames = genIds.stream().map(gid -> names.getOrDefault(gid, "#" + gid)).collect(Collectors.joining(", "));
+            for (Long gid : genIds) {
+                Map<String, Object> b = bar("run", gid, 1, r.getScriptName(), profile, from, to, r.getId(), null);
                 b.put("by", r.getCreatedBy());
                 b.put("status", r.getStatus().name());
-                b.put("genCount", rgs.size());
+                b.put("genCount", genIds.size());
                 b.put("genNames", genNames);
                 b.put("scheduled", r.getRequest() != null && r.getRequest().get("scheduleId") != null);
                 bars.add(b);
@@ -181,7 +184,7 @@ public class ScheduleTimelineService {
         }
         List<Snapshot.SlotBar> bars = new ArrayList<>();
         java.util.Set<Long> activeRunIds = new java.util.HashSet<>();
-        for (Run r : runs.activeRuns()) {
+        for (Run r : runs.activeAndQueuedRuns()) {
             activeRunIds.add(r.getId());
             long from = (r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getStartedAt() != null ? r.getStartedAt() : r.getQueuedAt())
                     .toEpochMilli();
@@ -240,7 +243,7 @@ public class ScheduleTimelineService {
                     Math.max(1, g.getMaxConcurrentRuns())));
         }
         List<Snapshot.SlotBar> bars = new ArrayList<>();
-        for (Run r : runs.activeRuns()) {
+        for (Run r : runs.activeAndQueuedRuns()) {
             long from = (r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getStartedAt() != null ? r.getStartedAt() : r.getQueuedAt())
                     .toEpochMilli();
             long span = ConfigDuration.of(r.getK6Config()).totalSec();
@@ -278,7 +281,7 @@ public class ScheduleTimelineService {
         Snapshot snap = snapshotRunningOnly();
         long now = Instant.now().toEpochMilli();
         java.util.Set<Long> activeRunIds = new java.util.HashSet<>();
-        runs.activeRuns().forEach(r -> activeRunIds.add(r.getId()));
+        runs.activeAndQueuedRuns().forEach(r -> activeRunIds.add(r.getId()));
         long cooldownCutoff = now - TAIL_SEC * 1000L;
         for (Run r : runs.search(null, null, 20)) {
             if (activeRunIds.contains(r.getId()) || r.getFinishedAt() == null) {
@@ -346,6 +349,37 @@ public class ScheduleTimelineService {
         }
     }
 
+    /** Пиковое одновременное число занятых слотов на генераторе gid в полуинтервале [start, end). */
+    private static int peakOverlap(List<Snapshot.SlotBar> bars, long gid, long start, long end) {
+        List<Snapshot.SlotBar> relevant = new ArrayList<>();
+        for (Snapshot.SlotBar b : bars) {
+            if (b.generatorId() != null && b.generatorId() == gid && b.fromMs() < end && b.toMs() > start) {
+                relevant.add(b);
+            }
+        }
+        if (relevant.size() <= 1) {
+            return relevant.size();
+        }
+        int peak = 0;
+        // проверяем в точке start и в начале каждого пересекающегося бара внутри (start, end)
+        for (int i = -1; i < relevant.size(); i++) {
+            long t = i < 0 ? start : Math.max(start, relevant.get(i).fromMs());
+            if (t >= end) {
+                continue;
+            }
+            int active = 0;
+            for (Snapshot.SlotBar b : relevant) {
+                if (b.fromMs() <= t && b.toMs() > t) {
+                    active++;
+                }
+            }
+            if (active > peak) {
+                peak = active;
+            }
+        }
+        return peak;
+    }
+
     private static List<String> busyNames(Snapshot snap, List<Long> ids, long start, int durationSec) {
         long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
         List<String> busy = new ArrayList<>();
@@ -353,13 +387,7 @@ public class ScheduleTimelineService {
             if (!ids.contains(g.id())) {
                 continue;
             }
-            int used = 0;
-            for (Snapshot.SlotBar b : snap.bars) {
-                if (b.generatorId() != null && b.generatorId() == g.id() && b.fromMs() < end && b.toMs() > start) {
-                    used++;
-                }
-            }
-            if (used >= g.slots()) {
+            if (peakOverlap(snap.bars, g.id(), start, end) >= g.slots()) {
                 busy.add(g.name());
             }
         }
@@ -383,21 +411,18 @@ public class ScheduleTimelineService {
 
     private static List<Long> findFree(Snapshot snap, long start, int durationSec, int n) {
         long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
-        Map<Long, Integer> busy = new HashMap<>();
         Map<Long, Integer> pool = new HashMap<>();
         for (Snapshot.SlotBar b : snap.bars) {
             if (b.fromMs() >= end || b.toMs() <= start) {
                 continue;
             }
-            if (b.generatorId() != null) {
-                busy.merge(b.generatorId(), 1, Integer::sum);
-            } else if (b.scheduleId() != null) {
+            if (b.generatorId() == null && b.scheduleId() != null) {
                 pool.putIfAbsent(b.scheduleId(), b.count());
             }
         }
         List<Long> free = new ArrayList<>();
         for (Snapshot.GenSlot g : snap.generators) {
-            if (g.online() && busy.getOrDefault(g.id(), 0) < g.slots()) {
+            if (g.online() && peakOverlap(snap.bars, g.id(), start, end) < g.slots()) {
                 free.add(g.id());
             }
         }
@@ -410,21 +435,18 @@ public class ScheduleTimelineService {
 
     private static int countFree(Snapshot snap, long start, int durationSec) {
         long end = start + (long) (Math.max(1, durationSec) + TAIL_SEC) * 1000L;
-        Map<Long, Integer> busy = new HashMap<>();
         Map<Long, Integer> pool = new HashMap<>();
         for (Snapshot.SlotBar b : snap.bars) {
             if (b.fromMs() >= end || b.toMs() <= start) {
                 continue;
             }
-            if (b.generatorId() != null) {
-                busy.merge(b.generatorId(), 1, Integer::sum);
-            } else if (b.scheduleId() != null) {
+            if (b.generatorId() == null && b.scheduleId() != null) {
                 pool.putIfAbsent(b.scheduleId(), b.count());
             }
         }
         int free = 0;
         for (Snapshot.GenSlot g : snap.generators) {
-            if (g.online() && busy.getOrDefault(g.id(), 0) < g.slots()) {
+            if (g.online() && peakOverlap(snap.bars, g.id(), start, end) < g.slots()) {
                 free++;
             }
         }
@@ -477,13 +499,7 @@ public class ScheduleTimelineService {
             }
             boolean ok = true;
             for (Long gid : it.generatorIds()) {
-                int busy = 0;
-                for (Snapshot.SlotBar b : bars) {
-                    if (b.generatorId() == gid.longValue() && b.fromMs() < t + span && b.toMs() > t) {
-                        busy++;
-                    }
-                }
-                if (busy >= slots.getOrDefault(gid, 1)) {
+                if (peakOverlap(bars, gid, t, t + span) >= slots.getOrDefault(gid, 1)) {
                     ok = false;
                     break;
                 }

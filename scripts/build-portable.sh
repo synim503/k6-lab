@@ -41,8 +41,8 @@ done
 K6_NUM="${K6_VERSION#v}"
 OUT=portable/k6-lab
 DIST="$OUT/dist"
-MVN="./mvnw"
-[ "$OFFLINE" -eq 1 ] && MVN="./mvnw -o"
+MVN=(./mvnw)
+[ "$OFFLINE" -eq 1 ] && MVN=(./mvnw -o)
 
 # ---------------------------------------------------------------- проверка окружения
 fail=0
@@ -108,14 +108,14 @@ if [ "$ONLINE" -eq 0 ] && [ -f "$VM_REPO" ] && [ "$(wc -c < "$VM_REPO")" -gt 100
     touch .m2-vendor/.ready
   fi
   find .m2-vendor \( -name "_remote.repositories" -o -name "resolver-status.properties" \) -delete 2>/dev/null || true
-  for f in $(find .m2-vendor -name "maven-metadata-central-https.xml" 2>/dev/null); do
+  while IFS= read -r -d '' f; do
     dir="${f%/*}"
     [ -f "$dir/maven-metadata-central.xml" ] || cp "$f" "$dir/maven-metadata-central.xml"
     [ -f "$dir/maven-metadata-local.xml" ] || cp "$f" "$dir/maven-metadata-local.xml"
-  done
+  done < <(find .m2-vendor -name "maven-metadata-central-https.xml" -print0 2>/dev/null)
   [ -f .m2-vendor/empty-settings.xml ] || printf '<settings/>\n' > .m2-vendor/empty-settings.xml
   HOST_PWD="$(pwd -W 2>/dev/null || pwd)"
-  MVN="bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.legacyLocalRepo=true -s $HOST_PWD/.m2-vendor/empty-settings.xml -Dmaven.repo.local=$HOST_PWD/.m2-vendor"
+  MVN=(bash .tools/apache-maven-3.9.11/bin/mvn -o -Dmaven.legacyLocalRepo=true -s "$HOST_PWD/.m2-vendor/empty-settings.xml" "-Dmaven.repo.local=$HOST_PWD/.m2-vendor")
 fi
 
 rm -rf portable
@@ -123,13 +123,13 @@ mkdir -p "$DIST/agent/linux-amd64" "$DIST/agent/linux-arm64" "$DIST/k6/linux-amd
 
 # ---------------------------------------------------------------- админка
 if [ "$WITH_TESTS" -eq 1 ]; then
-  echo "== Тесты ($MVN verify)"
-  $MVN -q verify
+  echo "== Тесты (${MVN[*]} verify)"
+  "${MVN[@]}" -q verify
 fi
 echo "== Сборка админки"
 # метка сборки (тег релиза или коммит) попадает в подвал страниц админки
 APP_BUILD="$(git describe --tags --always 2>/dev/null || echo dev)"
-$MVN -q -DskipTests -Dapp.build="$APP_BUILD" package
+"${MVN[@]}" -q -DskipTests "-Dapp.build=$APP_BUILD" package
 cp admin-server/target/k6-lab-admin.jar "$OUT/"
 
 # ---------------------------------------------------------------- агент на Go (зависимости - agent-go/vendor, без сети)

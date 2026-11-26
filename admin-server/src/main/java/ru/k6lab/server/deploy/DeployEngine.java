@@ -145,25 +145,43 @@ public class DeployEngine {
         return SshConnection.quote(s);
     }
 
+    private static final java.util.Set<String> FORBIDDEN_TOP_DIRS = java.util.Set.of(
+            "/etc", "/usr", "/var", "/opt", "/bin", "/sbin", "/lib", "/lib64",
+            "/boot", "/dev", "/proc", "/sys", "/root", "/home", "/tmp", "/run", "/srv", "/mnt", "/media");
+
     static void validate(Target t) {
-        if (!SAFE_HOST.matcher(t.host()).matches()) {
+        if (t.host() == null || !SAFE_HOST.matcher(t.host()).matches()) {
             throw new IllegalArgumentException("Недопустимое имя хоста: " + t.host());
         }
         if (t.port() < 1 || t.port() > 65535) {
             throw new IllegalArgumentException("Недопустимый порт SSH");
         }
-        if (t.dir() == null || !SAFE_PATH.matcher(t.dir()).matches() || t.dir().length() < 4 || t.dir().equals("/")) {
-            throw new IllegalArgumentException("Недопустимый каталог установки (разрешены буквы, цифры и _ . / ~ -): " + t.dir());
+        String dir = t.dir();
+        if (dir == null || !SAFE_PATH.matcher(dir).matches() || dir.length() < 4 || dir.equals("/")
+                || dir.contains("..") || dir.contains("//")) {
+            throw new IllegalArgumentException("Недопустимый каталог установки (разрешены буквы, цифры и _ . / ~ -): " + dir);
         }
-        if (t.system() && !t.dir().startsWith("/")) {
+        if (t.system() && !dir.startsWith("/")) {
             throw new IllegalArgumentException("Для системного режима нужен абсолютный каталог");
+        }
+        if (!dir.startsWith("/") && !dir.startsWith("~/")) {
+            throw new IllegalArgumentException("Каталог установки должен начинаться с / или ~/");
+        }
+        String normalizedDir = dir.endsWith("/") ? dir.substring(0, dir.length() - 1) : dir;
+        if (normalizedDir.equals("~") || FORBIDDEN_TOP_DIRS.contains(normalizedDir)
+                || (normalizedDir.startsWith("/") && normalizedDir.indexOf('/', 1) < 0)) {
+            throw new IllegalArgumentException("Нельзя устанавливать агент напрямую в системный каталог: " + dir);
         }
         if (t.name() == null || !t.name().matches("^[A-Za-z0-9_.-]{1,100}$")) {
             throw new IllegalArgumentException("Имя генератора: латиница, цифры и _ . -");
         }
         try {
+            if (t.serverUrl() == null) {
+                throw new IllegalArgumentException();
+            }
             URI u = URI.create(t.serverUrl());
-            if (u.getHost() == null || u.getPort() < 1 || !(u.getScheme().equals("ws") || u.getScheme().equals("wss"))) {
+            if (u.getHost() == null || u.getPort() < 1 || u.getScheme() == null
+                    || !(u.getScheme().equals("ws") || u.getScheme().equals("wss"))) {
                 throw new IllegalArgumentException();
             }
             if (!SAFE_HOST.matcher(u.getHost()).matches()) {
@@ -176,13 +194,20 @@ public class DeployEngine {
 
     private SshConnection connect(Target t, DeployLog log) {
         ResolvedCredential cred = credentials.resolve(t.credentialId());
-        log.masker().add(cred.secret(), cred.passphrase(), cred.sudoPassword());
-        if (cred.jump() != null) {
-            log.masker().add(cred.jump().secret(), cred.jump().passphrase(), cred.jump().sudoPassword());
+        for (ResolvedCredential c = cred; c != null; c = c.jump()) {
+            log.masker().add(c.secret(), c.passphrase(), c.sudoPassword());
         }
         log.line("Подключение " + cred.username() + "@" + t.host() + ":" + t.port()
                 + (cred.jumpHost() != null ? " через jump-host " + cred.jumpHost() : ""));
         return connector.open(t.host(), t.port(), cred, CONNECT);
+    }
+
+    private static String resolveDir(Remote r, String dir) {
+        if (dir != null && dir.startsWith("~/")) {
+            String home = r.exec("echo \"$HOME\"", SHORT);
+            return home + dir.substring(1);
+        }
+        return dir;
     }
 
     // ================================================================== pre-flight
@@ -476,7 +501,7 @@ public class DeployEngine {
                     + "then rm -rf " + abs + "; else echo 'в " + d.replace("'", "") + " файлов агента нет - пропускаем'; fi", SHORT);
         }
         r.trySudo("rm -f " + Units.SYSCTL_FILE, SHORT);
-        r.tryExec("rm -rf /tmp/k6lab-stage-*", SHORT);
+        r.tryExec("find /tmp -maxdepth 1 -name 'k6lab-stage-*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true", SHORT);
     }
 
     public InstallResult install(DeployRun run, Target t, Long agentArtifactId, Long k6ArtifactId) throws Exception {
@@ -487,6 +512,7 @@ public class DeployEngine {
         PreflightReport rep = null;
         Remote remote = null;
         String dir = t.dir();
+        String stage = null;
         try {
             rep = preflight(run, t, true, c -> holder[0] = c, 600 * 1024);
             final PreflightReport report = rep;
@@ -504,7 +530,8 @@ public class DeployEngine {
             if (requiredKb(arts) > rep.diskFreeKb && rep.diskFreeKb >= 0) {
                 throw new SshFailure("Недостаточно места для установки: нужно " + requiredKb(arts) / 1024 + " МБ");
             }
-            String stage = target.system() ? "/tmp/k6lab-stage-" + run.id() : d + "/.stage";
+            stage = target.system() ? "/tmp/k6lab-stage-" + run.id() : d + "/.stage";
+            final String stg = stage;
 
             run.stage("Пользователь и каталоги", () -> {
                 if (target.system()) {
@@ -516,17 +543,17 @@ public class DeployEngine {
                 } else {
                     r.exec("mkdir -p " + q(d + "/bin") + " " + q(d + "/data") + " " + q(d + "/logs"), SHORT);
                 }
-                r.exec("rm -rf " + q(stage) + " && mkdir -p " + q(stage) + " && chmod 700 " + q(stage), SHORT);
+                r.exec("rm -rf " + q(stg) + " && mkdir -p " + q(stg) + " && chmod 700 " + q(stg), SHORT);
             });
 
             run.stage("Доставка артефактов (SFTP + проверка sha256)", () -> {
                 String own = ownerOpts(target);
                 String agentFile = r.nativeAgent ? "k6-agent" : "agent.jar";
-                if (deliver(r, arts.agent(), d + "/" + agentFile, stage + "/" + agentFile)) {
-                    r.priv("install -m " + (r.nativeAgent ? "755" : "644") + " " + own + q(stage + "/" + agentFile) + " " + q(d + "/" + agentFile), SHORT);
+                if (deliver(r, arts.agent(), d + "/" + agentFile, stg + "/" + agentFile)) {
+                    r.priv("install -m " + (r.nativeAgent ? "755" : "644") + " " + own + q(stg + "/" + agentFile) + " " + q(d + "/" + agentFile), SHORT);
                 }
-                if (deliver(r, arts.k6(), d + "/bin/k6", stage + "/k6")) {
-                    r.priv("install -m 755 " + own + q(stage + "/k6") + " " + q(d + "/bin/k6"), SHORT);
+                if (deliver(r, arts.k6(), d + "/bin/k6", stg + "/k6")) {
+                    r.priv("install -m 755 " + own + q(stg + "/k6") + " " + q(d + "/bin/k6"), SHORT);
                 }
                 if (arts.jre() == null) {
                     r.log.line("Агент - самостоятельный бинарь: JRE на генераторе не нужна");
@@ -535,9 +562,9 @@ public class DeployEngine {
                 if (marker.equals(arts.jre().getSha256()) && r.tryExec("test -x " + q(d + "/jre/bin/java"), SHORT).ok()) {
                     r.log.line("JRE: на хосте уже актуальная версия - пропускаем");
                 } else {
-                    upload(r, arts.jre(), stage + "/jre.tar.gz");
+                    upload(r, arts.jre(), stg + "/jre.tar.gz");
                     r.priv("rm -rf " + q(d + "/jre.new") + " && mkdir -p " + q(d + "/jre.new")
-                            + " && tar -xzf " + q(stage + "/jre.tar.gz") + " -C " + q(d + "/jre.new") + " --strip-components=1"
+                            + " && tar -xzf " + q(stg + "/jre.tar.gz") + " -C " + q(d + "/jre.new") + " --strip-components=1"
                             + " && echo " + arts.jre().getSha256() + " > " + q(d + "/jre.new/.archive-sha256")
                             + " && rm -rf " + q(d + "/jre") + " && mv " + q(d + "/jre.new") + " " + q(d + "/jre")
                             + (target.system() ? " && chown -R " + Units.SYSTEM_USER + ":" + Units.SYSTEM_USER + " " + q(d + "/jre") : ""),
@@ -553,19 +580,19 @@ public class DeployEngine {
             String oneTime = run.step("Конфигурация агента (одноразовый токен, права 600)", () -> {
                 String token = tokens.issueOneTime(target.generatorId());
                 log.masker().add(token);
-                r.ssh.uploadText(Units.agentConfig(target.serverUrl(), token, target.name(), d), stage + "/agent.properties");
-                r.priv("install -m 600 " + ownerOpts(target) + q(stage + "/agent.properties") + " " + q(d + "/agent.properties"), SHORT);
+                r.ssh.uploadText(Units.agentConfig(target.serverUrl(), token, target.name(), d), stg + "/agent.properties");
+                r.priv("install -m 600 " + ownerOpts(target) + q(stg + "/agent.properties") + " " + q(d + "/agent.properties"), SHORT);
                 return token;
             });
 
             serviceTouched = true;
             Instant since = Instant.now().minusSeconds(1);
-            run.stage("Запуск как сервиса (" + report.supervisor + ")", () -> startService(r, target, stage));
+            run.stage("Запуск как сервиса (" + report.supervisor + ")", () -> startService(r, target, stg));
 
             if (target.system() && target.tuneOs()) {
                 run.stage("Тюнинг ОС (sysctl)", () -> {
-                    r.ssh.uploadText(Units.sysctl(), stage + "/99-k6.conf");
-                    r.priv("install -m 644 " + q(stage + "/99-k6.conf") + " " + Units.SYSCTL_FILE, SHORT);
+                    r.ssh.uploadText(Units.sysctl(), stg + "/99-k6.conf");
+                    r.priv("install -m 644 " + q(stg + "/99-k6.conf") + " " + Units.SYSCTL_FILE, SHORT);
                     ExecResult sysctl = r.trySudo("sysctl -p " + Units.SYSCTL_FILE, SHORT);
                     if (!sysctl.ok()) {
                         log.line("⚠ sysctl применился не полностью (в контейнерах это нормально): "
@@ -578,7 +605,6 @@ public class DeployEngine {
 
             run.stage("Ожидание регистрации агента (до " + props.getDeploy().getRegistrationTimeout().toSeconds() + " с)",
                     () -> awaitRegistration(r, target, since));
-            r.exec("rm -rf " + q(stage), SHORT);
             log.line("Установка завершена: агент " + target.name() + " онлайн");
             return new InstallResult(report.supervisor, report.arch, report.osName, d);
         } catch (Exception e) {
@@ -588,6 +614,13 @@ public class DeployEngine {
             }
             throw e;
         } finally {
+            if (stage != null && remote != null) {
+                try {
+                    remote.tryExec("rm -rf " + q(stage), SHORT);
+                } catch (RuntimeException ignored) {
+                    // best-effort cleanup
+                }
+            }
             if (holder[0] != null) {
                 holder[0].close();
             }
@@ -672,6 +705,9 @@ public class DeployEngine {
         DeployLog log = run.log();
         log.line("⟲ Откат установки: останавливаем и удаляем сервис");
         try {
+            if (t.generatorId() != null) {
+                tokens.consumeOneTime(t.generatorId());
+            }
             Target target = new Target(t.generatorId(), t.name(), t.host(), t.port(), t.credentialId(), t.mode(), dir,
                     t.serverUrl(), t.tuneOs(), supervisor);
             if (supervisor != null) {
@@ -707,24 +743,46 @@ public class DeployEngine {
         }
         DeployLog log = run.log();
         SshConnection[] holder = new SshConnection[1];
+        Remote remote = null;
+        String stage = null;
         try {
             PreflightReport rep = preflight(run, t, true, c -> holder[0] = c, 600 * 1024);
-            Remote r = new Remote(holder[0], log, t);
-            Artifacts arts = pickArtifacts(rep.arch, agentArtifactId, k6ArtifactId, false);
-            final String agentFile = arts.agent().isNativeAgent() ? "k6-agent" : "agent.jar";
-            final String agentMode = arts.agent().isNativeAgent() ? "755" : "644";
+            remote = new Remote(holder[0], log, t);
+            final Remote r = remote;
+            Artifacts arts = pickArtifacts(rep.arch, agentArtifactId, k6ArtifactId, true);
+            r.nativeAgent = arts.agent().isNativeAgent();
+            final String agentFile = r.nativeAgent ? "k6-agent" : "agent.jar";
+            final String agentMode = r.nativeAgent ? "755" : "644";
             String d = t.dir().startsWith("~") ? rep.home + t.dir().substring(1) : t.dir();
             Target target = new Target(t.generatorId(), t.name(), t.host(), t.port(), t.credentialId(), t.mode(), d,
                     t.serverUrl(), t.tuneOs(), t.supervisor());
-            String stage = target.system() ? "/tmp/k6lab-stage-" + run.id() : d + "/.stage";
+            stage = target.system() ? "/tmp/k6lab-stage-" + run.id() : d + "/.stage";
+            final String stg = stage;
             String own = ownerOpts(target);
-            boolean[] changed = new boolean[2];
+            boolean[] changed = new boolean[3];
+            boolean wasNative = r.tryExec("test -f " + q(d + "/k6-agent"), SHORT).ok()
+                    && !r.tryExec("test -f " + q(d + "/agent.jar"), SHORT).ok();
+            boolean switchedType = r.tryExec("test -f " + q(d + "/k6-agent") + " || test -f " + q(d + "/agent.jar"), SHORT).ok()
+                    && (wasNative != r.nativeAgent);
 
             run.stage("Подготовка новых файлов", () -> {
-                r.exec("rm -rf " + q(stage) + " && mkdir -p " + q(stage) + " && chmod 700 " + q(stage), SHORT);
-                changed[0] = deliver(r, arts.agent(), d + "/" + agentFile, stage + "/" + agentFile);
-                changed[1] = deliver(r, arts.k6(), d + "/bin/k6", stage + "/k6");
-                if (!changed[0] && !changed[1]) {
+                r.exec("rm -rf " + q(stg) + " && mkdir -p " + q(stg) + " && chmod 700 " + q(stg), SHORT);
+                changed[0] = deliver(r, arts.agent(), d + "/" + agentFile, stg + "/" + agentFile);
+                changed[1] = deliver(r, arts.k6(), d + "/bin/k6", stg + "/k6");
+                if (arts.jre() != null) {
+                    String marker = r.tryExec("cat " + q(d + "/jre/.archive-sha256") + " 2>/dev/null", SHORT).stdoutTrim();
+                    if (!marker.equals(arts.jre().getSha256()) || !r.tryExec("test -x " + q(d + "/jre/bin/java"), SHORT).ok()) {
+                        upload(r, arts.jre(), stg + "/jre.tar.gz");
+                        r.priv("rm -rf " + q(d + "/jre.new") + " && mkdir -p " + q(d + "/jre.new")
+                                + " && tar -xzf " + q(stg + "/jre.tar.gz") + " -C " + q(d + "/jre.new") + " --strip-components=1"
+                                + " && echo " + arts.jre().getSha256() + " > " + q(d + "/jre.new/.archive-sha256")
+                                + " && rm -rf " + q(d + "/jre") + " && mv " + q(d + "/jre.new") + " " + q(d + "/jre")
+                                + (target.system() ? " && chown -R " + Units.SYSTEM_USER + ":" + Units.SYSTEM_USER + " " + q(d + "/jre") : ""),
+                                MEDIUM);
+                        changed[2] = true;
+                    }
+                }
+                if (!changed[0] && !changed[1] && !changed[2] && !switchedType) {
                     log.line("Версии на хосте уже совпадают с выбранными - заменять нечего");
                 }
             });
@@ -737,13 +795,17 @@ public class DeployEngine {
                     replaced[0] = true;
                     if (changed[0]) {
                         r.priv("cp -a " + q(d + "/" + agentFile) + " " + q(d + "/" + agentFile + ".bak") + " 2>/dev/null; "
-                                + "install -m " + agentMode + " " + own + q(stage + "/" + agentFile) + " " + q(d + "/" + agentFile), SHORT);
+                                + "install -m " + agentMode + " " + own + q(stg + "/" + agentFile) + " " + q(d + "/" + agentFile), SHORT);
                     }
                     if (changed[1]) {
                         r.priv("cp -a " + q(d + "/bin/k6") + " " + q(d + "/bin/k6.bak") + " 2>/dev/null; "
-                                + "install -m 755 " + own + q(stage + "/k6") + " " + q(d + "/bin/k6"), SHORT);
+                                + "install -m 755 " + own + q(stg + "/k6") + " " + q(d + "/bin/k6"), SHORT);
                     }
-                    startOnly(r, target);
+                    if (switchedType || changed[0]) {
+                        startService(r, target, stg);
+                    } else {
+                        startOnly(r, target);
+                    }
                 });
                 run.stage("Ожидание переподключения агента", () -> awaitRegistration(r, target, since));
             } catch (Exception e) {
@@ -757,7 +819,12 @@ public class DeployEngine {
                         if (changed[1]) {
                             r.trySudo("[ -f " + q(d + "/bin/k6.bak") + " ] && cp -a " + q(d + "/bin/k6.bak") + " " + q(d + "/bin/k6"), SHORT);
                         }
-                        startOnly(r, target);
+                        if (switchedType) {
+                            r.nativeAgent = wasNative;
+                            startService(r, target, stg);
+                        } else {
+                            startOnly(r, target);
+                        }
                         log.line("Предыдущая версия запущена");
                     } catch (Exception re) {
                         log.line("Откат не удался: " + re.getMessage());
@@ -766,9 +833,15 @@ public class DeployEngine {
                 }
                 throw e;
             }
-            r.tryExec("rm -rf " + q(stage), SHORT);
             log.line("Обновление завершено");
         } finally {
+            if (stage != null && remote != null) {
+                try {
+                    remote.tryExec("rm -rf " + q(stage), SHORT);
+                } catch (RuntimeException ignored) {
+                    // best-effort cleanup
+                }
+            }
             if (holder[0] != null) {
                 holder[0].close();
             }
@@ -786,15 +859,18 @@ public class DeployEngine {
         try {
             holder[0] = run.step("Подключение по SSH, проверка ключа хоста", () -> connect(t, run.log()));
             Remote r = new Remote(holder[0], run.log(), t);
+            String d = resolveDir(r, t.dir());
+            Target target = new Target(t.generatorId(), t.name(), t.host(), t.port(), t.credentialId(), t.mode(),
+                    d, t.serverUrl(), t.tuneOs(), t.supervisor());
             Instant since = Instant.now().minusSeconds(1);
             run.stage("Перезапуск сервиса", () -> {
-                switch (t.supervisor()) {
+                switch (target.supervisor()) {
                     case SYSTEMD -> r.priv("systemctl restart k6-agent", MEDIUM);
                     case SYSTEMD_USER -> r.exec("export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user restart k6-agent", MEDIUM);
-                    case CRON -> r.exec(q(t.dir() + "/bin/agent-ctl.sh") + " restart", MEDIUM);
+                    case CRON -> r.exec(q(d + "/bin/agent-ctl.sh") + " restart", MEDIUM);
                 }
             });
-            run.stage("Ожидание переподключения агента", () -> awaitRegistration(r, t, since));
+            run.stage("Ожидание переподключения агента", () -> awaitRegistration(r, target, since));
         } finally {
             if (holder[0] != null) {
                 holder[0].close();
@@ -808,14 +884,14 @@ public class DeployEngine {
         try {
             holder[0] = run.step("Подключение по SSH, проверка ключа хоста", () -> connect(t, run.log()));
             Remote r = new Remote(holder[0], run.log(), t);
+            String d = resolveDir(r, t.dir());
             Generator.Supervisor sup = t.supervisor() != null ? t.supervisor()
                     : (t.system() ? Generator.Supervisor.SYSTEMD : Generator.Supervisor.CRON);
             Target target = new Target(t.generatorId(), t.name(), t.host(), t.port(), t.credentialId(), t.mode(),
-                    t.dir(), t.serverUrl(), t.tuneOs(), sup);
+                    d, t.serverUrl(), t.tuneOs(), sup);
             run.stage("Остановка и удаление сервиса", () -> disableService(r, target));
             run.stage("Удаление файлов агента", () -> {
-                String dir = target.dir();
-                String abs = dir.startsWith("~") ? "\"$HOME" + dir.substring(1) + "\"" : q(dir);
+                String abs = q(d);
                 // защита от катастрофы: удаляем только каталог, где реально лежит агент
                 r.priv("[ -f " + abs + "/agent.jar ] || [ -f " + abs + "/k6-agent ] || [ -f " + abs + "/agent.properties ] || "
                         + "{ echo 'в каталоге нет файлов агента - не удаляем'; exit 0; }; rm -rf " + abs, SHORT);
@@ -840,8 +916,8 @@ public class DeployEngine {
         int n = Math.max(1, Math.min(lines, 2000));
         try (SshConnection ssh = connect(t, quiet)) {
             Remote r = new Remote(ssh, quiet, t);
-            String dir = t.dir().startsWith("~") ? "\"$HOME" + t.dir().substring(1) + "\"" : q(t.dir());
-            String file = dir + "/logs/agent.log";
+            String d = resolveDir(r, t.dir());
+            String file = q(d + "/logs/agent.log");
             String tail = "tail -n " + n + " " + file + " 2>&1";
             ExecResult res = r.tryExec(tail, SHORT);
             if (res.ok()) {

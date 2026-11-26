@@ -73,6 +73,8 @@ public class LoadForm {
         private int consecutive = 4;
         /** Окно, по которому считаются показатели, секунд. */
         private int windowSec = 60;
+        /** При поиске максимума (≥ 2 ступеней): после срабатывания условий автостопа пройти ещё 1 ступень и остановиться. */
+        private boolean extraStepOnMaxSearch = true;
         /** Кастомные проверки метрик из Prometheus наравне с SLA и ошибками (например, утилизация CPU сервера <= 80%). */
         private List<CustomCheckForm> customChecks = new ArrayList<>();
 
@@ -86,7 +88,7 @@ public class LoadForm {
                 }
             }
             return LoadCriteria.stopToMap(new ru.k6lab.core.analysis.StopCriteriaEvaluator.Config(percentileEnabled, slaMultiplier, errorsEnabled,
-                    rateEnabled, minRatePct, droppedEnabled, maxDroppedPct, consecutive, windowSec), checks);
+                    rateEnabled, minRatePct, droppedEnabled, maxDroppedPct, consecutive, windowSec, extraStepOnMaxSearch), checks);
         }
 
         public static StopForm of(Map<String, Object> m) {
@@ -101,6 +103,7 @@ public class LoadForm {
             s.slaMultiplier = c.slaMultiplier();
             s.consecutive = m == null || !m.containsKey("consecutive") ? 4 : c.consecutive();
             s.windowSec = c.windowSec();
+            s.extraStepOnMaxSearch = c.extraStepOnMaxSearch();
             List<CustomCheckForm> checks = new ArrayList<>();
             for (var cc : LoadCriteria.customChecks(m)) {
                 checks.add(CustomCheckForm.of(cc));

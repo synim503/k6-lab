@@ -1189,7 +1189,8 @@
                                     return 'Время: ' + durText(items[0].parsed.x * 60);
                                 },
                                 label: function (item) {
-                                    return ' ' + item.dataset.label + ': ' + fmtNum(item.parsed.y) + (effectiveMode === 'rate' ? ' оп/с' : ' VU');
+                                    var m = item.chart && item.chart.$mode ? item.chart.$mode : 'rate';
+                                    return ' ' + item.dataset.label + ': ' + fmtNum(item.parsed.y) + (m === 'rate' ? ' оп/с' : ' VU');
                                 }
                             }
                         }
@@ -1219,6 +1220,7 @@
             liveChart.options.scales.y.stacked = chartStacked;
             liveChart.options.scales.y.title.text = yTitle;
         }
+        liveChart.$mode = effectiveMode;
         liveChart.$warmupMin = maxWarmSec / 60.0;
         liveChart.update('none');
     }
@@ -1854,7 +1856,10 @@
     var impFile = document.getElementById('ld-import-file');
     var impLbl = document.getElementById('ld-import-dz-lbl');
     if (impDz && impFile) {
-        impDz.addEventListener('click', function () { impFile.click(); });
+        impDz.addEventListener('click', function (e) {
+            if (e.target === impFile || (e.target && e.target.closest && e.target.closest('input[type="file"]'))) { return; }
+            impFile.click();
+        });
         impDz.addEventListener('dragover', function (e) { e.preventDefault(); impDz.classList.add('drag'); });
         impDz.addEventListener('dragleave', function () { impDz.classList.remove('drag'); });
         impDz.addEventListener('drop', function (e) {
@@ -1928,6 +1933,17 @@
         form.addEventListener('input', onFormMutate);
         form.addEventListener('change', onFormMutate);
         form.addEventListener('submit', function (ev) {
+            var submitter = ev.submitter || null;
+            var isProfSave = submitter && (submitter.id === 'profile-save' || submitter.dataset.saveProfile === 'true');
+            if (isProfSave) {
+                var nameEl = document.getElementById('profile-name');
+                if (!nameEl || !nameEl.value.trim()) {
+                    ev.preventDefault();
+                    if (nameEl) { nameEl.focus(); nameEl.classList.add('is-invalid'); }
+                    return;
+                }
+                nameEl.classList.remove('is-invalid');
+            }
             var bad = Array.prototype.slice.call(body.querySelectorAll('.op-calc.is-invalid')).find(function (el) {
                 return !el.closest('.d-none');
             });
@@ -1970,51 +1986,69 @@
     if (form) { form.classList.remove('is-dirty'); }
     if (form && form.dataset.fromProfile) { markDirty(); }
 
-    var pick = document.getElementById('profile-pick');
-    if (pick) {
-        var openProfile = function () {
-            if (dirty && !confirm('Несохранённые изменения формы будут заменены. Продолжить?')) {
-                pick.value = pick.dataset.current || '';
+    // Подтверждение ручной разовой отправки выбранных разделов в остальные профили
+    var applyBaseBtn = document.getElementById('ld-apply-base-btn');
+    if (applyBaseBtn && form) {
+        applyBaseBtn.addEventListener('click', function (e) {
+            if (applyBaseBtn.dataset.k6Confirmed === '1') {
+                delete applyBaseBtn.dataset.k6Confirmed;
                 return;
             }
-            dirty = false;
-            location.href = pick.value
-                ? pick.dataset.openUrl + '?profile=' + encodeURIComponent(pick.value)
-                : pick.dataset.openUrl;
-        };
-        pick.dataset.current = pick.value;
-        pick.addEventListener('change', openProfile);
-        document.getElementById('profile-delete').addEventListener('click', function (e) {
-            var opt = pick.options[pick.selectedIndex];
-            if (!pick.value) { e.preventDefault(); return; }
-            if (!confirm('Удалить профиль «' + opt.textContent + '»?')) { e.preventDefault(); return; }
-            document.getElementById('profile-id').value = pick.value;
+            var checkedLabels = [];
+            document.querySelectorAll('#ld-base-profile-box .ld-push-opt:checked').forEach(function (cb) {
+                checkedLabels.push(cb.dataset.label || cb.name);
+            });
+            e.preventDefault();
+            if (checkedLabels.length === 0) {
+                window.k6Confirm({
+                    title: 'Не выбраны разделы',
+                    message: 'Отметьте хотя бы один раздел, который нужно отправить в остальные профили.',
+                    confirmText: 'Понятно',
+                    variant: 'warning'
+                });
+                return;
+            }
+            var pCnt = applyBaseBtn.dataset.profCount || '';
+            window.k6Confirm({
+                title: 'Отправить данные в остальные профили?',
+                message: 'Базовая нагрузка будет сохранена, а выбранные разделы разово отправятся во все профили (' + pCnt + '). Постоянной привязки не создаётся.',
+                items: checkedLabels,
+                confirmText: 'Отправить (' + pCnt + ')',
+                variant: 'primary'
+            }).then(function (ok) {
+                if (!ok) { return; }
+                applyBaseBtn.dataset.k6Confirmed = '1';
+                if (form.requestSubmit) {
+                    form.requestSubmit(applyBaseBtn);
+                } else {
+                    applyBaseBtn.click();
+                }
+            });
         });
-        var onProfileSaveClick = function (e) {
-            var name = document.getElementById('profile-name');
-            if (!name.value.trim()) { e.preventDefault(); name.focus(); name.classList.add('is-invalid'); return; }
-            name.classList.remove('is-invalid');
-            if (envTablePane && !envTablePane.classList.contains('d-none')) { syncEnvToTextarea(); }
-            syncBaseWarmupHidden();
-            submitting = true;
-            body.querySelectorAll('.op-row').forEach(sync);
-        };
-        document.getElementById('profile-save').addEventListener('click', onProfileSaveClick);
-        var bottomProfSave = document.querySelector('#ld-primary-save[data-save-profile="true"]');
-        if (bottomProfSave) { bottomProfSave.addEventListener('click', onProfileSaveClick); }
     }
 
-    // ==================== Profile Manager Cards Gallery ====================
-    var profMgrBtn = document.getElementById('ld-prof-mgr-btn');
-    var profWrap = document.getElementById('ld-prof-gallery-wrap');
+    // ==================== Unified Profile Picker & Bulk Delete Modal ====================
+    var profModalEl = document.getElementById('ld-profiles-modal');
     var profGallery = document.getElementById('ld-prof-gallery');
     var profInitEl = document.getElementById('ld-prof-init');
-    if (profMgrBtn && profWrap && profGallery && profInitEl) {
+    if (profModalEl && profGallery && profInitEl) {
         var profList = [];
         try { profList = JSON.parse(profInitEl.textContent || '[]'); } catch (e) { profList = []; }
-        var loadUrl = profWrap.dataset.loadUrl;
-        var runUrl = profWrap.dataset.runUrl;
-        var loadedId = profWrap.dataset.loadedId ? Number(profWrap.dataset.loadedId) : null;
+        var loadUrl = profModalEl.dataset.openUrl;
+        var runUrl = profModalEl.dataset.runUrl;
+        var bulkDelUrl = profModalEl.dataset.bulkDeleteUrl;
+        var loadedId = profModalEl.dataset.loadedId ? Number(profModalEl.dataset.loadedId) : null;
+        var searchIn = document.getElementById('ld-prof-search');
+        var selectAllCb = document.getElementById('ld-prof-select-all');
+        var filterCntEl = document.getElementById('ld-prof-filter-count');
+        var bulkBar = document.getElementById('ld-prof-bulkbar');
+        var bulkCntEl = document.getElementById('ld-prof-bulk-cnt');
+        var bulkDelBtn = document.getElementById('ld-prof-bulk-del');
+        var bulkClearBtn = document.getElementById('ld-prof-bulk-clear');
+        var emptyFilterEl = document.getElementById('ld-prof-empty-filter');
+        var baseRow = document.getElementById('ld-prof-base-row');
+        var selectedIds = new Set();
+        var lastClickedId = null;
 
         function summarizeProfile(p) {
             var d = p.data || {};
@@ -2065,24 +2099,85 @@
             var meta = document.querySelector('meta[name="_csrf"]');
             if (meta) { fields._csrf = meta.content; }
             Object.keys(fields).forEach(function (k) {
-                var i = document.createElement('input');
-                i.type = 'hidden'; i.name = k; i.value = fields[k];
-                f.appendChild(i);
+                var val = fields[k];
+                if (Array.isArray(val)) {
+                    val.forEach(function (item) {
+                        var i = document.createElement('input');
+                        i.type = 'hidden'; i.name = k; i.value = item;
+                        f.appendChild(i);
+                    });
+                } else if (val != null) {
+                    var i = document.createElement('input');
+                    i.type = 'hidden'; i.name = k; i.value = val;
+                    f.appendChild(i);
+                }
             });
             document.body.appendChild(f);
             submitting = true;
             f.submit();
         }
 
+        function visibleProfiles() {
+            var q = searchIn ? searchIn.value.trim().toLowerCase() : '';
+            if (!q) { return profList; }
+            return profList.filter(function (p) {
+                return (p.name || '').toLowerCase().indexOf(q) >= 0;
+            });
+        }
+
+        function syncSelectionUi() {
+            var vis = visibleProfiles();
+            var visIds = vis.map(function (p) { return p.id; });
+            if (bulkBar && bulkCntEl) {
+                bulkBar.classList.toggle('d-none', selectedIds.size === 0);
+                bulkCntEl.textContent = String(selectedIds.size);
+            }
+            if (selectAllCb) {
+                if (visIds.length === 0) {
+                    selectAllCb.checked = false;
+                    selectAllCb.indeterminate = false;
+                    selectAllCb.disabled = true;
+                } else {
+                    var allVis = visIds.every(function (id) { return selectedIds.has(id); });
+                    var someVis = visIds.some(function (id) { return selectedIds.has(id); });
+                    selectAllCb.checked = allVis;
+                    selectAllCb.indeterminate = !allVis && someVis;
+                    selectAllCb.disabled = false;
+                }
+            }
+            profGallery.querySelectorAll('.ld-prof-card').forEach(function (card) {
+                var id = Number(card.dataset.pid);
+                var checked = selectedIds.has(id);
+                card.classList.toggle('is-checked', checked);
+                var cb = card.querySelector('.ld-prof-cb');
+                if (cb) { cb.checked = checked; }
+            });
+        }
+
         function renderProfiles() {
-            profGallery.innerHTML = profList.map(function (p) {
+            var vis = visibleProfiles();
+            if (filterCntEl) {
+                filterCntEl.textContent = vis.length === profList.length
+                    ? ('Всего: ' + profList.length)
+                    : ('Показано ' + vis.length + ' из ' + profList.length);
+            }
+            if (emptyFilterEl) {
+                emptyFilterEl.classList.toggle('d-none', profList.length === 0 || vis.length > 0);
+            }
+            profGallery.innerHTML = vis.map(function (p) {
                 var s = summarizeProfile(p);
                 var isCur = loadedId === p.id;
+                var isChk = selectedIds.has(p.id);
                 var upd = p.updatedAt ? new Date(p.updatedAt).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '';
-                return '<div class="ld-prof-card' + (isCur ? ' active' : '') + '" data-pid="' + p.id + '" data-pname="' + esc(p.name) + '">' +
+                return '<div class="ld-prof-card' + (isCur ? ' active' : '') + (isChk ? ' is-checked' : '') + '" data-pid="' + p.id + '" data-pname="' + esc(p.name) + '">' +
                     '<div class="ld-prof-head">' +
-                        '<div class="ld-prof-name">' + esc(p.name) + '</div>' +
-                        (isCur ? '<span class="badge text-bg-primary">Открыт</span>' : '') +
+                        '<div class="d-flex align-items-start gap-2 min-w-0">' +
+                            '<label class="ld-prof-check-wrap" title="Отметить для массового удаления">' +
+                                '<input class="form-check-input m-0 ld-prof-cb" type="checkbox"' + (isChk ? ' checked' : '') + ' aria-label="Выбрать профиль ' + esc(p.name) + '">' +
+                            '</label>' +
+                            '<button type="button" class="ld-prof-name-btn ld-p-open">' + esc(p.name) + '</button>' +
+                        '</div>' +
+                        (isCur ? '<span class="badge text-bg-primary flex-shrink-0">Открыт</span>' : '') +
                     '</div>' +
                     '<div class="ld-prof-badges">' +
                         '<span class="ld-prof-badge"><i class="bi bi-layers text-primary"></i>' + s.ops + ' оп.</span>' +
@@ -2103,31 +2198,136 @@
                     '</div>' +
                 '</div>';
             }).join('');
+            syncSelectionUi();
+        }
+
+        function navigateWithDirtyCheck(targetUrl, label) {
+            if (!dirty) {
+                location.href = targetUrl;
+                return;
+            }
+            window.k6Confirm({
+                title: 'Есть несохранённые изменения',
+                message: 'Несохранённые изменения формы будут потеряны при переходе к ' + label + '. Продолжить?',
+                confirmText: 'Перейти без сохранения',
+                variant: 'warning'
+            }).then(function (ok) {
+                if (!ok) { return; }
+                dirty = false;
+                location.href = targetUrl;
+            });
         }
 
         renderProfiles();
-        profMgrBtn.addEventListener('click', function () {
-            var open = profWrap.classList.toggle('d-none') === false;
-            profMgrBtn.classList.toggle('active', open);
+        if (searchIn) {
+            searchIn.addEventListener('input', renderProfiles);
+        }
+        profModalEl.addEventListener('shown.bs.modal', function () {
+            if (searchIn) { searchIn.focus(); }
         });
+        if (baseRow) {
+            var openBase = function () {
+                if (loadedId == null) {
+                    bootstrap.Modal.getOrCreateInstance(profModalEl).hide();
+                    return;
+                }
+                navigateWithDirtyCheck(loadUrl, 'базовому профилю');
+            };
+            baseRow.addEventListener('click', openBase);
+            baseRow.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBase(); }
+            });
+        }
+        if (selectAllCb) {
+            selectAllCb.addEventListener('change', function () {
+                var vis = visibleProfiles();
+                vis.forEach(function (p) {
+                    if (selectAllCb.checked) { selectedIds.add(p.id); }
+                    else { selectedIds.delete(p.id); }
+                });
+                syncSelectionUi();
+            });
+        }
+        if (bulkClearBtn) {
+            bulkClearBtn.addEventListener('click', function () {
+                selectedIds.clear();
+                syncSelectionUi();
+            });
+        }
+        if (bulkDelBtn) {
+            bulkDelBtn.addEventListener('click', function () {
+                var ids = Array.from(selectedIds);
+                if (ids.length === 0) { return; }
+                var names = profList.filter(function (p) { return selectedIds.has(p.id); }).map(function (p) { return p.name; });
+                window.k6Confirm({
+                    title: 'Удалить выбранные профили?',
+                    message: 'Выбранные профили (' + ids.length + ' шт.) будут удалены безвозвратно.',
+                    items: names,
+                    confirmText: 'Удалить (' + ids.length + ')',
+                    variant: 'danger'
+                }).then(function (ok) {
+                    if (!ok) { return; }
+                    var fields = {ids: ids.map(String)};
+                    if (loadedId != null) { fields.currentProfile = String(loadedId); }
+                    postForm(bulkDelUrl, fields);
+                });
+            });
+        }
+
         profGallery.addEventListener('click', function (e) {
             var card = e.target.closest('.ld-prof-card');
             if (!card) { return; }
-            var pid = card.dataset.pid, pname = card.dataset.pname;
+            var pid = Number(card.dataset.pid), pname = card.dataset.pname;
+            var cb = e.target.closest('.ld-prof-cb');
+            if (cb) {
+                var checked = cb.checked;
+                if (e.shiftKey && lastClickedId != null) {
+                    var vis = visibleProfiles();
+                    var i1 = vis.findIndex(function (x) { return x.id === lastClickedId; });
+                    var i2 = vis.findIndex(function (x) { return x.id === pid; });
+                    if (i1 >= 0 && i2 >= 0) {
+                        var from = Math.min(i1, i2), to = Math.max(i1, i2);
+                        for (var k = from; k <= to; k++) {
+                            if (checked) { selectedIds.add(vis[k].id); }
+                            else { selectedIds.delete(vis[k].id); }
+                        }
+                    }
+                } else {
+                    if (checked) { selectedIds.add(pid); } else { selectedIds.delete(pid); }
+                }
+                lastClickedId = pid;
+                syncSelectionUi();
+                return;
+            }
             if (e.target.closest('.ld-p-open')) {
-                if (dirty && !confirm('Несохранённые изменения формы будут заменены профилем «' + pname + '». Продолжить?')) { return; }
-                dirty = false;
-                location.href = loadUrl + '?profile=' + encodeURIComponent(pid);
+                if (loadedId === pid) {
+                    bootstrap.Modal.getOrCreateInstance(profModalEl).hide();
+                    return;
+                }
+                navigateWithDirtyCheck(loadUrl + '?profile=' + encodeURIComponent(pid), 'профилю «' + pname + '»');
             } else if (e.target.closest('.ld-p-dup')) {
                 postForm(loadUrl + '/profile/' + pid + '/duplicate', {});
             } else if (e.target.closest('.ld-p-ren')) {
-                var next = prompt('Новое название профиля:', pname);
-                if (next != null && next.trim() && next.trim() !== pname) {
-                    postForm(loadUrl + '/profile/' + pid + '/rename', {name: next.trim()});
-                }
+                window.k6Prompt({
+                    title: 'Переименовать профиль',
+                    label: 'Новое название профиля:',
+                    value: pname,
+                    confirmText: 'Переименовать'
+                }).then(function (next) {
+                    if (next != null && next.trim() && next.trim() !== pname) {
+                        postForm(loadUrl + '/profile/' + pid + '/rename', {name: next.trim()});
+                    }
+                });
             } else if (e.target.closest('.ld-p-del')) {
-                if (!confirm('Удалить профиль «' + pname + '»?')) { return; }
-                postForm(loadUrl + '/profile/delete', {profile: pid});
+                window.k6Confirm({
+                    title: 'Удалить профиль?',
+                    message: 'Профиль «' + pname + '» будет удалён безвозвратно.',
+                    confirmText: 'Удалить',
+                    variant: 'danger'
+                }).then(function (ok) {
+                    if (!ok) { return; }
+                    postForm(loadUrl + '/profile/delete', {profile: String(pid)});
+                });
             }
         });
     }

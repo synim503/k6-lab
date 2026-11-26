@@ -14,12 +14,13 @@ import (
 // Journal - дисковый журнал событий (JSON на строку): события удаляются после ACK сервера. seq монотонный и переживает
 // рестарт. При переполнении сначала вытесняются LOG_BATCH, затем K6_STATUS; остальные события не вытесняются никогда.
 type Journal struct {
-	mu       sync.Mutex
-	file     string
-	meta     string
-	maxBytes int64
-	lastSeq  int64
-	acked    int64
+	mu             sync.Mutex
+	file           string
+	meta           string
+	maxBytes       int64
+	lastSeq        int64
+	acked          int64
+	lastCompactAck int64
 }
 
 type journalLine struct {
@@ -54,8 +55,35 @@ func (j *Journal) loadMeta() {
 	}
 }
 
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
 func (j *Journal) saveMeta() {
-	if err := os.WriteFile(j.meta, []byte(fmt.Sprintf("%d,%d", j.lastSeq, j.acked)), 0o644); err != nil {
+	if err := writeFileAtomic(j.meta, []byte(fmt.Sprintf("%d,%d", j.lastSeq, j.acked)), 0o644); err != nil {
 		logf("Не удалось записать meta журнала: %v", err)
 	}
 }
@@ -67,6 +95,7 @@ func (j *Journal) Append(factory func(seq int64) any) []byte {
 	j.lastSeq++
 	raw, err := json.Marshal(factory(j.lastSeq))
 	if err != nil {
+		j.lastSeq--
 		logf("Не удалось сериализовать событие: %v", err)
 		return nil
 	}
@@ -75,7 +104,12 @@ func (j *Journal) Append(factory func(seq int64) any) []byte {
 		logf("Не удалось записать событие в журнал: %v", err)
 		return raw
 	}
-	_, _ = f.Write(append(append([]byte{}, raw...), '\n'))
+	line := append(append([]byte{}, raw...), '\n')
+	if _, werr := f.Write(line); werr != nil {
+		logf("Ошибка записи события в журнал (возможно, переполнен диск): %v", werr)
+		f.Close()
+		return raw
+	}
 	st, _ := f.Stat()
 	f.Close()
 	j.saveMeta()
@@ -111,7 +145,8 @@ func (j *Journal) Ack(upTo int64) {
 	j.saveMeta()
 	if j.acked >= j.lastSeq {
 		_ = os.Remove(j.file)
-	} else if st, err := os.Stat(j.file); err == nil && st.Size() > 1<<20 {
+		j.lastCompactAck = j.acked
+	} else if st, err := os.Stat(j.file); err == nil && st.Size() > 1<<20 && (j.acked-j.lastCompactAck >= 256 || st.Size() > j.maxBytes/2) {
 		j.compact()
 	}
 }
@@ -139,7 +174,11 @@ func (j *Journal) compact() {
 		sb.Write(l.raw)
 		sb.WriteByte('\n')
 	}
-	_ = os.WriteFile(j.file, []byte(sb.String()), 0o644)
+	if err := writeFileAtomic(j.file, []byte(sb.String()), 0o644); err != nil {
+		logf("Не удалось сжать журнал: %v", err)
+		return
+	}
+	j.lastCompactAck = j.acked
 }
 
 func filterOut(in []journalLine, typ string) []journalLine {

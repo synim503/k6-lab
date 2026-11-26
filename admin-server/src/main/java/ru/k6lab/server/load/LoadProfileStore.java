@@ -47,18 +47,34 @@ public class LoadProfileStore {
     }
 
     public Saved save(long scriptId, String name, String data, String user) {
-        List<Long> existing = jdbc.queryForList("select id from load_profile where script_id = ? and name = ?", Long.class, scriptId, name);
-        if (!existing.isEmpty()) {
-            jdbc.update("update load_profile set data = ?, updated_at = now(), updated_by = ? where id = ?", data, user, existing.get(0));
-            return new Saved(existing.get(0), true);
-        }
-        long id = jdbc.queryForObject("insert into load_profile (script_id, name, data, created_by, updated_by) values (?, ?, ?, ?, ?) returning id",
-                Long.class, scriptId, name, data, user, user);
-        return new Saved(id, false);
+        return jdbc.queryForObject(
+                "insert into load_profile (script_id, name, data, created_by, updated_by) values (?, ?, ?, ?, ?) "
+                        + "on conflict (script_id, name) do update set data = excluded.data, updated_at = now(), updated_by = excluded.updated_by "
+                        + "returning id, (xmax <> 0) as updated",
+                (rs, n) -> new Saved(rs.getLong("id"), rs.getBoolean("updated")),
+                scriptId, name, data, user, user);
     }
 
     public boolean delete(long scriptId, long id) {
         return jdbc.update("delete from load_profile where script_id = ? and id = ?", scriptId, id) == 1;
+    }
+
+    /** Массовое удаление профилей нагрузки одного скрипта за один запрос. */
+    public int deleteMany(long scriptId, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return 0;
+        }
+        List<Long> clean = ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (clean.isEmpty()) {
+            return 0;
+        }
+        String placeholders = String.join(",", java.util.Collections.nCopies(clean.size(), "?"));
+        Object[] args = new Object[clean.size() + 1];
+        args[0] = scriptId;
+        for (int i = 0; i < clean.size(); i++) {
+            args[i + 1] = clean.get(i);
+        }
+        return jdbc.update("delete from load_profile where script_id = ? and id in (" + placeholders + ")", args);
     }
 
     /** Переименовывает профиль нагрузки (с проверкой уникальности имени в пределах скрипта). */

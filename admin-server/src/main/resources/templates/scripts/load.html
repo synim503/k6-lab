@@ -21,24 +21,17 @@
     <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post"
           th:attr="data-from-profile=${formDirty != null ? 'true' : null}">
 
-        <!-- Верхняя панель профилей нагрузки -->
+        <!-- Верхняя панель профилей нагрузки (единый переключатель + быстрое сохранение) -->
         <div class="card ld-topbar" id="profiles-box">
             <div class="ld-profile-grp">
-                <span class="fw-semibold small text-nowrap"><i class="bi bi-collection me-1 text-primary"></i>Профиль:</span>
-                <select class="form-select form-select-sm" id="profile-pick" aria-label="Профиль нагрузки" form="no-form"
-                        th:attr="data-open-url=@{/scripts/{id}/load(id=${script.id})}">
-                    <option value="" th:text="${profiles.isEmpty()} ? 'Базовый профиль скрипта (профилей пока нет)' : '★ Базовый профиль скрипта (общие параметры)'"></option>
-                    <option th:each="p : ${profiles}" th:value="${p.id}" th:text="${p.name}"
-                            th:selected="${loadedProfileId != null and loadedProfileId == p.id}"></option>
-                </select>
-                <a class="btn btn-sm btn-outline-primary text-nowrap" th:if="${loadedProfileId != null}"
-                   th:href="@{/scripts/{id}/load(id=${script.id})}" title="Вернуться к редактированию базового профиля (общих параметров для всех профилей)">
-                    <i class="bi bi-arrow-left me-1"></i>К базовому профилю
-                </a>
-                <button type="submit" class="btn btn-sm btn-outline-danger" id="profile-delete"
-                        th:disabled="${profiles.isEmpty()}" formnovalidate
-                        th:formaction="@{/scripts/{id}/load/profile/delete(id=${script.id})}" title="Удалить выбранный профиль">
-                    <i class="bi bi-trash"></i>
+                <button type="button" class="ld-prof-trigger" id="ld-prof-switcher-btn"
+                        data-bs-toggle="modal" data-bs-target="#ld-profiles-modal"
+                        title="Выбрать, переименовать, дублировать или массово удалить профили">
+                    <i class="bi bi-collection text-primary"></i>
+                    <span class="ld-pt-name"
+                          th:text="${loadedProfile != null} ? ('Профиль: ' + ${loadedProfile}) : '★ Базовый профиль скрипта'">★ Базовый профиль скрипта</span>
+                    <span class="badge text-bg-primary rounded-pill" th:text="${profiles.size()}" th:title="'Всего сохранённых профилей: ' + ${profiles.size()}">0</span>
+                    <i class="bi bi-chevron-down small text-muted ms-1"></i>
                 </button>
                 <span class="vr mx-1 d-none d-md-inline-block"></span>
                 <div class="input-group input-group-sm" style="max-width:340px">
@@ -51,10 +44,6 @@
                 </div>
             </div>
             <div class="d-flex align-items-center gap-2 ms-auto">
-                <button type="button" class="btn btn-sm btn-outline-primary" id="ld-prof-mgr-btn"
-                        th:if="${!profiles.isEmpty()}" title="Показать карточки всех профилей с действиями">
-                    <i class="bi bi-grid me-1"></i>Менеджер (<span th:text="${profiles.size()}"></span>)
-                </button>
                 <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/load/profiles.json(id=${script.id})}"
                    title="Скачать все профили в JSON"><i class="bi bi-download me-1"></i>Экспорт</a>
                 <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ld-import-modal">
@@ -64,100 +53,63 @@
             <input type="hidden" name="profile" id="profile-id">
         </div>
 
-        <!-- Базовый профиль скрипта: общие параметры, применяемые ко всем профилям (40 профилей) -->
-        <div class="card mb-3 border-primary-subtle bg-light-subtle" id="ld-base-profile-box" th:if="${!profiles.isEmpty()}">
+        <!-- Разовая ручная отправка параметров из базового профиля в остальные профили (без постоянной привязки) -->
+        <div class="card mb-3 border-primary-subtle bg-light-subtle" id="ld-base-profile-box"
+             th:if="${loadedProfileId == null and !profiles.isEmpty()}">
             <div class="card-body py-2 px-3">
-                <th:block th:if="${loadedProfileId == null}">
-                    <input type="hidden" name="baseConfigSubmitted" value="true">
-                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-                        <div class="d-flex flex-wrap align-items-center gap-2">
-                            <span class="badge text-bg-primary"><i class="bi bi-layers-half me-1"></i>Базовый профиль скрипта</span>
-                            <div class="form-check form-switch m-0">
-                                <input class="form-check-input" type="checkbox" role="switch" id="ld-base-active"
-                                       name="baseProfileActive" value="true"
-                                       th:checked="${form.baseProfileActive or !profiles.isEmpty()}">
-                                <label class="form-check-label small fw-semibold" for="ld-base-active">
-                                    База всегда главнее профиля: применять общие разделы ко всем профилям (<span th:text="${profiles.size()}"></span>)
-                                </label>
-                            </div>
+                <input type="hidden" name="baseConfigSubmitted" value="true">
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <span class="badge text-bg-primary"><i class="bi bi-send me-1"></i>Отправка в остальные профили</span>
+                        <span class="small text-muted">Профили независимы. Можно разово отправить выбранные разделы из базового профиля во все профили (<b th:text="${profiles.size()}"></b>):</span>
+                    </div>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <div class="input-group input-group-sm" style="width:185px" title="Число генераторов по умолчанию">
+                            <span class="input-group-text"><i class="bi bi-hdd-network me-1 text-primary"></i>Генераторов</span>
+                            <input class="form-control" type="number" min="1" max="200" th:field="*{generatorCount}">
                         </div>
-                        <div class="d-flex flex-wrap align-items-center gap-2">
-                            <div class="input-group input-group-sm" style="width:185px" title="Число генераторов по умолчанию для всех профилей">
-                                <span class="input-group-text"><i class="bi bi-hdd-network me-1 text-primary"></i>Генераторов</span>
-                                <input class="form-control" type="number" min="1" max="200" th:field="*{generatorCount}">
-                            </div>
-                            <button type="submit" class="btn btn-sm btn-primary"
-                                    th:formaction="@{/scripts/{id}/load/apply-base(id=${script.id})}"
-                                    title="Сохранить базовые параметры и сразу применить выбранные разделы ко всем профилям скрипта">
-                                <i class="bi bi-check2-all me-1"></i>Сохранить и применить ко всем профилям (<span th:text="${profiles.size()}"></span>)
-                            </button>
-                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary" id="ld-apply-base-btn"
+                                th:formaction="@{/scripts/{id}/load/apply-base(id=${script.id})}"
+                                th:attr="data-prof-count=${profiles.size()}"
+                                title="Сохранить базовую нагрузку и разово отправить выбранные разделы во все профили">
+                            <i class="bi bi-send-check me-1"></i>Отправить в профили (<span th:text="${profiles.size()}"></span>)
+                        </button>
                     </div>
-                    <div class="d-flex flex-wrap align-items-center gap-3 mt-2 pt-2 border-top small">
-                        <span class="text-muted fw-semibold">Общие разделы из базы:</span>
-                        <label class="form-check form-check-inline m-0">
-                            <input class="form-check-input" type="checkbox" th:field="*{baseOverrideEnv}">
-                            <span class="form-check-label"><i class="bi bi-braces text-primary me-1"></i>Переменные и секреты (env)</span>
-                        </label>
-                        <label class="form-check form-check-inline m-0">
-                            <input class="form-check-input" type="checkbox" th:field="*{baseOverrideStop}">
-                            <span class="form-check-label"><i class="bi bi-shield-exclamation text-primary me-1"></i>Автостоп и метрики Prometheus</span>
-                        </label>
-                        <label class="form-check form-check-inline m-0">
-                            <input class="form-check-input" type="checkbox" th:field="*{baseOverrideSla}">
-                            <span class="form-check-label"><i class="bi bi-award text-primary me-1"></i>SLA операций (p90/p95/p99, мс, % ошибок)</span>
-                        </label>
-                        <label class="form-check form-check-inline m-0">
-                            <input class="form-check-input" type="checkbox" th:field="*{baseOverrideWarmup}">
-                            <span class="form-check-label"><i class="bi bi-fire text-warning me-1"></i>Общий прогрев</span>
-                        </label>
-                        <label class="form-check form-check-inline m-0" th:if="${!form.dataFiles.isEmpty()}">
-                            <input class="form-check-input" type="checkbox" th:field="*{baseOverrideData}">
-                            <span class="form-check-label"><i class="bi bi-file-earmark-spreadsheet text-primary me-1"></i>Тестовые данные (CSV)</span>
-                        </label>
-                        <label class="form-check form-check-inline m-0">
-                            <input class="form-check-input" type="checkbox" th:field="*{baseOverrideGenerators}">
-                            <span class="form-check-label"><i class="bi bi-hdd-network text-primary me-1"></i>Генераторы по умолчанию</span>
-                        </label>
-                    </div>
-                    <div class="small text-muted mt-1" style="font-size:.77rem">
-                        В базовом профиле можно задать общие переменные, автостоп, кастомные метрики Prometheus, общий прогрев и требования SLA по операциям (даже если сами сценарии в базе выключены) — при запуске и планировании любого из <b th:text="${profiles.size()}"></b> профилей будут использоваться параметры базы.
-                    </div>
-                </th:block>
-                <th:block th:if="${loadedProfileId != null}">
-                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 small">
-                        <div>
-                            <span class="badge text-bg-info me-1"><i class="bi bi-collection me-1"></i>Профиль: <span th:text="${loadedProfile}"></span></span>
-                            <span th:if="${form.baseProfileActive}" class="text-muted">
-                                Общие разделы (
-                                <span th:if="${form.baseOverrideEnv}" class="badge text-bg-light border">env</span>
-                                <span th:if="${form.baseOverrideStop}" class="badge text-bg-light border">автостоп + Prometheus</span>
-                                <span th:if="${form.baseOverrideSla}" class="badge text-bg-light border">SLA операций</span>
-                                <span th:if="${form.baseOverrideWarmup}" class="badge text-bg-light border">прогрев</span>
-                                <span th:if="${form.baseOverrideGenerators}" class="badge text-bg-light border">генераторы</span>
-                                ) берутся из <b>базового профиля скрипта</b> и одинаковы для всех <b th:text="${profiles.size()}"></b> профилей.
-                            </span>
-                            <span th:unless="${form.baseProfileActive}" class="text-muted">
-                                Чтобы задать единые env, автостоп, метрики Prometheus, прогрев и SLA сразу для всех <b th:text="${profiles.size()}"></b> профилей, перейдите в базовый профиль.
-                            </span>
-                        </div>
-                        <a class="btn btn-sm btn-outline-primary" th:href="@{/scripts/{id}/load(id=${script.id})}">
-                            <i class="bi bi-sliders2 me-1"></i>Настроить базовый профиль для всех (<span th:text="${profiles.size()}"></span>)
-                        </a>
-                    </div>
-                </th:block>
+                </div>
+                <div class="d-flex flex-wrap align-items-center gap-3 mt-2 pt-2 border-top small">
+                    <span class="text-muted fw-semibold">Какие разделы отправить:</span>
+                    <label class="form-check form-check-inline m-0" title="Обновляются только переменные, заданные в базовом профиле; дополнительные переменные в остальных профилях сохраняются">
+                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideEnv}" data-label="Переменные и секреты (env — только ключи из базового, лишние сохраняются)">
+                        <span class="form-check-label"><i class="bi bi-braces text-primary me-1"></i>Переменные и секреты (env)</span>
+                    </label>
+                    <label class="form-check form-check-inline m-0">
+                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideStop}" data-label="Автостоп и метрики Prometheus">
+                        <span class="form-check-label"><i class="bi bi-shield-exclamation text-primary me-1"></i>Автостоп и метрики Prometheus</span>
+                    </label>
+                    <label class="form-check form-check-inline m-0">
+                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideSla}" data-label="SLA операций (p90/p95/p99, мс, % ошибок)">
+                        <span class="form-check-label"><i class="bi bi-award text-primary me-1"></i>SLA операций (p90/p95/p99, мс, % ошибок)</span>
+                    </label>
+                    <label class="form-check form-check-inline m-0">
+                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideWarmup}" data-label="Общий прогрев">
+                        <span class="form-check-label"><i class="bi bi-fire text-warning me-1"></i>Общий прогрев</span>
+                    </label>
+                    <label class="form-check form-check-inline m-0" th:if="${!form.dataFiles.isEmpty()}">
+                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideData}" data-label="Тестовые данные (CSV)">
+                        <span class="form-check-label"><i class="bi bi-file-earmark-spreadsheet text-primary me-1"></i>Тестовые данные (CSV)</span>
+                    </label>
+                    <label class="form-check form-check-inline m-0">
+                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideGenerators}" data-label="Генераторы по умолчанию">
+                        <span class="form-check-label"><i class="bi bi-hdd-network text-primary me-1"></i>Генераторы по умолчанию</span>
+                    </label>
+                </div>
+                <div class="small text-muted mt-1" style="font-size:.77rem">
+                    <i class="bi bi-info-circle me-1"></i>Если в каком-то профиле список переменных (<code>env</code>) полнее, его дополнительные переменные не удаляются — обновляются только переменные из базового профиля.
+                </div>
             </div>
         </div>
         <input type="hidden" id="ld-base-warmup-dur" name="baseWarmupDuration" th:value="${form.baseWarmupDuration}">
-
-        <!-- Галерея карточек профилей (открывается по кнопке «Менеджер» или при загрузке, если хочется быстро выбрать/скопировать/запланировать) -->
         <div class="d-none" id="ld-prof-init" th:text="${profilesJson}">[]</div>
-        <div class="d-none" id="ld-prof-gallery-wrap"
-             th:attr="data-load-url=@{/scripts/{id}/load(id=${script.id})},
-                      data-run-url=@{/scripts/{id}/run(id=${script.id})},
-                      data-loaded-id=${loadedProfileId}">
-            <div class="ld-prof-gallery" id="ld-prof-gallery"></div>
-        </div>
 
         <!-- Быстрая навигация по разделам -->
         <nav class="ld-nav-pills" aria-label="Разделы нагрузки">
@@ -460,6 +412,15 @@
                     </label>
                     <span class="text-muted ms-auto small"><i class="bi bi-clock-history me-1"></i>Сработает через <b id="ld-stop-eta">≈ 1 мин</b></span>
                 </div>
+                <div class="mt-2 pt-2 border-top d-flex flex-wrap align-items-center gap-2 small">
+                    <div class="form-check form-switch m-0">
+                        <input class="form-check-input" type="checkbox" role="switch" id="stop-extra-step" th:field="*{stop.extraStepOnMaxSearch}">
+                        <label class="form-check-label fw-semibold" for="stop-extra-step">
+                            Поиск максимума (≥ 2 ступеней): после срабатывания условий автостопа пройти ещё 1 ступень и остановиться
+                        </label>
+                    </div>
+                    <span class="text-muted">Если выключить — тест остановится сразу на ступени нарушения.</span>
+                </div>
 
                 <!-- Кастомные метрики Prometheus (SLA ступени и Автостоп наравне с метриками k6) -->
                 <div class="mt-3 pt-3 border-top" id="sec-custom-checks">
@@ -618,6 +579,67 @@
             </th:block>
         </div>
     </form>
+
+    <!-- Единое модальное окно: Выбор и управление профилями (поиск + массовое удаление) -->
+    <div class="modal fade" id="ld-profiles-modal" tabindex="-1" aria-hidden="true"
+         th:attr="data-open-url=@{/scripts/{id}/load(id=${script.id})},
+                  data-run-url=@{/scripts/{id}/run(id=${script.id})},
+                  data-bulk-delete-url=@{/scripts/{id}/load/profiles/bulk-delete(id=${script.id})},
+                  data-loaded-id=${loadedProfileId}">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header py-2 px-3">
+                    <h5 class="modal-title fs-6 fw-bold">
+                        <i class="bi bi-collection me-2 text-primary"></i>Профили нагрузки
+                        <span class="badge text-bg-light border ms-1" th:text="${profiles.size()}">0</span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                </div>
+                <div class="ld-prof-modal-toolbar" th:if="${!profiles.isEmpty()}">
+                    <div class="input-group input-group-sm" style="max-width:300px">
+                        <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+                        <input class="form-control" type="search" id="ld-prof-search" placeholder="Поиск профиля…" aria-label="Поиск профиля">
+                    </div>
+                    <label class="form-check m-0 d-inline-flex align-items-center gap-2 small user-select-none" style="cursor:pointer">
+                        <input class="form-check-input m-0" type="checkbox" id="ld-prof-select-all">
+                        <span>Выбрать все видимые</span>
+                    </label>
+                    <span class="small text-muted ms-auto" id="ld-prof-filter-count"></span>
+                </div>
+                <div class="ld-prof-bulkbar d-none" id="ld-prof-bulkbar">
+                    <span>Выбрано профилей: <b id="ld-prof-bulk-cnt">0</b></span>
+                    <button type="button" class="btn btn-sm btn-danger py-0 px-2" id="ld-prof-bulk-del">
+                        <i class="bi bi-trash me-1"></i>Удалить выбранные
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 ms-auto" id="ld-prof-bulk-clear">Снять выбор</button>
+                </div>
+                <div class="modal-body p-3">
+                    <div class="ld-prof-base-row" id="ld-prof-base-row" th:classappend="${loadedProfileId == null} ? ' active'" role="button" tabindex="0">
+                        <div>
+                            <div class="fw-semibold small">
+                                <i class="bi bi-star-fill text-warning me-1"></i>Базовый профиль скрипта
+                                <span class="badge text-bg-primary ms-1" th:if="${loadedProfileId == null}">Открыт</span>
+                            </div>
+                            <div class="text-muted" style="font-size:.76rem">Основная нагрузка скрипта; из неё можно разово отправить выбранные разделы в остальные профили.</div>
+                        </div>
+                        <span class="btn btn-sm btn-outline-primary py-0 px-2" th:if="${loadedProfileId != null}">Открыть</span>
+                    </div>
+
+                    <div class="ld-prof-gallery mb-0" id="ld-prof-gallery"></div>
+                    <div class="text-center text-muted py-4 small d-none" id="ld-prof-empty-filter">
+                        <i class="bi bi-search me-1"></i>По запросу профили не найдены.
+                    </div>
+                    <div class="text-center text-muted py-4 small" th:if="${profiles.isEmpty()}">
+                        <i class="bi bi-inbox me-1"></i>У скрипта пока нет сохранённых профилей — задайте имя вверху и нажмите «Сохранить профиль» или воспользуйтесь импортом JSON.
+                    </div>
+                </div>
+                <div class="modal-footer py-2 px-3">
+                    <span class="small text-muted me-auto d-none d-md-inline">Совет: удерживайте <kbd>Shift</kbd> при клике на чекбокс, чтобы выделить диапазон профилей.</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Закрыть</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Модальное окно: Импорт и экспорт профилей (JSON) -->
     <div class="modal fade" id="ld-import-modal" tabindex="-1" aria-hidden="true"
@@ -812,7 +834,7 @@
                     </div>
                     <div class="alert alert-warning py-2 small d-flex justify-content-between align-items-center gap-3" th:if="${!planFromProfile and !overridePaths.isEmpty()}">
                         <span><i class="bi bi-pencil-square me-1"></i>Есть ручные правки конфига: <code th:each="p : ${overridePaths}" th:text="${p}" class="me-2"></code></span>
-                        <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" onsubmit="return confirm('Сбросить ручные правки и вернуть расчётный конфиг?')">
+                        <form th:action="@{/scripts/{id}/k6-config/reset(id=${script.id})}" method="post" class="m-0" data-confirm="Сбросить ручные правки и вернуть расчётный конфиг?">
                             <button class="btn btn-sm btn-outline-secondary">Сбросить к расчётному</button>
                         </form>
                     </div>

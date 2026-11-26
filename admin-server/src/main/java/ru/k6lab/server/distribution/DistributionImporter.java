@@ -54,7 +54,7 @@ public class DistributionImporter {
 
     /** Возвращает число новых дистрибутивов. */
     public int importAll() throws IOException {
-        Path dir = props.getDistDir().toAbsolutePath();
+        Path dir = props.getDistDir().toAbsolutePath().normalize();
         Path manifest = dir.resolve("manifest.json");
         if (!Files.isRegularFile(manifest)) {
             return 0;

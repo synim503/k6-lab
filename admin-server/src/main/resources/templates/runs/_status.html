@@ -15,10 +15,10 @@
         </div>
         <div class="d-flex gap-2 ms-auto flex-wrap" th:if="${v.canStop}" sec:authorize="isAuthenticated()">
             <form th:action="@{/runs/{id}/stop(id=${run.id})}" method="post"
-                  onsubmit="return confirm('Остановить запуск? k6 корректно завершит текущие итерации.')">
+                  data-confirm="Остановить запуск? k6 корректно завершит текущие итерации.">
                 <button class="btn btn-warning" th:disabled="${run.status.name() == 'STOPPING'}" title="Мягкая остановка: текущие итерации дорабатывают"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form>
             <form th:action="@{/runs/{id}/abort(id=${run.id})}" method="post"
-                  onsubmit="return confirm('Принудительное прерывание убьёт k6 на всех генераторах, метрики последних секунд могут потеряться. Продолжить?')">
+                  data-confirm="Принудительное прерывание убьёт k6 на всех генераторах, метрики последних секунд могут потеряться. Продолжить?">
                 <button class="btn btn-outline-danger" title="Немедленно убить k6 на всех генераторах"><i class="bi bi-x-octagon me-1"></i>Прервать принудительно</button></form>
         </div>
     </div>

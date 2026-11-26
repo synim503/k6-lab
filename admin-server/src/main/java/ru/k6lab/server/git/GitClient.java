@@ -88,6 +88,7 @@ public class GitClient {
     public void sync(Long repoId, String url, Auth auth) throws IOException {
         ReentrantLock lock = locks.computeIfAbsent(repoId, k -> new ReentrantLock());
         lock.lock();
+        SshHandle sshHandle = null;
         try {
             Path dir = cacheDir(repoId);
             boolean exists = Files.isDirectory(dir.resolve("objects"));
@@ -95,14 +96,14 @@ public class GitClient {
                 if (!exists) {
                     Files.createDirectories(dir);
                     var clone = Git.cloneRepository().setURI(url).setBare(true).setDirectory(dir.toFile());
-                    configure(clone, auth);
+                    sshHandle = configure(clone, auth);
                     clone.call().close();
                 } else {
                     try (Git git = Git.open(dir.toFile())) {
                         var fetch = git.fetch().setRemote(url)
                                 .setRefSpecs("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
                                 .setRemoveDeletedRefs(true);
-                        configure(fetch, auth);
+                        sshHandle = configure(fetch, auth);
                         fetch.call();
                     }
                 }
@@ -113,7 +114,25 @@ public class GitClient {
                 throw unwrap(e);
             }
         } finally {
+            if (sshHandle != null) {
+                sshHandle.close();
+            }
             lock.unlock();
+        }
+    }
+
+    /** Удаляет локальный bare-кеш репозитория (вызывается при удалении GitRepo). */
+    public void evictCache(Long repoId) {
+        ReentrantLock lock = locks.computeIfAbsent(repoId, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            Path dir = cacheDir(repoId);
+            if (Files.exists(dir)) {
+                deleteQuietly(dir);
+            }
+        } finally {
+            lock.unlock();
+            locks.remove(repoId, lock);
         }
     }
 
@@ -170,6 +189,9 @@ public class GitClient {
                         continue;
                     }
                     String path = tw.getPathString();
+                    if (!sub.isEmpty() && !path.startsWith(sub + "/")) {
+                        continue;
+                    }
                     String rel = sub.isEmpty() ? path : path.substring(sub.length() + 1);
                     if (rel.startsWith(".git/")) {
                         continue;
@@ -239,7 +261,19 @@ public class GitClient {
 
     // ------------------------------------------------------------------ авторизация
 
-    private void configure(TransportCommand<?, ?> cmd, Auth auth) throws IOException {
+    private record SshHandle(SshdSessionFactory factory, Path home) implements AutoCloseable {
+        @Override
+        public void close() {
+            try {
+                factory.close();
+            } catch (RuntimeException ignored) {
+                // best-effort
+            }
+            deleteQuietly(home);
+        }
+    }
+
+    private SshHandle configure(TransportCommand<?, ?> cmd, Auth auth) throws IOException {
         if (auth.token() != null && !auth.token().isBlank()) {
             String t = auth.token();
             String user = "token";
@@ -252,38 +286,46 @@ public class GitClient {
             cmd.setCredentialsProvider(new UsernamePasswordCredentialsProvider(user, pass));
         }
         if (auth.ssh() != null) {
-            SshdSessionFactory factory = sshFactory(auth.ssh());
+            SshHandle handle = sshFactory(auth.ssh());
             cmd.setTransportConfigCallback(t -> {
                 if (t instanceof SshTransport st) {
-                    st.setSshSessionFactory(factory);
+                    st.setSshSessionFactory(handle.factory());
                 }
             });
+            return handle;
         }
+        return null;
     }
 
-    private SshdSessionFactory sshFactory(ResolvedCredential cred) throws IOException {
+    private SshHandle sshFactory(ResolvedCredential cred) throws IOException {
         Path home = Files.createTempDirectory("k6lab-git-ssh");
-        List<KeyPair> keys = new ArrayList<>();
-        if (cred.authType() == ru.k6lab.server.ssh.SshCredential.AuthType.KEY) {
-            try {
-                for (KeyPair kp : SecurityUtils.loadKeyPairIdentities(null, NamedResource.ofName(cred.name()),
-                        new ByteArrayInputStream(cred.secret().getBytes(StandardCharsets.UTF_8)),
-                        (s, r, i) -> cred.passphrase())) {
-                    keys.add(kp);
+        try {
+            List<KeyPair> keys = new ArrayList<>();
+            if (cred.authType() == ru.k6lab.server.ssh.SshCredential.AuthType.KEY) {
+                try {
+                    for (KeyPair kp : SecurityUtils.loadKeyPairIdentities(null, NamedResource.ofName(cred.name()),
+                            new ByteArrayInputStream(cred.secret().getBytes(StandardCharsets.UTF_8)),
+                            (s, r, i) -> cred.passphrase())) {
+                        keys.add(kp);
+                    }
+                } catch (Exception e) {
+                    throw new IOException("Не удалось прочитать SSH-ключ учётки «" + cred.name() + "»: " + e.getMessage(), e);
                 }
-            } catch (Exception e) {
-                throw new IOException("Не удалось прочитать SSH-ключ учётки «" + cred.name() + "»: " + e.getMessage(), e);
+            } else {
+                throw new IOException("Для Git по SSH нужна учётка с приватным ключом (тип «ключ»)");
             }
-        } else {
-            throw new IOException("Для Git по SSH нужна учётка с приватным ключом (тип «ключ»)");
+            SshdSessionFactory factory = new SshdSessionFactoryBuilder()
+                    .setHomeDirectory(home.toFile())
+                    .setSshDirectory(home.toFile())
+                    .setDefaultKeysProvider(f -> keys)
+                    .setServerKeyDatabase((h, s) -> new DbServerKeyDatabase())
+                    .setConfigStoreFactory((h, c, u) -> null)
+                    .build(null);
+            return new SshHandle(factory, home);
+        } catch (IOException | RuntimeException e) {
+            deleteQuietly(home);
+            throw e;
         }
-        return new SshdSessionFactoryBuilder()
-                .setHomeDirectory(home.toFile())
-                .setSshDirectory(home.toFile())
-                .setDefaultKeysProvider(f -> keys)
-                .setServerKeyDatabase((h, s) -> new DbServerKeyDatabase())
-                .setConfigStoreFactory((h, c, u) -> null)
-                .build(null);
     }
 
     /** Проверка ключа SSH-хоста Git по таблице known_host (та же, что для генераторов). */

@@ -26,7 +26,7 @@
                         <option th:each="c : ${candidates}" th:value="${c.generator.id}" th:selected="${c.generator.id == standard.generator.id}"
                                 th:text="${c.generator.name} + ' — изменений: ' + ${c.settings}"></option></select>
                     <button class="btn btn-warning" th:formaction="@{/tuning/rollout}"
-                            onclick="return confirm('Применить набор настроек эталона на отмеченных хостах (если ничего не отмечено — на всех)? Исходные значения будут сохранены, вернуть их можно кнопкой «Вернуть всё в исходное».')"><i class="bi bi-rocket-takeoff me-1"></i>Раскатить на отмеченные / на все хосты</button></div>
+                            data-confirm="Применить набор настроек эталона на отмеченных хостах (если ничего не отмечено — на всех)? Исходные значения будут сохранены, вернуть их можно кнопкой «Вернуть всё в исходное»."><i class="bi bi-rocket-takeoff me-1"></i>Раскатить на отмеченные / на все хосты</button></div>
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
                     <input type="hidden" name="fromHost" th:value="${standard.generator.id}">
                     <input class="form-control form-control-sm" style="width:260px" name="name" maxlength="100" placeholder="Название профиля оптимизации" aria-label="Название профиля оптимизации">
@@ -53,7 +53,7 @@
                     <td class="text-end text-nowrap">
                         <a class="btn btn-sm btn-outline-secondary" th:href="@{/tuning/profiles/{id}(id=${o.id})}"><i class="bi bi-pencil me-1"></i>Изменить</a>
                         <button class="btn btn-sm btn-warning" th:formaction="@{/tuning/profiles/{id}/apply(id=${o.id})}"
-                                onclick="return confirm('Раскатить профиль на отмеченные хосты (если ничего не отмечено — на все)? Исходные значения сохраняются, вернуть их можно в любой момент.')"><i class="bi bi-rocket-takeoff me-1"></i>Раскатить</button></td>
+                                data-confirm="Раскатить профиль на отмеченные хосты (если ничего не отмечено — на все)? Исходные значения сохраняются, вернуть их можно в любой момент."><i class="bi bi-rocket-takeoff me-1"></i>Раскатить</button></td>
                 </tr></tbody></table></div></div>
 
         <div class="card mb-3"><div class="card-body d-flex flex-wrap align-items-center gap-3">
@@ -62,11 +62,11 @@
                 <span class="input-group-text">с</span></div>
             <button class="btn btn-primary"><i class="bi bi-play-fill me-1"></i>Профилировать выбранные</button>
             <button class="btn btn-warning" th:formaction="@{/tuning/apply}"
-                    onclick="return confirm('Применить рекомендованные настройки ядра на выбранных хостах? Исходные значения будут сохранены, откат возможен.')"><i class="bi bi-sliders me-1"></i>Применить рекомендации</button>
+                    data-confirm="Применить рекомендованные настройки ядра на выбранных хостах? Исходные значения будут сохранены, откат возможен."><i class="bi bi-sliders me-1"></i>Применить рекомендации</button>
             <button class="btn btn-outline-secondary" th:formaction="@{/tuning/rollback}"
-                    onclick="return confirm('Вернуть исходные значения настроек на отмеченных хостах?')"><i class="bi bi-arrow-counterclockwise me-1"></i>Откатить отмеченные</button>
+                    data-confirm="Вернуть исходные значения настроек на отмеченных хостах?"><i class="bi bi-arrow-counterclockwise me-1"></i>Откатить отмеченные</button>
             <button class="btn btn-danger" th:formaction="@{/tuning/rollback-all}" th:disabled="${tunedCount == 0}"
-                    onclick="return confirm('Вернуть в исходное состояние ВСЕ хосты с применённым тюнингом?')"><i class="bi bi-arrow-counterclockwise me-1"></i>Вернуть всё в исходное
+                    data-confirm="Вернуть в исходное состояние ВСЕ хосты с применённым тюнингом?"><i class="bi bi-arrow-counterclockwise me-1"></i>Вернуть всё в исходное
                 <span class="badge text-bg-light ms-1" th:if="${tunedCount > 0}" th:text="${tunedCount}"></span></button>
             <span class="small text-muted">Отметьте хосты в таблице. SSH-учётка генератора должна иметь root или sudo.</span>
         </div></div>
@@ -90,6 +90,28 @@
         </tr>
         <tr th:if="${history.isEmpty()}"><td colspan="5" class="text-muted">Настройки ещё не применялись.</td></tr>
         </tbody></table></div></div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        (function () {
+            var saved = null;
+            document.body.addEventListener('htmx:beforeSwap', function (ev) {
+                var target = ev.detail && ev.detail.target;
+                if (!target || target.id !== 'tuning-table') { return; }
+                saved = new Set();
+                target.querySelectorAll('input.tg:checked').forEach(function (cb) { saved.add(String(cb.value)); });
+            });
+            document.body.addEventListener('htmx:afterSwap', function (ev) {
+                if (!saved) { return; }
+                var tbl = document.getElementById('tuning-table');
+                if (!tbl) { saved = null; return; }
+                tbl.querySelectorAll('input.tg').forEach(function (cb) {
+                    if (!cb.disabled && saved.has(String(cb.value))) { cb.checked = true; }
+                });
+                saved = null;
+            });
+        })();
+    </script>
 </th:block>
 </body>
 </html>

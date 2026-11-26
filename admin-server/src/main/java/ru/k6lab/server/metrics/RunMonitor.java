@@ -47,13 +47,19 @@ public class RunMonitor {
     static final long DEFAULT_LAG_SEC = 15;
     static final long MAX_LAG_SEC = 120;
 
-    private static final class State {
+    static final class State {
         StopCriteriaEvaluator evaluator;
         int tick;
         int lastStep = -1;
         /** Строки таблицы за весь тест: пересчитываются реже live-строк (запросы по длинному диапазону дороже). */
         List<LiveRow> wholeRows;
         long wholeSec;
+        /** Отложенная остановка при поиске максимума: автостоп сработал на triggerStep, допроходим ещё одну ступень до stopAt. */
+        Integer pendingStopTriggerStep;
+        Integer pendingStopAfterStep;
+        String pendingStopReason;
+        Instant pendingStopAt;
+        boolean stopDispatched;
     }
 
     /** Строка live-таблицы по операции. */
@@ -165,8 +171,9 @@ public class RunMonitor {
         boolean settled = hold && intoHold - SETTLE_SEC >= window;
         List<LiveRow> rows = liveRows(snap, current, settled ? current.getLevelPct() : null, run.getId(), window, now, p,
                 run.getK6Config(), run.getPlannedStartAt(), false);
-        // те же показатели за весь тест (без прогрева): раз в 15 с, окно - от конца прогрева (или от старта) до последних данных
-        Instant wholeFrom = hold ? current.getHoldStartAt() : run.getPlannedStartAt();
+        // те же показатели за весь тест (без прогрева): раз в 15 с, окно - от конца прогрева первой ступени (или от старта) до последних данных
+        Instant wholeFrom = !steps.isEmpty() && !now.isBefore(steps.get(0).getHoldStartAt())
+                ? steps.get(0).getHoldStartAt() : run.getPlannedStartAt();
         long whole = Math.max(0, now.getEpochSecond() - wholeFrom.getEpochSecond());
         if (whole >= minWindow && (st.wholeRows == null || st.tick % 3 == 0)) {
             try {
@@ -199,8 +206,15 @@ public class RunMonitor {
         boolean warm = inWarmup(snap, current, now);
         List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval =
                 evaluateAndPutCustomChecks(json, run, snap, now.minusSeconds(window), now, window, warm, p);
+        evaluateStop(run, snap, st, steps, current, hold, intoHold, minWindow, window, rows, customEval, now, wall, p, stepNo);
+        if (st.pendingStopAt != null && !st.stopDispatched) {
+            ObjectNode pending = json.putObject("autoStopPending");
+            pending.put("triggerStep", st.pendingStopTriggerStep);
+            pending.put("stopAfterStep", st.pendingStopAfterStep);
+            pending.put("reason", st.pendingStopReason == null ? "" : st.pendingStopReason);
+            pending.put("remainingSec", Math.max(0L, st.pendingStopAt.getEpochSecond() - wall.getEpochSecond()));
+        }
         broadcaster.publishMetrics(run.getId(), json.toString());
-        evaluateStop(run, snap, st, current, hold, intoHold, minWindow, window, rows, customEval, now, p, stepNo);
     }
 
     List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> evaluateAndPutCustomChecks(
@@ -251,11 +265,34 @@ public class RunMonitor {
         }
     }
 
-    /** Серверные критерии остановки: раз в 15 с, только на удержании после settle. */
-    private void evaluateStop(Run run, RunSnapshot snap, State st, RunStep current, boolean hold, long intoHold, long minWindow, long window,
-                              List<LiveRow> rows, List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval,
-                              Instant now, SettingsService.Prometheus p, int stepNo) throws IOException {
+    /**
+     * Серверные критерии остановки: раз в 15 с, только на удержании после settle.
+     * В режиме поиска максимума (≥ 2 ступеней и extraStepOnMaxSearch=true) после обнаружения условий автостопа
+     * на ступени N тест не обрывается мгновенно, а проходит ещё одну ступень (N+1) и останавливается по её завершении.
+     */
+    void evaluateStop(Run run, RunSnapshot snap, State st, List<RunStep> steps, RunStep current, boolean hold, long intoHold,
+                      long minWindow, long window, List<LiveRow> rows,
+                      List<ru.k6lab.core.analysis.StepAnalysis.CustomCheckResult> customEval,
+                      Instant now, Instant wall, SettingsService.Prometheus p, int stepNo) throws IOException {
         st.tick++;
+        if (st.pendingStopAt != null) {
+            if (!st.stopDispatched && run.getStatus() == RunStatus.RUNNING && !wall.isBefore(st.pendingStopAt)) {
+                String tail = st.pendingStopAfterStep > st.pendingStopTriggerStep
+                        ? "ступень " + st.pendingStopTriggerStep + "; завершена контрольная ступень " + st.pendingStopAfterStep
+                        : "ступень " + st.pendingStopTriggerStep + "; ступень завершена";
+                String text = "критерий остановки: " + st.pendingStopReason + " (" + tail + ")";
+                log.warn("Run {}: {}", run.getId(), text);
+                logs.addSystem(run.getId(), "ERROR", "Завершена ступень " + st.pendingStopAfterStep
+                        + " после срабатывания автостопа на ступени " + st.pendingStopTriggerStep + " — останавливаем тест.");
+                st.stopDispatched = true;
+                try {
+                    orchestrator.stop(run.getId(), text);
+                } catch (IllegalStateException e) {
+                    log.debug("Остановка по отложенному критерию не выполнена: {}", e.getMessage());
+                }
+            }
+            return;
+        }
         StopCriteriaEvaluator.Config cfg = st.evaluator.config();
         boolean hasCustomAutoStop = customEval != null && customEval.stream().anyMatch(cr -> cr.check().autoStop());
         if ((cfg.anyEnabled() || hasCustomAutoStop) && st.tick % 3 == 0 && hold && intoHold - SETTLE_SEC >= minWindow && run.getStatus() == RunStatus.RUNNING) {
@@ -280,9 +317,40 @@ public class RunMonitor {
             }
             Optional<String> reason = st.evaluator.evaluate(samples, customSamples);
             if (reason.isPresent()) {
+                boolean isMaxSearch = steps != null && steps.size() >= 2;
+                if (isMaxSearch && cfg.extraStepOnMaxSearch() && current != null) {
+                    RunStep nextStep = steps.stream()
+                            .filter(s -> s.getStepNo() > stepNo)
+                            .min(java.util.Comparator.comparingInt(RunStep::getStepNo))
+                            .orElse(null);
+                    if (nextStep != null && nextStep.getHoldEndAt() != null) {
+                        st.pendingStopTriggerStep = stepNo;
+                        st.pendingStopAfterStep = nextStep.getStepNo();
+                        st.pendingStopReason = reason.get();
+                        st.pendingStopAt = nextStep.getHoldEndAt();
+                        log.warn("Run {}: обнаружены условия автостопа на ступени {} ({}) — поиск максимума: допроходим контрольную ступень {}",
+                                run.getId(), stepNo, reason.get(), nextStep.getStepNo());
+                        logs.addSystem(run.getId(), "WARN", "Обнаружены условия автостопа на ступени " + stepNo + " (" + reason.get()
+                                + "). Поиск максимума: проходим ещё одну ступень (ступень " + nextStep.getStepNo()
+                                + "), после чего тест будет остановлен.");
+                        return;
+                    }
+                    if (current.getHoldEndAt() != null && wall.isBefore(current.getHoldEndAt())) {
+                        st.pendingStopTriggerStep = stepNo;
+                        st.pendingStopAfterStep = stepNo;
+                        st.pendingStopReason = reason.get();
+                        st.pendingStopAt = current.getHoldEndAt();
+                        log.warn("Run {}: обнаружены условия автостопа на последней ступени {} ({}) — завершаем её до конца",
+                                run.getId(), stepNo, reason.get());
+                        logs.addSystem(run.getId(), "WARN", "Обнаружены условия автостопа на последней ступени " + stepNo
+                                + " (" + reason.get() + ") — завершаем текущую ступень до конца.");
+                        return;
+                    }
+                }
                 String text = "критерий остановки: " + reason.get() + " (ступень " + stepNo + ")";
                 log.warn("Run {}: {}", run.getId(), text);
                 logs.addSystem(run.getId(), "ERROR", "Сработал " + text);
+                st.stopDispatched = true;
                 try {
                     orchestrator.stop(run.getId(), text);
                 } catch (IllegalStateException e) {

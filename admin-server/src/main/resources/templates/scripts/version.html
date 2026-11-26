@@ -13,7 +13,7 @@
             <a class="btn btn-outline-primary btn-sm" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}"><i class="bi bi-pencil-square me-1"></i>Открыть в редакторе</a>
             <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}/versions/{vid}/download(id=${script.id},vid=${v.id})}"><i class="bi bi-download me-1"></i>Скачать zip</a>
             <form class="d-inline" th:action="@{/scripts/{id}/versions/{vid}/rollback(id=${script.id},vid=${v.id})}" method="post"
-                  onsubmit="return confirm('Создать новую версию из содержимого этой? Текущая версия сохранится в истории.')">
+                  data-confirm="Создать новую версию из содержимого этой? Текущая версия сохранится в истории.">
                 <button class="btn btn-outline-warning btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i>Откатить к этой</button></form>
         </div>
     </div>
