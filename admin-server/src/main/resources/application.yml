@@ -33,6 +33,10 @@ server:
   servlet:
     session:
       timeout: 12h
+  tomcat:
+    max-http-form-post-size: 20MB
+    max-part-count: 500
+    max-parameter-count: 20000
   shutdown: graceful
 
 management:

@@ -2221,23 +2221,23 @@
 
         function postForm(action, fields, opts) {
             opts = opts || {};
-            var fd = new FormData();
+            var body = new URLSearchParams();
             var csrf = window.K6 ? window.K6.getCsrf() : {token: ''};
-            if (csrf.token) { fd.append('_csrf', csrf.token); }
+            if (csrf.token) { body.append('_csrf', csrf.token); }
             Object.keys(fields || {}).forEach(function (k) {
                 var val = fields[k];
                 if (Array.isArray(val)) {
-                    val.forEach(function (item) { fd.append(k, String(item)); });
+                    val.forEach(function (item) { body.append(k, String(item)); });
                 } else if (val != null) {
-                    fd.append(k, String(val));
+                    body.append(k, String(val));
                 }
             });
             profGallery.classList.add('k6-ajax-busy');
             var req = window.K6 && window.K6.fetchHtml
-                ? window.K6.fetchHtml(action, {method: 'POST', body: fd})
+                ? window.K6.fetchHtml(action, {method: 'POST', body: body})
                 : fetch(action, {
                     method: 'POST',
-                    body: fd,
+                    body: body,
                     credentials: 'same-origin',
                     headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
                     redirect: 'follow'

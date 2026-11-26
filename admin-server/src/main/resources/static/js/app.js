@@ -876,6 +876,22 @@ window.k6InitSubtree(document);
         return fd;
     }
 
+    function isMultipartForm(form, submitter) {
+        var enc = ((submitter && submitter.getAttribute('formenctype')) || form.getAttribute('enctype') || '').toLowerCase();
+        if (enc.indexOf('multipart/form-data') >= 0) { return true; }
+        return !!form.querySelector('input[type="file"]');
+    }
+
+    function buildFormBody(form, submitter) {
+        var fd = buildFormData(form, submitter);
+        if (isMultipartForm(form, submitter)) { return fd; }
+        var params = new URLSearchParams();
+        fd.forEach(function (val, key) {
+            params.append(key, typeof val === 'string' ? val : '');
+        });
+        return params;
+    }
+
     function lockBtn(btn) {
         if (!btn || btn.disabled || btn.dataset.noLoading === 'true') { return null; }
         var orig = btn.innerHTML;
@@ -1056,7 +1072,7 @@ window.k6InitSubtree(document);
         var spec = (submitter && submitter.dataset && submitter.dataset.ajax) || (form.dataset && form.dataset.ajax);
         var selectors = parseSelectors(spec);
         var url = (submitter && submitter.getAttribute('formaction')) || form.getAttribute('action') || location.href;
-        var fd = buildFormData(form, submitter);
+        var body = buildFormBody(form, submitter);
         var dd = form.closest && form.closest('.dropdown');
         if (dd) { closeDropdownsIn(dd); }
         var unlock = lockBtn(submitter || form.querySelector('button[type="submit"]:not(:disabled)'));
@@ -1067,7 +1083,7 @@ window.k6InitSubtree(document);
 
         return fetch(url, {
             method: 'POST',
-            body: fd,
+            body: body,
             credentials: 'same-origin',
             headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
             redirect: 'follow'

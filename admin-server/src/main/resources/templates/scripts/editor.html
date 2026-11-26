@@ -132,14 +132,17 @@
                         var origHtml = saveBtn.innerHTML;
                         saveBtn.disabled = true;
                         saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Сохранение…';
-                        var fd = new FormData(form);
+                        var body = new URLSearchParams();
+                        new FormData(form).forEach(function (val, key) {
+                            body.append(key, typeof val === 'string' ? val : '');
+                        });
                         var csrf = window.K6 ? window.K6.getCsrf() : {token: ''};
-                        if (csrf.token && !fd.has('_csrf')) { fd.append('_csrf', csrf.token); }
+                        if (csrf.token && !body.has('_csrf')) { body.append('_csrf', csrf.token); }
                         var req = window.K6 && window.K6.fetchHtml
-                            ? window.K6.fetchHtml(form.getAttribute('action'), {method: 'POST', body: fd})
+                            ? window.K6.fetchHtml(form.getAttribute('action'), {method: 'POST', body: body})
                             : fetch(form.getAttribute('action'), {
                                 method: 'POST',
-                                body: fd,
+                                body: body,
                                 credentials: 'same-origin',
                                 headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html'},
                                 redirect: 'follow'

@@ -401,4 +401,104 @@ class LoadProfileIT extends AbstractIT {
         assertThat(checks.get(0).stepSla()).isFalse();
         assertThat(checks.get(0).autoStop()).isTrue();
     }
+
+    @Test
+    void savingProfileOverRealTomcatWithManyFormFieldsNeverReturns413() throws Exception {
+        Script s = script();
+        var cookies = new java.net.CookieManager();
+        var client = java.net.http.HttpClient.newBuilder()
+                .cookieHandler(cookies)
+                .followRedirects(java.net.http.HttpClient.Redirect.NEVER)
+                .build();
+        String base = "http://127.0.0.1:" + httpPort;
+
+        // 1. Логинимся через форму, чтобы получить реальную сессию и CSRF
+        var loginPage = client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base + "/login")).GET().build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+        String csrf = extractCsrf(loginPage.body());
+        String loginBody = "username=admin&password=" + java.net.URLEncoder.encode(ADMIN_PASSWORD, StandardCharsets.UTF_8)
+                + "&_csrf=" + java.net.URLEncoder.encode(csrf, StandardCharsets.UTF_8);
+        var loginRes = client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base + "/login"))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(loginBody)).build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertThat(loginRes.statusCode()).isEqualTo(302);
+
+        var loadPage = client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base + "/scripts/" + s.getId() + "/load")).GET().build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertThat(loadPage.statusCode()).isEqualTo(200);
+        String pageCsrf = extractMetaCsrf(loadPage.body());
+
+        // 25+ полей формы (выше дефолтного лимита Tomcat maxPartCount=10)
+        java.util.List<java.util.Map.Entry<String, String>> fields = new java.util.ArrayList<>();
+        fields.add(java.util.Map.entry("_csrf", pageCsrf));
+        fields.add(java.util.Map.entry("profileName", "TomcatUrlEncoded"));
+        fields.add(java.util.Map.entry("generatorCount", "2"));
+        fields.add(java.util.Map.entry("envText", "A=1\nB=2"));
+        fields.add(java.util.Map.entry("stop.consecutive", "4"));
+        fields.add(java.util.Map.entry("stop.windowSec", "60"));
+        fields.add(java.util.Map.entry("stop.minRatePct", "90"));
+        fields.add(java.util.Map.entry("stop.maxDroppedPct", "1"));
+        fields.add(java.util.Map.entry("stop.slaMultiplier", "1.5"));
+        String sc = "{\"rate\":25,\"timeUnit\":\"1s\",\"duration\":\"3m\",\"preAllocatedVUs\":2,\"maxVUs\":10}";
+        for (int i = 0; i < 2; i++) {
+            String fn = i == 0 ? "work" : "other";
+            fields.add(java.util.Map.entry("_ops[" + i + "].enabled", "on"));
+            fields.add(java.util.Map.entry("ops[" + i + "].enabled", "true"));
+            fields.add(java.util.Map.entry("ops[" + i + "].execFn", fn));
+            fields.add(java.util.Map.entry("ops[" + i + "].name", fn));
+            fields.add(java.util.Map.entry("ops[" + i + "].executor", "constant-arrival-rate"));
+            fields.add(java.util.Map.entry("ops[" + i + "].scenarioJson", sc));
+            fields.add(java.util.Map.entry("ops[" + i + "].slaPercentile", "95"));
+            fields.add(java.util.Map.entry("ops[" + i + "].slaThresholdMs", "800"));
+            fields.add(java.util.Map.entry("ops[" + i + "].maxErrorPct", "1"));
+        }
+
+        // 2. Отправка как application/x-www-form-urlencoded (как теперь делает app.js)
+        StringBuilder urlEncoded = new StringBuilder();
+        for (var e : fields) {
+            if (!urlEncoded.isEmpty()) urlEncoded.append('&');
+            urlEncoded.append(java.net.URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8))
+                    .append('=').append(java.net.URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
+        }
+        var res1 = client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base + "/scripts/" + s.getId() + "/load/profile"))
+                .header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(urlEncoded.toString())).build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertThat(res1.statusCode()).isEqualTo(200);
+        assertThat(res1.body()).contains("Профиль «TomcatUrlEncoded» сохранён");
+
+        // 3. Отправка тех же 27 полей как multipart/form-data (проверка, что лимит maxPartCount Tomcat поднят и 413 не возникает)
+        String boundary = "----K6LabTestBoundary12345";
+        StringBuilder mp = new StringBuilder();
+        for (var e : fields) {
+            String val = "profileName".equals(e.getKey()) ? "TomcatMultipart" : e.getValue();
+            mp.append("--").append(boundary).append("\r\n")
+                    .append("Content-Disposition: form-data; name=\"").append(e.getKey()).append("\"\r\n\r\n")
+                    .append(val).append("\r\n");
+        }
+        mp.append("--").append(boundary).append("--\r\n");
+        var res2 = client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base + "/scripts/" + s.getId() + "/load/profile"))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .header("X-Requested-With", "XMLHttpRequest")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(mp.toString())).build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertThat(res2.statusCode()).isEqualTo(200);
+        assertThat(res2.body()).contains("Профиль «TomcatMultipart» сохранён");
+        assertThat(profiles.list(s.getId())).extracting(LoadProfileStore.Profile::name)
+                .contains("TomcatUrlEncoded", "TomcatMultipart");
+    }
+
+    private static String extractCsrf(String html) {
+        var m = java.util.regex.Pattern.compile("name=\"_csrf\"[^>]*value=\"([^\"]+)\"").matcher(html);
+        assertThat(m.find()).as("CSRF input in login page").isTrue();
+        return m.group(1);
+    }
+
+    private static String extractMetaCsrf(String html) {
+        var m = java.util.regex.Pattern.compile("<meta\\s+name=\"_csrf\"\\s+content=\"([^\"]+)\"").matcher(html);
+        assertThat(m.find()).as("CSRF meta in load page").isTrue();
+        return m.group(1);
+    }
 }
