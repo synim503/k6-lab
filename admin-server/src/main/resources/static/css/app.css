@@ -588,6 +588,8 @@ html { scroll-behavior: smooth; scroll-padding-top: 76px; }
 .cb-toast.err, .k6-toast.err { background: #991b1b; }
 .cb-toast.warn, .k6-toast.warn { background: #92400e; }
 .cb-toast.info, .k6-toast.info { background: #312e81; }
+.k6-toast-action { color: #fff !important; opacity: .92; white-space: nowrap; }
+.k6-toast-action:hover { color: #fff !important; opacity: 1; }
 .k6-toast-close { margin-left: auto; border: 0; background: transparent; color: rgba(255, 255, 255, .75); padding: 0 .15rem; line-height: 1; font-size: 1rem; cursor: pointer; }
 .k6-toast-close:hover { color: #fff; }
 @keyframes cbToastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }

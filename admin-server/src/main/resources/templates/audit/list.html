@@ -4,17 +4,16 @@
 <head><title>Аудит</title></head>
 <body>
 <th:block layout:fragment="content">
-    <div id="audit-section">
     <div class="page-head">
         <div>
             <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-journal-text"></i></span>Журнал аудита</h3>
             <div class="sub mt-1">Кто и что менял в системе: скрипты, нагрузка, генераторы, настройки.</div></div>
-        <form class="d-flex gap-2 flex-wrap" method="get" th:action="@{/audit}" data-ajax-get="#audit-section">
-            <input class="form-control form-control-sm" style="min-width:200px;max-width:300px;flex:1 1 220px" type="search" name="q" th:value="${q}" placeholder="Действие, пользователь или объект" aria-label="Поиск по журналу">
+        <form class="d-flex gap-2 flex-wrap" method="get" th:action="@{/audit}" data-ajax-get="#audit-results">
+            <input class="form-control form-control-sm" id="audit-q" data-ajax-search="true" style="min-width:200px;max-width:300px;flex:1 1 220px" type="search" name="q" th:value="${q}" placeholder="Действие, пользователь или объект" aria-label="Поиск по журналу">
             <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-search me-1"></i>Найти</button>
-            <a class="btn btn-sm btn-outline-secondary" th:if="${q != null and !q.isBlank()}" data-ajax-get="#audit-section" th:href="@{/audit}"><i class="bi bi-x-lg me-1"></i>Сбросить</a>
         </form>
     </div>
+    <div id="audit-results">
     <div class="card"><div class="table-responsive"><table class="table table-hover table-sm align-middle mb-0">
         <thead><tr><th>Время</th><th>Пользователь</th><th>Действие</th><th>Объект</th><th>Детали</th><th>IP</th></tr></thead>
         <tbody>
@@ -29,9 +28,9 @@
             <td class="small text-muted" th:text="${a.ip} ?: ''"></td>
         </tr></tbody></table></div></div>
     <div class="mt-3 d-flex align-items-center gap-2">
-        <a class="btn btn-sm btn-outline-secondary" th:if="${page > 0}" data-ajax-get="#audit-section" th:href="@{/audit(page=${page - 1},q=${q})}"><i class="bi bi-arrow-left me-1"></i>Новее</a>
+        <a class="btn btn-sm btn-outline-secondary" th:if="${page > 0}" data-ajax-get="#audit-results" th:href="@{/audit(page=${page - 1},q=${q})}"><i class="bi bi-arrow-left me-1"></i>Новее</a>
         <span class="small text-muted px-2" th:if="${page > 0 or hasNext}" th:text="'Страница ' + (${page} + 1)"></span>
-        <a class="btn btn-sm btn-outline-secondary" th:if="${hasNext}" data-ajax-get="#audit-section" th:href="@{/audit(page=${page + 1},q=${q})}">Старше<i class="bi bi-arrow-right ms-1"></i></a>
+        <a class="btn btn-sm btn-outline-secondary" th:if="${hasNext}" data-ajax-get="#audit-results" th:href="@{/audit(page=${page + 1},q=${q})}">Старше<i class="bi bi-arrow-right ms-1"></i></a>
     </div>
     </div>
 </th:block>

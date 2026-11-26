@@ -170,7 +170,11 @@ public class SandboxController {
                 if (req.env() != null) {
                     scripts.updateEnv(req.scriptId(), cleanEnv(req.env())); // переменные из отладчика - в нагрузку скрипта
                 }
-                return ResponseEntity.ok(Map.of("redirect", "/scripts/" + req.scriptId() + "/versions/" + nv.getId()));
+                return ResponseEntity.ok(Map.of(
+                        "redirect", "/scripts/" + req.scriptId() + "/versions/" + nv.getId(),
+                        "scriptId", req.scriptId(),
+                        "version", nv.getNumber(),
+                        "name", scripts.get(req.scriptId()).getName()));
             }
             ScriptVersion v = scripts.createFromFiles(req.name() == null ? "" : req.name(),
                     req.description() == null ? "" : req.description(), files,
@@ -178,7 +182,11 @@ public class SandboxController {
             if (req.env() != null && !req.env().isEmpty()) {
                 scripts.updateEnv(v.getScriptId(), cleanEnv(req.env()));
             }
-            return ResponseEntity.ok(Map.of("redirect", "/scripts/" + v.getScriptId()));
+            return ResponseEntity.ok(Map.of(
+                    "redirect", "/scripts/" + v.getScriptId(),
+                    "scriptId", v.getScriptId(),
+                    "version", v.getNumber(),
+                    "name", req.name() == null ? "" : req.name().strip()));
         } catch (IllegalArgumentException | IllegalStateException | IOException e) {
             return ResponseEntity.badRequest().body(Map.of("error", String.valueOf(e.getMessage())));
         }

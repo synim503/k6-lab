@@ -605,8 +605,36 @@
                         scriptId: existing ? existing.id : null, comment: existing ? $('sb-comment').value : '', env: envMap()})})
                     .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
                     .then(function (res) {
-                        if (res.ok) { setDirty(false); location.href = res.j.redirect; }
-                        else { showErr(res.j.error || 'Не удалось сохранить'); saving = false; saveBtn.disabled = false; saveBtn.innerHTML = origHtml; }
+                        saving = false;
+                        saveBtn.disabled = false;
+                        saveBtn.innerHTML = origHtml;
+                        if (!res.ok) { showErr(res.j.error || 'Не удалось сохранить'); return; }
+                        var wasNew = !existing;
+                        var nextId = res.j.scriptId || (existing && existing.id);
+                        var nextVer = res.j.version || (existing ? existing.version + 1 : 1);
+                        var nextName = res.j.name || name;
+                        existing = {id: nextId, name: nextName, version: nextVer};
+                        if (wasNew && nextId) {
+                            var sel = $('sb-script');
+                            if (sel && !sel.querySelector('option[value="' + nextId + '"]')) {
+                                var opt = document.createElement('option');
+                                opt.value = String(nextId);
+                                opt.textContent = nextName;
+                                sel.appendChild(opt);
+                            }
+                            if (sel) { sel.value = String(nextId); }
+                            try { history.replaceState(null, '', '/scripts/sandbox?script=' + encodeURIComponent(nextId)); } catch (_) {}
+                        }
+                        if ($('sb-comment')) { $('sb-comment').value = ''; }
+                        setDirty(false);
+                        applyMode();
+                        if (window.k6Toast) {
+                            window.k6Toast(
+                                wasNew ? ('Скрипт «' + nextName + '» сохранён') : ('Сохранена версия ' + nextVer + ' скрипта «' + nextName + '»'),
+                                'ok',
+                                res.j.redirect ? {actionLabel: wasNew ? 'Открыть скрипт' : 'Открыть версию', actionHref: res.j.redirect} : undefined
+                            );
+                        }
                     })
                     .catch(function (e) { showErr('Ошибка запроса: ' + e); saving = false; saveBtn.disabled = false; saveBtn.innerHTML = origHtml; });
             };

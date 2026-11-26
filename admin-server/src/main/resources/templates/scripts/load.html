@@ -20,7 +20,7 @@
         </div>
     </div>
 
-    <form th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post"
+    <form id="ld-main-form" th:action="@{/scripts/{id}/load(id=${script.id})}" th:object="${form}" method="post"
           data-ajax="#ld-alerts-wrap,#ld-prof-init,#ld-prof-switcher-btn,#ld-base-wrap,#ld-sticky-actions,#ld-prof-base-row,#adv-summary-badges,#t-config,#t-req"
           th:attr="data-from-profile=${formDirty != null ? 'true' : null}">
 

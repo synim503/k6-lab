@@ -138,10 +138,17 @@ window.k6Toast = function (msg, kind, opts) {
     closeBtn.innerHTML = '&times;';
     el.appendChild(ic);
     el.appendChild(txt);
+    if (opts && opts.actionLabel && opts.actionHref) {
+        var act = document.createElement('a');
+        act.className = 'k6-toast-action ms-2 fw-semibold text-decoration-underline flex-shrink-0';
+        act.href = String(opts.actionHref);
+        act.textContent = String(opts.actionLabel);
+        el.appendChild(act);
+    }
     el.appendChild(closeBtn);
     box.appendChild(el);
 
-    var ttl = (opts && opts.duration) || (type === 'err' ? 6000 : 3800);
+    var ttl = (opts && opts.duration) || (opts && opts.actionHref ? 6000 : (type === 'err' ? 6000 : 3800));
     var hovered = false;
     var timer = null;
     function dismiss() {
@@ -956,9 +963,11 @@ window.k6InitSubtree(document);
         });
     }
 
-    function extractAndToastFlashes(doc) {
+    function extractAndToastFlashes(doc, form) {
         var hasError = false;
         var count = 0;
+        var actLabel = form && form.dataset ? form.dataset.ajaxToastActionLabel : null;
+        var actHref = form && form.dataset ? form.dataset.ajaxToastActionHref : null;
         doc.querySelectorAll('main > .alert.alert-dismissible[role="alert"]').forEach(function (al) {
             var span = al.querySelector('span.flex-grow-1') || al;
             var text = (span.textContent || '').trim();
@@ -967,7 +976,8 @@ window.k6InitSubtree(document);
                 : (al.classList.contains('alert-warning') ? 'warn'
                     : (al.classList.contains('alert-success') ? 'ok' : 'info'));
             if (kind === 'err') { hasError = true; }
-            window.k6Toast(text, kind);
+            var opts = (kind === 'ok' && actLabel && actHref) ? {actionLabel: actLabel, actionHref: actHref} : undefined;
+            window.k6Toast(text, kind, opts);
             count++;
         });
         return {hasError: hasError, count: count};
@@ -1101,7 +1111,7 @@ window.k6InitSubtree(document);
                 location.href = finalUrl.href;
                 return;
             }
-            var flash = extractAndToastFlashes(doc);
+            var flash = extractAndToastFlashes(doc, form);
             if (!r.res.ok && flash.count === 0) {
                 flash.hasError = true;
                 window.k6Toast('Ошибка выполнения запроса (HTTP ' + r.res.status + ')', 'err');
@@ -1138,21 +1148,27 @@ window.k6InitSubtree(document);
         });
     };
 
+    function submitAjaxGetForm(form, push) {
+        var base = new URL(form.getAttribute('action') || location.href, location.origin);
+        var params = new URLSearchParams(new FormData(form));
+        var fullUrl = base.pathname + (params.toString() ? '?' + params.toString() : '') + (base.hash || '');
+        var spec = form.dataset.ajaxGet;
+        return window.k6AjaxRefresh(spec, fullUrl).then(function () {
+            if (push) { history.pushState({k6AjaxGet: spec}, '', fullUrl); }
+            else { history.replaceState({k6AjaxGet: spec}, '', fullUrl); }
+        }).catch(function (err) {
+            if (err && err.aborted) { return; }
+            window.k6Toast('Не удалось обновить данные', 'err');
+        });
+    }
+
     document.addEventListener('submit', function (ev) {
         var form = ev.target;
         if (!form || form.tagName !== 'FORM' || ev.defaultPrevented) { return; }
         var method = (form.method || 'get').toLowerCase();
         if (method === 'get' && form.dataset && form.dataset.ajaxGet) {
             ev.preventDefault();
-            var base = new URL(form.getAttribute('action') || location.href, location.origin);
-            var params = new URLSearchParams(new FormData(form));
-            var fullUrl = base.pathname + (params.toString() ? '?' + params.toString() : '') + (base.hash || '');
-            window.k6AjaxRefresh(form.dataset.ajaxGet, fullUrl).then(function () {
-                history.replaceState(null, '', fullUrl);
-            }).catch(function (err) {
-                if (err && err.aborted) { return; }
-                window.k6Toast('Не удалось обновить данные', 'err');
-            });
+            submitAjaxGetForm(form, false);
             return;
         }
         if (method !== 'post') { return; }
@@ -1165,6 +1181,17 @@ window.k6InitSubtree(document);
         window.k6AjaxSubmit(form, sub);
     });
 
+    var searchTimers = new WeakMap();
+    document.addEventListener('input', function (ev) {
+        var inp = ev.target;
+        if (!inp || !inp.dataset || inp.dataset.ajaxSearch !== 'true' || !inp.form || !inp.form.dataset.ajaxGet) { return; }
+        var prev = searchTimers.get(inp);
+        if (prev) { clearTimeout(prev); }
+        searchTimers.set(inp, setTimeout(function () {
+            if (inp.isConnected && inp.form) { submitAjaxGetForm(inp.form, false); }
+        }, 280));
+    });
+
     document.addEventListener('click', function (ev) {
         var a = ev.target && ev.target.closest ? ev.target.closest('a[data-ajax-get]') : null;
         if (!a || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey || ev.button !== 0) { return; }
@@ -1172,8 +1199,9 @@ window.k6InitSubtree(document);
         ev.preventDefault();
         var href = a.getAttribute('href');
         if (!href) { return; }
-        window.k6AjaxRefresh(a.dataset.ajaxGet, href).then(function () {
-            history.replaceState(null, '', href);
+        var spec = a.dataset.ajaxGet;
+        window.k6AjaxRefresh(spec, href).then(function () {
+            history.pushState({k6AjaxGet: spec}, '', href);
         }).catch(function (err) {
             if (err && err.aborted) { return; }
             location.href = href;
@@ -1193,11 +1221,22 @@ window.k6InitSubtree(document);
         var u = new URL(location.href);
         if (el.value) { u.searchParams.set(param, el.value); } else { u.searchParams.delete(param); }
         var nextUrl = u.pathname + (u.search ? u.search : '') + (u.hash || '');
-        window.k6AjaxRefresh(el.dataset.ajaxGet, nextUrl).then(function () {
-            history.replaceState(null, '', nextUrl);
+        var spec = el.dataset.ajaxGet;
+        window.k6AjaxRefresh(spec, nextUrl).then(function () {
+            history.pushState({k6AjaxGet: spec}, '', nextUrl);
         }).catch(function (err) {
             if (err && err.aborted) { return; }
             location.href = nextUrl;
         });
+    });
+
+    window.addEventListener('popstate', function (ev) {
+        var st = ev.state;
+        if (st && st.k6AjaxGet) {
+            window.k6AjaxRefresh(st.k6AjaxGet, location.href).catch(function (err) {
+                if (err && err.aborted) { return; }
+                location.reload();
+            });
+        }
     });
 })();

@@ -192,7 +192,7 @@
     <div id="pane-versions" class="d-none">
         <div class="row g-3">
             <div class="col-lg-8">
-                <div class="card"><div class="table-responsive"><table class="table table-sm table-hover mb-0">
+                <div class="card" id="versions-table-card"><div class="table-responsive"><table class="table table-sm table-hover mb-0">
                     <thead><tr><th>Версия</th><th>Источник</th><th>Комментарий</th><th class="text-end">Операций</th><th>Создана</th><th></th></tr></thead>
                     <tbody>
                     <tr th:each="v, st : ${versions}">
@@ -220,10 +220,11 @@
                             <button type="button" class="btn btn-sm active" data-src="file">Файл</button>
                             <button type="button" class="btn btn-sm" data-src="git">Git</button></div></div>
 
-                    <form id="src-file" th:action="@{/scripts/{id}/versions(id=${script.id})}" method="post" enctype="multipart/form-data">
+                    <form id="src-file" th:action="@{/scripts/{id}/versions(id=${script.id})}" method="post" enctype="multipart/form-data"
+                          data-ajax="#pane-overview,#versions-table-card" data-ajax-reset="true">
                         <label class="dropzone d-block mb-2" for="ver-file">
                             <i class="bi bi-cloud-arrow-up"></i>
-                            <span class="picked">Перетащите файл или нажмите для выбора</span>
+                            <span class="picked" data-dz-default="Перетащите файл или нажмите для выбора">Перетащите файл или нажмите для выбора</span>
                             <span class="d-block small mt-1">.js, либо архив .zip / .tar.gz с модулями и данными</span>
                             <input class="visually-hidden" id="ver-file" type="file" name="file" required></label>
                         <div class="mb-2"><label class="form-label" for="ver-entry">Главный файл (для архива)</label>
@@ -241,7 +242,8 @@
                             <button type="button" class="btn btn-sm btn-outline-secondary" hx-get="" th:attr="hx-get=@{/scripts/{id}/git-check(id=${script.id})}"
                                     hx-target="#git-check">
                                 <span class="spinner-border spinner-border-sm k6-htmx-spin me-1" role="status" aria-hidden="true"></span>Проверить обновления</button>
-                            <form th:action="@{/scripts/{id}/git-latest(id=${script.id})}" method="post">
+                            <form th:action="@{/scripts/{id}/git-latest(id=${script.id})}" method="post"
+                                  data-ajax="#pane-overview,#versions-table-card,#git-check">
                                 <button class="btn btn-sm btn-outline-primary">Взять последнюю</button></form>
                         </div>
                         <div id="git-check" th:fragment="gitCheck">
@@ -256,7 +258,8 @@
                             </div>
                         </div>
                         <div class="text-muted small" th:if="${repos.isEmpty()}">Репозиториев нет. Добавьте их в «Ещё → Git-репозитории».</div>
-                        <form th:unless="${repos.isEmpty()}" th:action="@{/scripts/{id}/git-import(id=${script.id})}" method="post">
+                        <form th:unless="${repos.isEmpty()}" th:action="@{/scripts/{id}/git-import(id=${script.id})}" method="post"
+                              data-ajax="#pane-overview,#versions-table-card,#git-check">
                             <div class="mb-2"><label class="form-label">Репозиторий</label>
                                 <select class="form-select form-select-sm" name="repoId" required>
                                     <option th:each="r : ${repos}" th:value="${r.id}" th:text="${r.name}" th:selected="${gitRepo != null and gitRepo.id == r.id}"></option></select></div>

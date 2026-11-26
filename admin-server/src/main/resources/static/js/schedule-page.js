@@ -274,9 +274,10 @@
                         if (!r.ok) { throw new Error('HTTP ' + r.status); }
                         if (window.k6Toast) { window.k6Toast('Порядок очереди обновлён', 'ok'); }
                         if (window.k6AjaxRefresh) {
-                            return window.k6AjaxRefresh(SCH_AJAX_SEL);
+                            return window.k6AjaxRefresh(SCH_AJAX_SEL).then(function () {
+                                document.dispatchEvent(new CustomEvent('k6:timeline-reload'));
+                            });
                         }
-                        location.reload();
                     }).catch(function () {
                         if (window.k6Toast) { window.k6Toast('Не удалось сохранить новый порядок очереди', 'err'); }
                         if (window.k6AjaxRefresh) { window.k6AjaxRefresh(SCH_AJAX_SEL); }

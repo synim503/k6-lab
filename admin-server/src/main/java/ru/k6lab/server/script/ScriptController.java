@@ -198,7 +198,9 @@ public class ScriptController {
     @PostMapping("/{id}/versions")
     public String uploadVersion(@PathVariable Long id, @RequestParam("file") MultipartFile file,
                                 @RequestParam(defaultValue = "") String entrypoint,
-                                @RequestParam(defaultValue = "") String comment, RedirectAttributes ra) {
+                                @RequestParam(defaultValue = "") String comment,
+                                @org.springframework.web.bind.annotation.RequestHeader(value = "X-Requested-With", required = false) String xhr,
+                                RedirectAttributes ra) {
         try {
             if (file.isEmpty()) {
                 throw new IllegalArgumentException("Выберите файл");
@@ -206,7 +208,7 @@ public class ScriptController {
             try (InputStream in = file.getInputStream()) {
                 ScriptVersion v = service.addVersionFromUpload(id, file.getOriginalFilename(), in, entrypoint, comment);
                 ra.addFlashAttribute("info", "Создана версия " + v.getNumber());
-                return "redirect:/scripts/" + id + "/versions/" + v.getId();
+                return "XMLHttpRequest".equals(xhr) ? "redirect:/scripts/" + id : "redirect:/scripts/" + id + "/versions/" + v.getId();
             }
         } catch (IllegalArgumentException | IllegalStateException | IOException e) {
             ra.addFlashAttribute("error", e.getMessage());
@@ -331,11 +333,13 @@ public class ScriptController {
 
     @PostMapping("/{id}/git-import")
     public String gitImport(@PathVariable Long id, @RequestParam Long repoId, @RequestParam String ref,
-                            @RequestParam String entrypoint, @RequestParam(defaultValue = "") String comment, RedirectAttributes ra) {
+                            @RequestParam String entrypoint, @RequestParam(defaultValue = "") String comment,
+                            @org.springframework.web.bind.annotation.RequestHeader(value = "X-Requested-With", required = false) String xhr,
+                            RedirectAttributes ra) {
         try {
             ScriptVersion v = service.importFromGit(id, null, repoId, ref, entrypoint, comment);
             ra.addFlashAttribute("info", "Версия " + v.getNumber() + " из Git (" + v.sourceLabel() + ")");
-            return "redirect:/scripts/" + id + "/versions/" + v.getId();
+            return "XMLHttpRequest".equals(xhr) ? "redirect:/scripts/" + id : "redirect:/scripts/" + id + "/versions/" + v.getId();
         } catch (IllegalArgumentException | IllegalStateException | IOException e) {
             ra.addFlashAttribute("error", gitMessage(e));
         } catch (GitClient.GitHostKeyException e) {
@@ -359,11 +363,13 @@ public class ScriptController {
     }
 
     @PostMapping("/{id}/git-latest")
-    public String gitLatest(@PathVariable Long id, RedirectAttributes ra) {
+    public String gitLatest(@PathVariable Long id,
+                            @org.springframework.web.bind.annotation.RequestHeader(value = "X-Requested-With", required = false) String xhr,
+                            RedirectAttributes ra) {
         try {
             ScriptVersion v = service.importLatestOfBranch(id);
             ra.addFlashAttribute("info", "Версия " + v.getNumber() + " (" + v.sourceLabel() + ")");
-            return "redirect:/scripts/" + id + "/versions/" + v.getId();
+            return "XMLHttpRequest".equals(xhr) ? "redirect:/scripts/" + id : "redirect:/scripts/" + id + "/versions/" + v.getId();
         } catch (IllegalArgumentException | IllegalStateException | IOException e) {
             ra.addFlashAttribute("error", gitMessage(e));
         } catch (GitClient.GitHostKeyException e) {

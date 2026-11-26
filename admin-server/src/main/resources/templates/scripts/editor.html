@@ -7,11 +7,13 @@
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='versions')}"></th:block>
 
     <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-        <h5 class="mb-0">Редактор: <code th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span id="edit-ver-num" th:text="${v.number}"></span></span></h5>
+        <h5 class="mb-0">Редактор: <code id="edit-file-path" th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span id="edit-ver-num" th:text="${v.number}"></span></span></h5>
         <a class="btn btn-outline-secondary btn-sm edit-nav-guard" id="edit-back-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}"><i class="bi bi-arrow-left me-1"></i>К версии</a>
     </div>
     <div class="mb-2 small text-muted" id="edit-files-bar">Файлы версии:
-        <a class="me-2 edit-nav-guard" th:each="f : ${scriptFiles}" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
+        <a class="me-2 edit-file-link" th:each="f : ${scriptFiles}"
+           th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
+           th:attr="data-file-path=${f.path},data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${f.path})}"
            th:text="${f.path}" th:classappend="${f.path == path} ? 'fw-bold'"></a></div>
     <div class="alert alert-info py-2 small">Сохранение создаёт <strong>новую версию</strong>: старая остаётся неизменной. Сценарии, пороги и теги из <code>options</code> при сохранении вырезаются, их задаёт админка.</div>
     <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post"
@@ -43,15 +45,96 @@
             var loadingEl = document.getElementById('edit-loading');
             var saveBtn = document.getElementById('edit-save');
             var errBox = document.getElementById('edit-err');
+            var filePathEl = document.getElementById('edit-file-path');
+            var fileInputEl = form ? form.querySelector('input[name="file"]') : null;
             var dirty = false;
             var submitting = false;
+            var suppressDirty = false;
             var editor = null;
             var initialText = '';
+            var fileLoadSeq = 0;
+
+            function langFor(p) {
+                return /\.json$/i.test(p || '') ? 'json' : /\.(js|mjs|cjs|ts)$/i.test(p || '') ? 'javascript' : 'plaintext';
+            }
 
             function setDirty(v) {
                 dirty = !!v;
                 if (form) { form.classList.toggle('is-dirty', dirty); }
             }
+
+            function switchFile(link, push) {
+                if (!editor || !link) { return; }
+                var nextPath = link.dataset.filePath || '';
+                var nextFileUrl = link.dataset.fileUrl || '';
+                if (!nextFileUrl) { location.href = link.href; return; }
+                var mySeq = ++fileLoadSeq;
+                if (errBox) { errBox.classList.add('d-none'); errBox.textContent = ''; }
+                box.classList.add('k6-ajax-busy');
+                fetch(nextFileUrl, {credentials: 'same-origin'}).then(function (r) {
+                    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+                    return r.json();
+                }).then(function (data) {
+                    if (mySeq !== fileLoadSeq) { return; }
+                    initialText = data.content || '';
+                    var oldModel = editor.getModel();
+                    var nextModel = monaco.editor.createModel(initialText, langFor(nextPath));
+                    suppressDirty = true;
+                    try {
+                        editor.setModel(nextModel);
+                        editor.setScrollTop(0);
+                        editor.layout();
+                    } finally {
+                        suppressDirty = false;
+                    }
+                    if (oldModel && oldModel !== nextModel && (!oldModel.isDisposed || !oldModel.isDisposed())) {
+                        try { oldModel.dispose(); } catch (_) {}
+                    }
+                    if (filePathEl) { filePathEl.textContent = nextPath; }
+                    if (fileInputEl) { fileInputEl.value = nextPath; }
+                    box.dataset.fileUrl = nextFileUrl;
+                    document.querySelectorAll('#edit-files-bar a.edit-file-link').forEach(function (a) {
+                        a.classList.toggle('fw-bold', a.dataset.filePath === nextPath);
+                    });
+                    setDirty(false);
+                    var nextHref = link.getAttribute('href');
+                    if (nextHref) {
+                        if (push) { history.pushState({editFilePath: nextPath}, '', nextHref); }
+                        else { history.replaceState({editFilePath: nextPath}, '', nextHref); }
+                    }
+                }).catch(function (e) {
+                    if (mySeq !== fileLoadSeq) { return; }
+                    if (window.k6Toast) { window.k6Toast('Не удалось открыть файл: ' + (e && e.message ? e.message : e), 'err'); }
+                }).finally(function () {
+                    if (mySeq === fileLoadSeq) { box.classList.remove('k6-ajax-busy'); }
+                });
+            }
+
+            document.querySelectorAll('#edit-files-bar a.edit-file-link').forEach(function (a) {
+                a.addEventListener('click', function (e) {
+                    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) { return; }
+                    e.preventDefault();
+                    if (fileInputEl && a.dataset.filePath === fileInputEl.value) { return; }
+                    if (!editor) { location.href = a.href; return; }
+                    if (!dirty || submitting) { switchFile(a, true); return; }
+                    window.k6Confirm({
+                        title: 'Несохранённые изменения',
+                        message: 'В текущем файле есть несохранённые правки. Переключиться на «' + a.dataset.filePath + '» без сохранения?',
+                        confirmText: 'Переключиться',
+                        variant: 'warning'
+                    }).then(function (ok) {
+                        if (ok) { switchFile(a, true); }
+                    });
+                });
+            });
+
+            window.addEventListener('popstate', function () {
+                if (!editor) { return; }
+                var fp = new URLSearchParams(location.search).get('file');
+                if (!fp) { return; }
+                var link = document.querySelector('#edit-files-bar a.edit-file-link[data-file-path="' + CSS.escape(fp) + '"]');
+                if (link && (!fileInputEl || fileInputEl.value !== fp)) { switchFile(link, false); }
+            });
 
             function triggerSave() {
                 if (!editor || !saveBtn || saveBtn.disabled) { return; }
@@ -110,6 +193,7 @@
                     editor = monaco.editor.create(box, {value: initialText, language: lang, automaticLayout: true,
                         minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
                     editor.onDidChangeModelContent(function () {
+                        if (suppressDirty) { return; }
                         setDirty(editor.getValue() !== initialText);
                     });
                     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, triggerSave);
@@ -181,10 +265,16 @@
                                 var oldRe = new RegExp('/versions/' + oldVid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=/|$)');
                                 form.dataset.curVid = newVid;
                                 form.setAttribute('action', form.getAttribute('action').replace(oldRe, '/versions/' + newVid));
-                                document.querySelectorAll('a.edit-nav-guard').forEach(function (a) {
+                                document.querySelectorAll('a.edit-nav-guard, a.edit-file-link').forEach(function (a) {
                                     var h = a.getAttribute('href');
                                     if (h) { a.setAttribute('href', h.replace(oldRe, '/versions/' + newVid)); }
+                                    if (a.dataset && a.dataset.fileUrl) {
+                                        a.dataset.fileUrl = a.dataset.fileUrl.replace(oldRe, '/versions/' + newVid);
+                                    }
                                 });
+                                if (box && box.dataset && box.dataset.fileUrl) {
+                                    box.dataset.fileUrl = box.dataset.fileUrl.replace(oldRe, '/versions/' + newVid);
+                                }
                                 var verNumEl = document.getElementById('edit-ver-num');
                                 var metaEl = doc.getElementById('version-meta');
                                 var verNum = metaEl && metaEl.dataset ? metaEl.dataset.versionNumber : null;

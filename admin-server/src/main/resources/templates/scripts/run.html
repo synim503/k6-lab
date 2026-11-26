@@ -111,11 +111,16 @@
 
             <!-- Режим 2: Запланировать запуск -->
             <div id="pane-schedule" class="d-none">
-                <form class="card card-body mx-0" id="schedule" th:action="@{/scripts/{id}/schedule(id=${script.id})}" method="post">
+                <form class="card card-body mx-0" id="schedule" th:action="@{/scripts/{id}/schedule(id=${script.id})}" method="post"
+                      data-ajax="#sch-pending-wrap"
+                      data-ajax-toast-action-label="Открыть расписание"
+                      th:attr="data-ajax-toast-action-href=@{/schedule}">
                     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
                         <h6 class="m-0"><i class="bi bi-calendar-event me-1 text-primary"></i>Запланировать запуск</h6>
-                        <span class="small text-muted" th:if="${!pendingSchedule.isEmpty()}">
-                            Уже в расписании: <b th:text="${pendingSchedule.size()}"></b> · <a th:href="@{/schedule}">открыть список</a>
+                        <span class="small text-muted" id="sch-pending-wrap">
+                            <th:block th:if="${!pendingSchedule.isEmpty()}">
+                                Уже в расписании: <b th:text="${pendingSchedule.size()}"></b> · <a th:href="@{/schedule}">открыть список</a>
+                            </th:block>
                         </span>
                     </div>
 
@@ -528,6 +533,13 @@
             document.querySelectorAll('.now-k6-flag').forEach(function (c) { c.addEventListener('change', syncNowFlags); });
             var httpDbg = document.getElementById('http-debug');
             if (httpDbg) { httpDbg.addEventListener('change', syncNowFlags); }
+
+            // После планирования через AJAX сразу обновляем полосы занятости на таймлайне
+            document.addEventListener('k6:swapped', function (ev) {
+                if (ev.detail && ev.detail.form && ev.detail.form.id === 'schedule' && !ev.detail.hasError) {
+                    document.dispatchEvent(new CustomEvent('k6:timeline-reload'));
+                }
+            });
 
             // Инициализация режима по хэшу #schedule
             if (location.hash === '#schedule') { setMode('schedule'); }

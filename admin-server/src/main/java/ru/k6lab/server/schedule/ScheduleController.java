@@ -5,6 +5,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import ru.k6lab.server.load.LoadForm;
@@ -357,7 +358,10 @@ public class ScheduleController {
                          @RequestParam(defaultValue = "false") boolean shift,
                          @RequestParam(defaultValue = "script") String envMode, @RequestParam(required = false) String envText,
                          @RequestParam(required = false) String returnTo,
+                         @RequestHeader(value = "X-Requested-With", required = false) String xhr,
                          @RequestParam Map<String, String> all, Principal user, RedirectAttributes ra) {
+        boolean stayOnRunPage = "XMLHttpRequest".equals(xhr) && !"schedule".equals(returnTo);
+        String successRedirect = stayOnRunPage ? "redirect:/scripts/" + id + "/run#schedule" : "redirect:/schedule";
         try {
             Map<String, String> env = "custom".equals(envMode) ? LoadForm.parseKv(envText) : null;
             Map<String, Double> pct = new LinkedHashMap<>();
@@ -380,7 +384,7 @@ public class ScheduleController {
                         ? ScheduledRunService.QueuePosition.FRONT : ScheduledRunService.QueuePosition.BACK;
                 var res = service.enqueueParams(id, profile, generatorIds, count, env, pct, pos, by);
                 ra.addFlashAttribute("info", formatEnqueueMessage("Тест «" + res.title() + "» добавлен", res, pos));
-                return "redirect:/schedule";
+                return successRedirect;
             }
             Instant at = null; // время не выбрано - ближайшее доступное
             if (runAt != null && !runAt.isBlank()) {
@@ -392,7 +396,7 @@ public class ScheduleController {
             }
             long sid = service.schedule(id, at, generatorIds, count, env, pct, profile, by, shift);
             ra.addFlashAttribute("info", "Запуск запланирован (#" + sid + ")");
-            return "redirect:/schedule";
+            return successRedirect;
         } catch (IllegalArgumentException | IllegalStateException e) {
             ra.addFlashAttribute("error", e.getMessage());
             return "schedule".equals(returnTo) ? "redirect:/schedule" : "redirect:/scripts/" + id + "/run#schedule";

@@ -1,5 +1,16 @@
-(function () {
+window.k6InitLoadEditor = function () {
     'use strict';
+
+    if (window._k6LoadCleanup) { window._k6LoadCleanup(); }
+    var _ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var _sig = _ac ? {signal: _ac.signal} : undefined;
+    var _passiveSig = _ac ? {passive: true, signal: _ac.signal} : {passive: true};
+    var _cleanupFns = [];
+    window._k6LoadCleanup = function () {
+        if (_ac) { try { _ac.abort(); } catch (_) {} }
+        _cleanupFns.forEach(function (fn) { try { fn(); } catch (_) {} });
+        _cleanupFns = [];
+    };
 
     // ---- описание полей сценария k6 (подписи, типы, подсказки)
     var F = {
@@ -942,6 +953,10 @@
     var chartMetricMode = 'auto'; // 'auto' | 'rate' | 'vus'
     var chartStacked = true;
     var chartTimer = null;
+    _cleanupFns.push(function () {
+        clearTimeout(chartTimer);
+        if (liveChart) { try { liveChart.destroy(); } catch (_) {} liveChart = null; }
+    });
 
     function scheduleChartUpdate() {
         clearTimeout(chartTimer);
@@ -1894,9 +1909,9 @@
         impDz.addEventListener('click', function (e) {
             if (e.target === impFile || (e.target && e.target.closest && e.target.closest('input[type="file"]'))) { return; }
             impFile.click();
-        });
-        impDz.addEventListener('dragover', function (e) { e.preventDefault(); impDz.classList.add('drag'); });
-        impDz.addEventListener('dragleave', function () { impDz.classList.remove('drag'); });
+        }, _sig);
+        impDz.addEventListener('dragover', function (e) { e.preventDefault(); impDz.classList.add('drag'); }, _sig);
+        impDz.addEventListener('dragleave', function () { impDz.classList.remove('drag'); }, _sig);
         impDz.addEventListener('drop', function (e) {
             e.preventDefault();
             impDz.classList.remove('drag');
@@ -1904,12 +1919,12 @@
                 impFile.files = e.dataTransfer.files;
                 impLbl.innerHTML = '<span class="picked"><i class="bi bi-file-earmark-check me-1"></i>' + esc(e.dataTransfer.files[0].name) + '</span>';
             }
-        });
+        }, _sig);
         impFile.addEventListener('change', function () {
             if (impFile.files && impFile.files.length > 0) {
                 impLbl.innerHTML = '<span class="picked"><i class="bi bi-file-earmark-check me-1"></i>' + esc(impFile.files[0].name) + '</span>';
             }
-        });
+        }, _sig);
     }
     var impModal = document.getElementById('ld-import-modal');
     if (impModal && impModal.dataset.autoOpen === 'true') {
@@ -1929,27 +1944,27 @@
                     ? '<i class="bi bi-calendar-plus me-1"></i>Импортировать и запланировать'
                     : '<i class="bi bi-upload me-1"></i>Импортировать';
             }
-        });
+        }, _sig);
     }
     if (impAt && impIso) {
         impAt.addEventListener('input', function () {
             var d = new Date(impAt.value);
             impIso.value = isNaN(d) ? '' : d.toISOString();
-        });
+        }, _sig);
     }
     document.querySelectorAll('[data-fill-example]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var src = document.getElementById(btn.dataset.fillExample);
             var dst = document.getElementById(btn.dataset.fillTarget);
             if (src && dst) { dst.value = src.textContent.trim(); dst.focus(); }
-        });
+        }, _sig);
     });
     document.querySelectorAll('[data-copy-example]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var src = document.getElementById(btn.dataset.copyExample);
             if (!src) { return; }
             if (window.k6Copy) { window.k6Copy(src.textContent.trim(), btn); }
-        });
+        }, _sig);
     });
 
     // ==================== Dirty State, Submit & Profiles ====================
@@ -2005,10 +2020,10 @@
                     if (primarySave) { primarySave.click(); } else { form.submit(); }
                 }
             }
-        });
+        }, _sig);
         window.addEventListener('beforeunload', function (e) {
             if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; }
-        });
+        }, _sig);
     }
 
     gwFromJson();
@@ -2032,7 +2047,7 @@
             secs.forEach(function (el) { if (el.offsetTop <= y) { cur = el; } });
             pills.forEach(function (a) { a.classList.toggle('active', cur && a.getAttribute('href') === '#' + cur.id); });
         }
-        window.addEventListener('scroll', syncSpy, {passive: true});
+        window.addEventListener('scroll', syncSpy, _passiveSig);
         syncSpy();
     })();
 
@@ -2080,10 +2095,10 @@
                     applyBaseBtn.click();
                 }
             });
-        });
+        }, _sig);
         document.addEventListener('k6:ajax-done', function (ev) {
             if (ev.detail && ev.detail.form === form) { submitting = false; }
-        });
+        }, _sig);
     }
 
     // ==================== Unified Profile Picker & Bulk Delete Modal ====================
@@ -2259,7 +2274,7 @@
                 });
                 if (opts.reloadIfCurrentDeleted && opts.deletedIds && loadedId != null && opts.deletedIds.indexOf(loadedId) >= 0) {
                     dirty = false;
-                    location.href = loadUrl;
+                    switchProfile(loadUrl, true);
                     return;
                 }
                 syncProfilesFromDoc(doc, opts.keepUrl ? null : r.url);
@@ -2271,6 +2286,62 @@
             });
         }
 
+        function switchProfile(targetUrl, push) {
+            if (!window.K6 || !window.K6.fetchHtml) {
+                location.href = targetUrl;
+                return;
+            }
+            try { bootstrap.Modal.getOrCreateInstance(profModalEl).hide(); } catch (_) {}
+            var mainForm = document.getElementById('ld-main-form');
+            if (mainForm) { mainForm.classList.add('k6-ajax-busy'); }
+            window.K6.fetchHtml(targetUrl).then(function (r) {
+                var doc = r.doc;
+                var swapped = [];
+                ['#ld-alerts-wrap', '#ld-main-form', '#adv-summary-badges', '#t-config', '#t-req', '#ld-prof-base-row', '#ld-prof-init'].forEach(function (sel) {
+                    var oldEl = document.querySelector(sel);
+                    var newEl = doc.querySelector(sel);
+                    if (oldEl && newEl) {
+                        var imported = document.importNode(newEl, true);
+                        oldEl.replaceWith(imported);
+                        if (window.k6InitSubtree) { window.k6InitSubtree(imported); }
+                        swapped.push(imported);
+                    }
+                });
+                var newModal = doc.getElementById('ld-profiles-modal');
+                if (newModal && profModalEl) {
+                    profModalEl.dataset.loadedId = newModal.dataset.loadedId || '';
+                }
+                var newHead = doc.querySelector('.page-head');
+                var curHead = document.querySelector('.page-head');
+                if (newHead && curHead) {
+                    var importedHead = document.importNode(newHead, true);
+                    curHead.replaceWith(importedHead);
+                }
+                if (push !== false) {
+                    try { history.pushState({k6LoadProfile: r.url}, '', r.url); } catch (_) {}
+                }
+                doc.querySelectorAll('main > .alert.alert-dismissible[role="alert"]').forEach(function (al) {
+                    var span = al.querySelector('span.flex-grow-1') || al;
+                    var text = (span.textContent || '').trim();
+                    if (!text) { return; }
+                    var kind = al.classList.contains('alert-danger') ? 'err'
+                        : (al.classList.contains('alert-warning') ? 'warn' : 'info');
+                    if (window.k6Toast) { window.k6Toast(text, kind); }
+                });
+                window.k6InitLoadEditor();
+                document.dispatchEvent(new CustomEvent('k6:swapped', {
+                    detail: {targets: swapped, url: r.url, doc: doc, form: null, hasError: false}
+                }));
+            }).catch(function (err) {
+                if (err && err.redirectedToLogin) { return; }
+                location.href = targetUrl;
+            }).finally(function () {
+                var curForm = document.getElementById('ld-main-form');
+                if (curForm) { curForm.classList.remove('k6-ajax-busy'); }
+            });
+        }
+        window.k6LoadSwitchProfile = switchProfile;
+
         document.addEventListener('k6:swapped', function (ev) {
             var d = ev.detail || {};
             if (d.form === form && !d.hasError) {
@@ -2279,7 +2350,7 @@
                 if (form) { form.classList.remove('is-dirty'); }
             }
             syncProfilesFromDoc(d.doc || null, d.url || null);
-        });
+        }, _sig);
 
         function visibleProfiles() {
             var q = searchIn ? searchIn.value.trim().toLowerCase() : '';
@@ -2370,7 +2441,7 @@
 
         function navigateWithDirtyCheck(targetUrl, label) {
             if (!dirty) {
-                location.href = targetUrl;
+                switchProfile(targetUrl, true);
                 return;
             }
             window.k6Confirm({
@@ -2381,17 +2452,17 @@
             }).then(function (ok) {
                 if (!ok) { return; }
                 dirty = false;
-                location.href = targetUrl;
+                switchProfile(targetUrl, true);
             });
         }
 
         renderProfiles();
         if (searchIn) {
-            searchIn.addEventListener('input', renderProfiles);
+            searchIn.addEventListener('input', renderProfiles, _sig);
         }
         profModalEl.addEventListener('shown.bs.modal', function () {
             if (searchIn) { searchIn.focus(); }
-        });
+        }, _sig);
         var openBase = function () {
             if (loadedId == null) {
                 bootstrap.Modal.getOrCreateInstance(profModalEl).hide();
@@ -2401,13 +2472,13 @@
         };
         profModalEl.addEventListener('click', function (e) {
             if (e.target && e.target.closest && e.target.closest('#ld-prof-base-row')) { openBase(); }
-        });
+        }, _sig);
         profModalEl.addEventListener('keydown', function (e) {
             if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.closest && e.target.closest('#ld-prof-base-row')) {
                 e.preventDefault();
                 openBase();
             }
-        });
+        }, _sig);
         if (selectAllCb) {
             selectAllCb.addEventListener('change', function () {
                 var vis = visibleProfiles();
@@ -2416,13 +2487,13 @@
                     else { selectedIds.delete(p.id); }
                 });
                 syncSelectionUi();
-            });
+            }, _sig);
         }
         if (bulkClearBtn) {
             bulkClearBtn.addEventListener('click', function () {
                 selectedIds.clear();
                 syncSelectionUi();
-            });
+            }, _sig);
         }
         if (bulkDelBtn) {
             bulkDelBtn.addEventListener('click', function () {
@@ -2441,7 +2512,7 @@
                     if (loadedId != null) { fields.currentProfile = String(loadedId); }
                     postForm(bulkDelUrl, fields, {reloadIfCurrentDeleted: true, deletedIds: ids, keepUrl: true});
                 });
-            });
+            }, _sig);
         }
 
         profGallery.addEventListener('click', function (e) {
@@ -2499,6 +2570,12 @@
                     postForm(loadUrl + '/profile/delete', {profile: String(pid)}, {reloadIfCurrentDeleted: true, deletedIds: [pid], keepUrl: true});
                 });
             }
-        });
+        }, _sig);
     }
-})();
+};
+window.k6InitLoadEditor();
+window.addEventListener('popstate', function (ev) {
+    if (ev.state && ev.state.k6LoadProfile && typeof window.k6LoadSwitchProfile === 'function') {
+        window.k6LoadSwitchProfile(location.href, false);
+    }
+});
