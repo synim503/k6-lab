@@ -48,40 +48,42 @@
         <th:block th:if="${run.request != null and run.request.get('scheduleId') != null}">
             · <i class="bi bi-calendar-event"></i> по расписанию</th:block>
         <th:block th:if="${run.request != null and run.request.get('k6Flags') != null}">
-            · флаги k6: <span class="badge text-bg-warning" th:each="f : ${run.request.get('k6Flags')}" th:text="${f}"></span></th:block>
+            · флаги k6: <span class="badge text-bg-warning me-1" th:each="f : ${run.request.get('k6Flags')}" th:text="${f}"></span></th:block>
     </div>
 
     <div id="run-live" th:attr="data-run-id=${run.id},data-status-url=@{/runs/{id}/status(id=${run.id})},data-status-stream=@{/runs/{id}/stream/status(id=${run.id})},data-log-stream=@{/runs/{id}/stream/logs(id=${run.id})},data-metrics-stream=@{/runs/{id}/stream/metrics(id=${run.id})},data-metrics-history=@{/runs/{id}/metrics/history(id=${run.id})},data-final=${run.status.terminal}">
         <div th:replace="~{runs/_status :: status}"></div>
     </div>
 
-    <ul class="nav nav-tabs mb-3">
-        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-metrics" type="button"><i class="bi bi-graph-up me-1"></i>Метрики</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-system" type="button"><i class="bi bi-cpu me-1"></i>Системные метрики</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-results" type="button" id="results-tab-btn"><i class="bi bi-clipboard-data me-1"></i>Результаты</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs" type="button"><i class="bi bi-terminal me-1"></i>Логи</button></li>
-        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-snapshot" type="button"><i class="bi bi-camera me-1"></i>Параметры запуска</button></li>
+    <ul class="nav nav-tabs mb-3" id="run-tabs" role="tablist">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-metrics" data-tab-hash="metrics" type="button"><i class="bi bi-graph-up me-1"></i>Метрики</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-system" data-tab-hash="system" type="button"><i class="bi bi-cpu me-1"></i>Системные метрики</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-results" data-tab-hash="results" type="button" id="results-tab-btn"><i class="bi bi-clipboard-data me-1"></i>Результаты</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs" data-tab-hash="logs" type="button" id="logs-tab-btn"><i class="bi bi-terminal me-1"></i>Логи <span class="badge text-bg-danger ms-1 d-none" id="log-err-badge">0</span></button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-snapshot" data-tab-hash="snapshot" type="button"><i class="bi bi-camera me-1"></i>Параметры запуска</button></li>
     </ul>
     <div class="tab-content">
         <div class="tab-pane fade show active" id="tab-metrics">
-            <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
                 <span class="small text-muted" id="metric-phase">Ожидание данных из Prometheus…</span>
-                <div class="btn-group btn-group-sm ms-auto me-2" role="group" aria-label="Период таблицы" id="metric-range">
-                    <button type="button" class="btn btn-outline-secondary active" data-range="window">Последняя минута</button>
-                    <button type="button" class="btn btn-outline-secondary" data-range="all" title="С начала нагрузки, без прогрева">Весь тест</button>
+                <div class="d-flex align-items-center gap-2 ms-auto flex-wrap">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Период таблицы" id="metric-range">
+                        <button type="button" class="btn btn-outline-secondary active" data-range="window">Последняя минута</button>
+                        <button type="button" class="btn btn-outline-secondary" data-range="all" title="С начала нагрузки, без прогрева">Весь тест</button>
+                    </div>
+                    <a class="btn btn-sm btn-outline-secondary" th:if="${grafanaUrl != null}" th:href="${grafanaUrl}" target="_blank" rel="noopener"><i class="bi bi-box-arrow-up-right me-1"></i>Открыть в Grafana</a>
                 </div>
-                <a class="btn btn-sm btn-outline-secondary" th:if="${grafanaUrl != null}" th:href="${grafanaUrl}" target="_blank">Открыть в Grafana</a>
             </div>
             <div class="alert alert-warning py-2 px-3 small d-none mb-2" id="autostop-pending-banner"></div>
-            <div class="card mb-3"><table class="table table-sm mb-0 metric-table">
+            <div class="card mb-3"><div class="table-responsive"><table class="table table-sm mb-0 metric-table">
                 <thead><tr><th>Операция</th><th>Интенсивность факт / план, оп/с</th><th>Время ответа / SLA</th><th>Ошибки / порог</th><th>Dropped</th><th>Нарушения</th></tr></thead>
-                <tbody id="metric-table"><tr><td colspan="6" class="text-muted">Нет данных</td></tr></tbody></table></div>
+                <tbody id="metric-table"><tr><td colspan="6" class="text-muted">Нет данных</td></tr></tbody></table></div></div>
             <div class="card mb-3 d-none" id="custom-checks-card">
                 <div class="card-header py-2 small fw-semibold"><i class="bi bi-speedometer2 me-1 text-primary"></i>Кастомные метрики Prometheus (SLA и Автостоп)</div>
-                <table class="table table-sm mb-0">
+                <div class="table-responsive"><table class="table table-sm mb-0">
                     <thead><tr><th>Метрика</th><th>Текущее значение</th><th>Порог</th><th>Серия / хост</th><th>Контроль</th><th>Статус</th></tr></thead>
                     <tbody id="custom-checks-table"></tbody>
-                </table>
+                </table></div>
             </div>
             <div class="row g-3" id="metric-charts"></div>
         </div>
@@ -91,19 +93,30 @@
             <div class="row g-3" id="system-charts"></div>
         </div>
         <div class="tab-pane fade" id="tab-results">
-            <div id="results-box" th:attr="hx-get=@{/runs/{id}/results(id=${run.id})}" hx-trigger="load, click from:#results-tab-btn" hx-swap="innerHTML">
-                <div class="text-muted">Загрузка…</div></div>
+            <div id="results-box" class="k6-htmx-target" th:attr="hx-get=@{/runs/{id}/results(id=${run.id})}" hx-trigger="load, refresh" hx-swap="innerHTML">
+                <div class="text-muted small py-3"><span class="spinner-border spinner-border-sm me-2"></span>Загрузка…</div></div>
         </div>
         <div class="tab-pane fade" id="tab-logs">
-            <div class="row g-2 mb-2">
-                <div class="col-md-3"><select id="log-gen" class="form-select form-select-sm"><option value="">все генераторы</option>
-                    <option th:each="g : ${v.generators}" th:value="${g.rg.generatorName}" th:text="${g.rg.generatorName}"></option></select></div>
-                <div class="col-md-2"><select id="log-level" class="form-select form-select-sm"><option value="">все уровни</option><option>WARN</option><option>ERROR</option><option>INFO</option><option>DEBUG</option></select></div>
-                <div class="col-md-3"><input id="log-search" class="form-control form-control-sm" placeholder="поиск по тексту"></div>
-                <div class="col-md-4 d-flex gap-2 align-items-center">
-                    <button type="button" id="log-pause" class="btn btn-sm btn-outline-secondary">Пауза автоскролла</button>
-                    <a class="btn btn-sm btn-outline-secondary" th:href="@{/runs/{id}/log.txt(id=${run.id})}">Скачать полный лог</a>
-                    <span class="small text-muted" id="log-count"></span></div>
+            <div class="log-toolbar">
+                <div class="d-flex align-items-center gap-1 flex-wrap" id="log-lvl-chips" role="group" aria-label="Фильтр по уровню">
+                    <button type="button" class="log-lvl-chip on" data-lvl="">Все <span class="cnt" id="log-cnt-all">0</span></button>
+                    <button type="button" class="log-lvl-chip is-err" data-lvl="ERROR">ERROR <span class="cnt" id="log-cnt-err">0</span></button>
+                    <button type="button" class="log-lvl-chip is-warn" data-lvl="WARN">WARN <span class="cnt" id="log-cnt-warn">0</span></button>
+                    <button type="button" class="log-lvl-chip" data-lvl="INFO">INFO <span class="cnt" id="log-cnt-info">0</span></button>
+                    <button type="button" class="log-lvl-chip" data-lvl="DEBUG">DEBUG <span class="cnt" id="log-cnt-debug">0</span></button>
+                </div>
+                <select id="log-gen" class="form-select form-select-sm" style="width:auto;min-width:165px" aria-label="Генератор"><option value="">все генераторы</option>
+                    <option th:each="g : ${v.generators}" th:value="${g.rg.generatorName}" th:text="${g.rg.generatorName}"></option></select>
+                <input id="log-search" type="search" class="form-control form-control-sm" style="min-width:180px;max-width:260px;flex:1 1 190px" placeholder="Поиск по тексту…" aria-label="Поиск по логу">
+                <div class="ms-auto d-flex align-items-center gap-1 flex-wrap">
+                    <span class="small text-muted me-1" id="log-count"></span>
+                    <button type="button" id="log-pause" class="btn btn-sm btn-outline-secondary" title="Автопрокрутка к новым строкам"><i class="bi bi-pause-fill me-1"></i>Пауза</button>
+                    <button type="button" id="log-down" class="btn btn-sm btn-outline-primary d-none" title="Прокрутить в конец"><i class="bi bi-arrow-down"></i></button>
+                    <button type="button" id="log-wrap" class="btn btn-sm btn-outline-secondary active" title="Перенос длинных строк" aria-label="Перенос строк"><i class="bi bi-text-wrap"></i></button>
+                    <button type="button" id="log-copy" class="btn btn-sm btn-outline-secondary k6-copy-btn" title="Копировать видимый лог" aria-label="Копировать лог"><i class="bi bi-clipboard"></i></button>
+                    <button type="button" id="log-clear" class="btn btn-sm btn-outline-secondary" title="Очистить буфер на экране (файл на сервере не меняется)" aria-label="Очистить буфер"><i class="bi bi-eraser"></i></button>
+                    <a class="btn btn-sm btn-outline-secondary" th:href="@{/runs/{id}/log.txt(id=${run.id})}" title="Скачать полный лог"><i class="bi bi-download me-1"></i>Скачать</a>
+                </div>
             </div>
             <pre id="run-log" class="log-view mb-0"></pre>
         </div>
@@ -111,17 +124,17 @@
             <div class="alert alert-secondary small">Снимок нагрузки и конфига k6 на момент запуска: последующие правки скрипта на него не влияют.</div>
             <div class="row g-3">
                 <div class="col-md-6"><div class="card"><div class="card-header">Профиль</div>
-                    <table class="table table-sm mb-0"><thead><tr><th>№</th><th>Метка</th><th>Уровень %</th><th>Удержание, с</th></tr></thead>
-                        <tbody><tr th:each="s : ${snap.steps}"><td th:text="${s.no}"></td><td th:text="${s.label}"></td><td th:text="${s.levelPct}"></td><td th:text="${s.holdSec}"></td></tr></tbody></table></div></div>
+                    <div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>№</th><th>Метка</th><th>Уровень %</th><th>Удержание, с</th></tr></thead>
+                        <tbody><tr th:each="s : ${snap.steps}"><td th:text="${s.no}"></td><td th:text="${s.label}"></td><td th:text="${s.levelPct}"></td><td th:text="${s.holdSec}"></td></tr></tbody></table></div></div></div>
                 <div class="col-md-6"><div class="card"><div class="card-header">Операции и SLA</div>
-                    <table class="table table-sm mb-0"><thead><tr><th>Операция</th><th>Функция</th><th>оп/с</th><th>SLA</th></tr></thead>
+                    <div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Операция</th><th>Функция</th><th>оп/с</th><th>SLA</th></tr></thead>
                         <tbody><tr th:each="o : ${snap.operations}"><td th:text="${o.name}"></td><td><code th:text="${o.execFn}"></code></td>
                             <td th:text="${#numbers.formatDecimal(o.ratePerSec, 1, 3)}"></td>
-                            <td th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${o.slaThresholdMs} + ' мс, ошибки ≤ ' + ${o.maxErrorPct} + '%'"></td></tr></tbody></table></div></div>
+                            <td th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${o.slaThresholdMs} + ' мс, ошибки ≤ ' + ${o.maxErrorPct} + '%'"></td></tr></tbody></table></div></div></div>
                 <div class="col-12" th:if="${customChecksConfig != null and !customChecksConfig.isEmpty()}">
                     <div class="card">
                         <div class="card-header"><i class="bi bi-activity me-1 text-primary"></i>Кастомные метрики Prometheus (SLA и Автостоп)</div>
-                        <table class="table table-sm mb-0">
+                        <div class="table-responsive"><table class="table table-sm mb-0">
                             <thead><tr><th>Метрика</th><th>PromQL-запрос</th><th>Порог SLA</th><th>Контроль</th></tr></thead>
                             <tbody><tr th:each="cc : ${customChecksConfig}">
                                 <td class="fw-semibold" th:text="${cc.name}"></td>
@@ -133,16 +146,19 @@
                                     <span class="badge text-bg-light border" th:if="${!cc.stepSla and cc.autoStop}">Автостоп</span>
                                 </td>
                             </tr></tbody>
-                        </table>
+                        </table></div>
                     </div>
                 </div>
                 <div class="col-12"><div class="card"><div class="card-header">Переменные запуска</div>
-                    <div class="p-2 small text-muted" th:if="${envRows.isEmpty()}">Переменные не заданы.</div>
-                    <table class="table table-sm mb-0" th:if="${!envRows.isEmpty()}"><thead><tr><th>Где задана</th><th>Переменная</th><th>Значение</th></tr></thead>
+                    <div class="p-3 small text-muted" th:if="${envRows.isEmpty()}">Переменные не заданы.</div>
+                    <div class="table-responsive" th:if="${!envRows.isEmpty()}"><table class="table table-sm mb-0"><thead><tr><th>Где задана</th><th>Переменная</th><th>Значение</th></tr></thead>
                         <tbody><tr th:each="e : ${envRows}"><td th:text="${e.scope}"></td><td><code th:text="${e.name}"></code></td>
-                            <td class="font-monospace" style="word-break: break-all" th:text="${e.value}"></td></tr></tbody></table></div></div>
-                <div class="col-12"><div class="card"><div class="card-header">Конфиг k6</div>
-                    <pre class="mb-0 p-2 small" style="max-height: 360px; overflow:auto" th:text="${run.k6Config}"></pre></div></div>
+                            <td class="font-monospace" style="word-break: break-all" th:text="${e.value}"></td></tr></tbody></table></div></div></div>
+                <div class="col-12"><div class="card"><div class="card-header d-flex justify-content-between align-items-center">
+                    <span>Конфиг k6</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 k6-copy-btn" data-copy-target="#snap-k6-cfg"><i class="bi bi-clipboard me-1"></i>Копировать</button>
+                </div>
+                    <pre id="snap-k6-cfg" class="mb-0 p-2 small" style="max-height: 360px; overflow:auto" th:text="${run.k6Config}"></pre></div></div>
             </div>
         </div>
     </div>
@@ -151,9 +167,35 @@
     <script th:src="@{/webjars/chart.js/dist/chart.umd.js}"></script>
     <script th:src="@{/js/run-live.js}"></script>
     <script th:src="@{/js/run-metrics.js}"></script>
-    <script>
-        // открыть вкладку по якорю (#results после редиректов) и обновлять итоги, когда run завершился
-        if (location.hash === '#results') { document.getElementById('results-tab-btn').click(); }
+    <script th:inline="none">
+        (function () {
+            var tabs = document.querySelectorAll('#run-tabs [data-tab-hash]');
+            function openByHash() {
+                var h = (location.hash || '').replace(/^#/, '');
+                if (!h) { return; }
+                var btn = document.querySelector('#run-tabs [data-tab-hash="' + h + '"]');
+                if (btn && window.bootstrap && bootstrap.Tab) {
+                    bootstrap.Tab.getOrCreateInstance(btn).show();
+                }
+            }
+            tabs.forEach(function (btn) {
+                btn.addEventListener('shown.bs.tab', function () {
+                    var h = btn.dataset.tabHash;
+                    if (h && location.hash !== '#' + h) {
+                        history.replaceState(null, '', location.pathname + location.search + (h === 'metrics' ? '' : '#' + h));
+                    }
+                    if (h === 'results' && window.htmx) {
+                        var box = document.getElementById('results-box');
+                        if (box && box.dataset.needsRefresh === '1') {
+                            delete box.dataset.needsRefresh;
+                            htmx.trigger(box, 'refresh');
+                        }
+                    }
+                });
+            });
+            window.addEventListener('hashchange', openByHash);
+            openByHash();
+        })();
     </script>
 </th:block>
 </body>

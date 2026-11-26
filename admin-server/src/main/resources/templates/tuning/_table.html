@@ -4,10 +4,10 @@
 <div id="tuning-table" th:fragment="table"
      th:hx-get="${anyRunning} ? @{/tuning/table} : null" th:hx-trigger="${anyRunning} ? 'every 3s' : null" th:hx-swap="${anyRunning} ? 'outerHTML' : null">
     <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
-        <thead><tr><th style="width:34px"><input class="form-check-input" type="checkbox" onclick="document.querySelectorAll('#tuning-table .tg').forEach(c => { c.checked = this.checked; })" aria-label="Выбрать все"></th>
+        <thead><tr><th style="width:34px"><input class="form-check-input" id="tuning-check-all" type="checkbox" aria-label="Выбрать все"></th>
             <th>Генератор</th><th>Профиль</th><th>Находки</th><th>Настройки</th><th>Применено</th><th></th></tr></thead>
         <tbody>
-        <tr th:each="r : ${rows}">
+        <tr th:each="r : ${rows}" data-host-row="1">
             <td><input class="form-check-input tg" type="checkbox" name="generatorIds" th:value="${r.generator.id}" th:disabled="${r.generator.sshCredentialId == null}"
                        th:title="${r.generator.sshCredentialId == null} ? 'Не задана SSH-учётка' : null" th:aria-label="'Выбрать ' + ${r.generator.name}"></td>
             <td><a class="fw-semibold" th:href="@{/generators/{id}(id=${r.generator.id})}" th:text="${r.generator.name}"></a>
@@ -33,7 +33,7 @@
                 <span th:if="${!r.tuned and r.tuning != null}" class="text-muted" th:text="${r.tuning.status == 'ROLLED_BACK'} ? 'откачено' : (${r.tuning.status == 'FAILED'} ? 'не применилось' : '')"></span></td>
             <td class="text-end"><a class="btn btn-sm btn-outline-secondary" th:if="${r.profile != null and r.profile.status == 'DONE'}" th:href="@{/tuning/profile/{id}(id=${r.profile.id})}">Подробнее</a></td>
         </tr>
-        <tr th:if="${rows.isEmpty()}"><td colspan="7" class="text-muted">Нет генераторов.</td></tr>
+        <tr th:if="${rows.isEmpty()}"><td colspan="7"><div class="empty-state py-4"><i class="bi bi-hdd-network"></i>Нет генераторов.</div></td></tr>
         </tbody></table></div></div>
 </div>
 </body>

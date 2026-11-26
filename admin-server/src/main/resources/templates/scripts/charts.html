@@ -11,6 +11,7 @@
          th:attr="data-script-id=${script.id},
                   data-base-url=@{/scripts/{id}/charts(id=${script.id})},
                   data-prom-configured=${promConfigured},
+                  data-chart-theme=${chartStyle.theme().name()},
                   data-open-grafana=${grafanaJson != null}">
 
         <!-- Безопасная передача начального состояния из Thymeleaf в JS -->
@@ -224,18 +225,23 @@
 
                 <!-- Секция 2.5: Переменные конкретного графика -->
                 <div class="cb-section" id="cb-chart-vars-section">
-                    <div class="cb-section-head">
-                        <span class="cb-section-label">
-                            <i class="bi bi-sliders text-primary"></i>Переменные этого графика
-                            <span class="badge text-bg-light" id="cb-cv-count">0</span>
-                        </span>
-                        <button type="button" class="btn btn-sm btn-outline-primary" id="cb-cv-add-btn">
-                            <i class="bi bi-plus-lg me-1"></i>Переменная
-                        </button>
-                    </div>
-                    <div class="small text-muted mb-2">Действуют только на этот график (перекрывают общие переменные скрипта). Удобно дублировать одну панель с разными <code>$instance</code>, <code>$job</code>, <code>$pod</code> и т.д.</div>
-                    <div class="d-none mb-2 d-flex flex-wrap align-items-center gap-1" id="cb-cv-hints"></div>
-                    <div class="cb-cv-rows" id="cb-cv-rows"></div>
+                    <details class="k6-disclosure" id="cb-cv-details">
+                        <summary class="cb-section-head mb-0">
+                            <span class="cb-section-label">
+                                <span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span>
+                                <i class="bi bi-sliders text-primary"></i>Переменные этого графика
+                                <span class="badge text-bg-light" id="cb-cv-count">0</span>
+                            </span>
+                            <button type="button" class="btn btn-sm btn-outline-primary ms-auto" id="cb-cv-add-btn">
+                                <i class="bi bi-plus-lg me-1"></i>Переменная
+                            </button>
+                        </summary>
+                        <div class="mt-2">
+                            <div class="small text-muted mb-2">Действуют только на этот график (перекрывают общие переменные скрипта). Удобно дублировать одну панель с разными <code>$instance</code>, <code>$job</code>, <code>$pod</code> и т.д.</div>
+                            <div class="d-none mb-2 d-flex flex-wrap align-items-center gap-1" id="cb-cv-hints"></div>
+                            <div class="cb-cv-rows" id="cb-cv-rows"></div>
+                        </div>
+                    </details>
                 </div>
 
                 <!-- Секция 3: Живой WYSIWYG-предпросмотр -->
@@ -259,7 +265,9 @@
                                 <option value="min:360">Последние 6 часов</option>
                             </optgroup>
                         </select>
-                        <button type="button" class="btn btn-sm btn-outline-primary" id="cb-preview-btn">
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="cb-preview-btn"
+                                th:disabled="${!promConfigured}"
+                                th:title="${promConfigured} ? 'Выполнить PromQL и построить график (Ctrl+Enter)' : 'Сначала укажите URL Prometheus в Настройках'">
                             <i class="bi bi-play-fill me-1"></i>Проверить и построить
                         </button>
                     </div>

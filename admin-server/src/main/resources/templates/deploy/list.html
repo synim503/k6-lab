@@ -10,29 +10,42 @@
             <div class="sub mt-1">Установка, обновление и перезапуск агентов. Журнал каждой операции открывается по клику.</div></div>
         <a class="btn btn-outline-secondary" th:href="@{/generators}"><i class="bi bi-hdd-network me-1"></i>К генераторам</a>
     </div>
+    <div class="gen-toolbar" th:if="${!items.isEmpty()}">
+        <div class="status-chips" role="group" aria-label="Фильтр по статусу">
+            <button type="button" class="chip-btn on" data-deploy-chip data-chip-val="">Все <b th:text="${items.size()}"></b></button>
+            <button type="button" class="chip-btn" data-deploy-chip data-chip-val="SUCCESS"><span class="badge text-bg-success">Успешно</span></button>
+            <button type="button" class="chip-btn" data-deploy-chip data-chip-val="FAILED"><span class="badge text-bg-danger">Ошибка</span></button>
+            <button type="button" class="chip-btn" data-deploy-chip data-chip-val="RUNNING"><span class="badge text-bg-primary">В работе</span></button>
+            <button type="button" class="chip-btn" data-deploy-chip data-chip-val="WAITING_HOST_KEY"><span class="badge text-bg-warning">Ждёт ключ</span></button>
+        </div>
+        <div class="d-flex align-items-center gap-2 ms-auto flex-wrap">
+            <input type="search" class="form-control form-control-sm" placeholder="Поиск по хосту, операции, ошибке…" aria-label="Поиск операций"
+                   style="min-width:220px;max-width:300px"
+                   data-table-filter="#deploy-tbody tr[data-filter-val]"
+                   data-chip-group="[data-deploy-chip]"
+                   data-empty-target="#deploy-no-match"
+                   data-count-target="#deploy-count">
+            <span class="small text-muted" id="deploy-count"></span>
+        </div>
+    </div>
+
     <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
         <thead><tr><th>№</th><th>Операция</th><th>Хост</th><th>Статус</th><th>Начало</th><th>Длительность</th><th>Кто</th><th>Ошибка</th></tr></thead>
-        <tbody>
+        <tbody id="deploy-tbody">
         <tr th:if="${items.isEmpty()}"><td colspan="8"><div class="empty-state"><i class="bi bi-tools"></i>Операций ещё не было.
             <div class="mt-2 small">Они появятся, когда вы установите или обновите агент на сервере.</div></div></td></tr>
-        <tr th:each="d : ${items}" class="run-row" th:attr="data-href=@{/deployments/{id}(id=${d.id})}">
-            <td><a th:href="@{/deployments/{id}(id=${d.id})}" th:text="'#' + ${d.id}"></a></td>
+        <tr id="deploy-no-match" class="d-none"><td colspan="8"><div class="empty-state py-4"><i class="bi bi-search"></i>По фильтру операции не найдены</div></td></tr>
+        <tr th:each="d : ${items}" class="run-row" th:attr="data-href=@{/deployments/{id}(id=${d.id})},data-filter-val=${d.status.name()}">
+            <td><a class="fw-semibold" th:href="@{/deployments/{id}(id=${d.id})}" th:text="'#' + ${d.id}"></a></td>
             <td class="fw-semibold text-nowrap" th:text="${fmt.deployOperation(d.operation.name())}"></td>
             <td th:text="${d.targetHost}"></td>
             <td><span class="badge" th:text="${fmt.deployStatus(d.status.name())}" th:classappend="${fmt.deployBadge(d.status.name())}"></span></td>
             <td class="small text-muted text-nowrap" th:text="${#temporals.format(d.startedAt, 'dd.MM.yyyy HH:mm')}"></td>
             <td class="small text-nowrap" th:text="${d.finishedAt != null} ? ${T(java.time.Duration).between(d.startedAt, d.finishedAt).toSeconds()} + ' с' : '—'"></td>
             <td class="small" th:text="${d.startedBy}"></td>
-            <td class="text-danger small" style="max-width:360px" th:text="${d.error}"></td>
+            <td class="text-danger small text-truncate" style="max-width:340px" th:text="${d.error}" th:title="${d.error}"></td>
         </tr></tbody>
     </table></div></div>
-</th:block>
-<th:block layout:fragment="scripts">
-    <script th:inline="none">
-        document.querySelectorAll('tr.run-row').forEach(function (r) {
-            r.addEventListener('click', function (e) { if (!e.target.closest('a,button')) location.href = r.dataset.href; });
-        });
-    </script>
 </th:block>
 </body>
 </html>

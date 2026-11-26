@@ -32,7 +32,7 @@
             <div class="form-check form-switch m-0" th:if="${outdated > 0}">
                 <input class="form-check-input" type="checkbox" id="gen-drift" role="switch">
                 <label class="form-check-label small" for="gen-drift">Только с устаревшей версией</label></div>
-            <input class="form-control form-control-sm" id="gen-q" type="search" placeholder="Найти по имени или адресу" aria-label="Поиск генератора" style="width:260px">
+            <input class="form-control form-control-sm" id="gen-q" type="search" placeholder="Найти по имени или адресу" aria-label="Поиск генератора" style="min-width:200px;max-width:270px;flex:1 1 220px">
             <span class="text-muted small" id="gen-count"></span>
         </div>
     </div>
@@ -41,14 +41,15 @@
         <div class="card"><div class="table-responsive">
             <table class="table table-hover mb-0 gen-table">
                 <thead><tr>
-                    <th data-sort="name" class="sortable">Имя</th><th data-sort="status" class="sortable">Состояние</th>
-                    <th data-sort="cpu" class="sortable">CPU</th><th data-sort="ram" class="sortable">RAM</th>
-                    <th title="Приём / отправка, МБ/с">Сеть ↓ / ↑</th><th data-sort="load" class="sortable" title="Load average за минуту">Load</th>
+                    <th data-sort="name" class="sortable" tabindex="0" role="button">Имя</th><th data-sort="status" class="sortable" tabindex="0" role="button">Состояние</th>
+                    <th data-sort="cpu" class="sortable" tabindex="0" role="button">CPU</th><th data-sort="ram" class="sortable" tabindex="0" role="button">RAM</th>
+                    <th title="Приём / отправка, МБ/с">Сеть ↓ / ↑</th><th data-sort="load" class="sortable" tabindex="0" role="button" title="Load average за минуту">Load</th>
                     <th title="Свободно на диске, ГБ">Диск</th><th title="Открытые сокеты">Сокеты</th><th title="Расхождение часов с сервером">Часы</th><th>Агент · k6</th>
                 </tr></thead>
                 <tbody>
                 <tr th:if="${generators.isEmpty()}"><td colspan="10"><div class="empty-state"><i class="bi bi-hdd-network"></i>
                     Генераторов пока нет.<div class="mt-3" sec:authorize="hasRole('ADMIN')"><a class="btn btn-primary" th:href="@{/generators/add}">Добавить сервер</a></div></div></td></tr>
+                <tr id="gen-no-match" class="d-none"><td colspan="10"><div class="empty-state py-4"><i class="bi bi-search"></i>По фильтру генераторы не найдены</div></td></tr>
                 <tr th:each="v : ${generators}" th:attr="data-name=${#strings.toLowerCase(v.g().name + ' ' + v.g().host)},data-status=${v.statusLabel},data-badge=${v.badgeClass},data-drift=${v.hasDrift() ? '1' : '0'},data-cpu=${v.cpu != null ? v.cpu : -1},data-ram=${v.memPct != null ? v.memPct : -1},data-load=${v.load1 != null ? v.load1 : -1}">
                     <td><a class="fw-semibold" th:href="@{/generators/{id}(id=${v.g().id})}" th:text="${v.g().name}"></a>
                         <div class="small text-muted" th:if="${v.g().host != v.g().name}" th:text="${v.g().host}"></div></td>
@@ -128,9 +129,13 @@
                     }).forEach(function (r) { body.appendChild(r); });
                 }
                 document.querySelectorAll('#gen-table th.sortable').forEach(function (th) {
-                    th.classList.toggle('sorted', th.dataset.sort === st.sort);
-                    th.dataset.dir = th.dataset.sort === st.sort ? (st.dir > 0 ? '▲' : '▼') : '';
+                    var on = th.dataset.sort === st.sort;
+                    th.classList.toggle('sorted', on);
+                    th.dataset.dir = on ? (st.dir > 0 ? '▲' : '▼') : '';
+                    th.setAttribute('aria-sort', on ? (st.dir > 0 ? 'ascending' : 'descending') : 'none');
                 });
+                var noMatch = document.getElementById('gen-no-match');
+                if (noMatch) { noMatch.classList.toggle('d-none', !all.length || shown > 0); }
                 count.textContent = all.length ? (shown === all.length ? all.length + ' шт.' : 'Показано ' + shown + ' из ' + all.length) : '';
             }
             chips.addEventListener('click', function (e) {
@@ -139,10 +144,19 @@
             });
             q.addEventListener('input', function () { st.q = q.value; save(); apply(); });
             if (drift) { drift.addEventListener('change', apply); }
-            document.addEventListener('click', function (e) {
-                var th = e.target.closest('#gen-table th.sortable'); if (!th) { return; }
+            function toggleSort(th) {
                 if (st.sort === th.dataset.sort) { st.dir = -st.dir; } else { st.sort = th.dataset.sort; st.dir = 1; }
                 save(); apply();
+            }
+            document.addEventListener('click', function (e) {
+                var th = e.target.closest('#gen-table th.sortable'); if (!th) { return; }
+                toggleSort(th);
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter' && e.key !== ' ') { return; }
+                var th = e.target.closest && e.target.closest('#gen-table th.sortable'); if (!th) { return; }
+                e.preventDefault();
+                toggleSort(th);
             });
             // таблица обновляется раз в 5 секунд: после каждой подмены заново применяем фильтры и сортировку
             document.body.addEventListener('htmx:afterSettle', apply);

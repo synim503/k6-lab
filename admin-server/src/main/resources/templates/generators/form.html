@@ -4,32 +4,33 @@
 <head><title>Новый генератор</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3">Добавить генератор</h3>
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/generators}">Генераторы</a><i class="bi bi-chevron-right"></i><span>Расширенная форма</span></nav>
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-sliders"></i></span>Добавить генератор</h3></div>
     <form th:action="@{/generators}" th:object="${form}" method="post" class="card card-body">
         <div class="alert alert-danger" th:if="${#fields.hasGlobalErrors()}">
             <div th:each="e : ${#fields.globalErrors()}" th:text="${e}"></div>
         </div>
         <div class="row g-3">
             <div class="col-md-4">
-                <label class="form-label">Имя</label>
+                <label class="form-label" for="name">Имя</label>
                 <input class="form-control" th:field="*{name}" placeholder="gen-01">
                 <div class="text-danger small" th:errors="*{name}"></div>
             </div>
             <div class="col-md-5">
-                <label class="form-label">Хост</label>
+                <label class="form-label" for="host">Хост</label>
                 <input class="form-control" th:field="*{host}" placeholder="10.0.0.11">
                 <div class="text-danger small" th:errors="*{host}"></div>
             </div>
             <div class="col-md-3">
-                <label class="form-label">Порт SSH</label>
-                <input class="form-control" type="number" th:field="*{sshPort}">
+                <label class="form-label" for="sshPort">Порт SSH</label>
+                <input class="form-control" type="number" min="1" max="65535" th:field="*{sshPort}">
             </div>
             <th:block th:replace="~{generators/_fields :: common}"></th:block>
         </div>
-        <div class="mt-4 d-flex gap-2">
-            <button class="btn btn-primary" type="submit">Установить агент</button>
-            <button class="btn btn-outline-secondary" type="submit" th:formaction="@{/generators/preflight}">Проверить подключение (только pre-flight)</button>
-            <a class="btn btn-link" th:href="@{/generators}">Отмена</a>
+        <div class="mt-4 d-flex gap-2 flex-wrap">
+            <button class="btn btn-primary" type="submit"><i class="bi bi-cloud-arrow-down me-1"></i>Установить агент</button>
+            <button class="btn btn-outline-secondary" type="submit" th:formaction="@{/generators/preflight}"><i class="bi bi-plug me-1"></i>Проверить подключение (только pre-flight)</button>
+            <a class="btn btn-outline-secondary" th:href="@{/generators}">Отмена</a>
         </div>
     </form>
 </th:block>

@@ -4,26 +4,40 @@
 <head><title>Git-репозиторий</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3" th:text="${form.id == null} ? 'Новый репозиторий' : 'Репозиторий: ' + ${form.name}"></h3>
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/git-repos}">Git-репозитории</a><i class="bi bi-chevron-right"></i><span th:text="${form.id == null} ? 'Новый' : ${form.name}"></span></nav>
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-git"></i></span><span th:text="${form.id == null} ? 'Новый репозиторий' : 'Репозиторий: ' + ${form.name}"></span></h3></div>
     <form th:action="@{/git-repos}" th:object="${form}" method="post" class="card card-body" autocomplete="off">
         <input type="hidden" th:field="*{id}">
         <div class="row g-3">
-            <div class="col-md-4"><label class="form-label">Имя</label><input class="form-control" th:field="*{name}" required></div>
-            <div class="col-md-8"><label class="form-label">URL</label><input class="form-control" th:field="*{url}" placeholder="https://git.example/team/perf-scripts.git или git@git.example:team/perf.git" required></div>
-            <div class="col-md-4"><label class="form-label">Аутентификация</label>
+            <div class="col-md-4"><label class="form-label" for="name">Имя</label><input class="form-control" th:field="*{name}" required></div>
+            <div class="col-md-8"><label class="form-label" for="url">URL</label><input class="form-control" th:field="*{url}" placeholder="https://git.example/team/perf-scripts.git или git@git.example:team/perf.git" required></div>
+            <div class="col-md-4"><label class="form-label" for="authType">Аутентификация</label>
                 <select class="form-select" th:field="*{authType}">
                     <option value="NONE">Без аутентификации</option><option value="HTTPS_TOKEN">HTTPS-токен</option><option value="SSH">SSH-ключ (из SSH-учёток)</option></select></div>
-            <div class="col-md-4"><label class="form-label">HTTPS-токен (или «пользователь:токен»)</label>
+            <div class="col-md-4" id="git-token-wrap"><label class="form-label" for="token">HTTPS-токен (или «пользователь:токен»)</label>
                 <input class="form-control" type="password" th:field="*{token}" autocomplete="new-password">
                 <div class="secret-hint" th:if="${form.hasToken}">Токен сохранён и не показывается. Оставьте пустым, чтобы не менять.</div></div>
-            <div class="col-md-4"><label class="form-label">SSH-учётка (ключ)</label>
+            <div class="col-md-4" id="git-ssh-wrap"><label class="form-label" for="sshCredentialId">SSH-учётка (ключ)</label>
                 <select class="form-select" th:field="*{sshCredentialId}"><option value="">—</option>
                     <option th:each="c : ${sshCredentials}" th:value="${c.id}" th:text="${c.name}"></option></select></div>
-            <div class="col-md-6"><label class="form-label">Подкаталог со скриптами</label>
+            <div class="col-md-6"><label class="form-label" for="subdir">Подкаталог со скриптами</label>
                 <input class="form-control" th:field="*{subdir}" placeholder="пусто = корень репозитория"></div>
         </div>
-        <div class="mt-4 d-flex gap-2"><button class="btn btn-primary">Сохранить</button><a class="btn btn-link" th:href="@{/git-repos}">Отмена</a></div>
+        <div class="mt-4 d-flex gap-2"><button class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Сохранить</button><a class="btn btn-outline-secondary" th:href="@{/git-repos}">Отмена</a></div>
     </form>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        (function () {
+            var type = document.getElementById('authType'), tok = document.getElementById('git-token-wrap'), ssh = document.getElementById('git-ssh-wrap');
+            function sync() {
+                if (!type) { return; }
+                if (tok) { tok.classList.toggle('d-none', type.value !== 'HTTPS_TOKEN'); }
+                if (ssh) { ssh.classList.toggle('d-none', type.value !== 'SSH'); }
+            }
+            if (type) { type.addEventListener('change', sync); sync(); }
+        })();
+    </script>
 </th:block>
 </body>
 </html>

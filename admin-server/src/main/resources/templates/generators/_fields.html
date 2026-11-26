@@ -56,6 +56,19 @@
             <label class="form-check-label" for="tuneOs">Тюнинг ОС (sysctl, только системный режим)</label>
         </div>
     </div>
+    <script th:inline="none">
+        (function () {
+            var mode = document.getElementById('mode'), tune = document.getElementById('tuneOs');
+            if (!mode || !tune) { return; }
+            function sync() {
+                var isUser = mode.value === 'USER';
+                tune.disabled = isUser;
+                if (isUser) { tune.checked = false; }
+            }
+            mode.addEventListener('change', sync);
+            sync();
+        })();
+    </script>
 </th:block>
 </body>
 </html>

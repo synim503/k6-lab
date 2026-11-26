@@ -7,8 +7,11 @@
     <th:block th:replace="~{scripts/_head :: head(script=${script}, active='versions')}"></th:block>
 
     <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h5 class="mb-0">Версия <span th:text="${v.number}"></span>
-            <span class="badge text-bg-secondary ms-1 fw-normal" th:text="${v.sourceLabel()}"></span></h5>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}(id=${script.id})} + '#versions'"><i class="bi bi-arrow-left me-1"></i>Все версии</a>
+            <h5 class="mb-0">Версия <span th:text="${v.number}"></span>
+                <span class="badge text-bg-secondary ms-1 fw-normal" th:text="${v.sourceLabel()}"></span></h5>
+        </div>
         <div class="d-flex gap-2 flex-wrap">
             <a class="btn btn-outline-primary btn-sm" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}"><i class="bi bi-pencil-square me-1"></i>Открыть в редакторе</a>
             <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}/versions/{vid}/download(id=${script.id},vid=${v.id})}"><i class="bi bi-download me-1"></i>Скачать zip</a>
@@ -25,17 +28,19 @@
     <div class="row g-3">
         <div class="col-lg-6">
             <div class="card mb-3"><div class="card-header">Версия</div>
-                <table class="table table-sm mb-0">
+                <div class="table-responsive"><table class="table table-sm mb-0">
                     <tr><th class="w-25">Источник</th><td th:text="${v.sourceLabel()}"></td></tr>
-                    <tr th:if="${v.commitHash}"><th>Коммит</th><td><code th:text="${v.commitHash}"></code></td></tr>
+                    <tr th:if="${v.commitHash}"><th>Коммит</th><td class="d-flex align-items-center gap-2"><code th:text="${v.commitHash}"></code>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 k6-copy-btn" th:attr="data-copy=${v.commitHash}" title="Копировать коммит" aria-label="Копировать коммит"><i class="bi bi-clipboard"></i></button></td></tr>
                     <tr><th>Entrypoint</th><td><code th:text="${v.entrypoint}"></code></td></tr>
-                    <tr><th>sha256</th><td><code class="small" th:text="${v.sha256}"></code></td></tr>
+                    <tr><th>sha256</th><td class="d-flex align-items-center gap-2"><code class="small text-break" th:text="${v.sha256}"></code>
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 k6-copy-btn flex-shrink-0" th:attr="data-copy=${v.sha256}" title="Копировать SHA256" aria-label="Копировать SHA256"><i class="bi bi-clipboard"></i></button></td></tr>
                     <tr><th>Размер</th><td th:text="${v.sizeBytes} + ' байт'"></td></tr>
                     <tr><th>k6 inspect</th><td><span class="badge" th:text="${v.inspectStatus}"
                             th:classappend="${v.inspectStatus.name() == 'OK'} ? 'text-bg-success' : (${v.inspectStatus.name() == 'FAILED'} ? 'text-bg-danger' : 'text-bg-warning')"></span></td></tr>
                     <tr><th>Создана</th><td th:text="${#temporals.format(v.createdAt, 'dd.MM.yyyy HH:mm')} + ', ' + ${v.createdBy}"></td></tr>
                     <tr th:if="${v.comment}"><th>Комментарий</th><td th:text="${v.comment}"></td></tr>
-                </table></div>
+                </table></div></div>
 
             <div class="card mb-3"><div class="card-header">Операции <span class="badge text-bg-secondary" title="Извлекаются эвристикой по export function / export const">эвристика</span></div>
                 <ul class="list-group list-group-flush">
@@ -62,8 +67,11 @@
                         <td><span class="badge text-bg-light" th:text="${f.kind == 'SCRIPT' ? 'код' : 'данные'}"></span></td>
                     </tr></table></div>
 
-            <div class="card" th:if="${inspectJson}"><div class="card-header">Результат <code>k6 inspect</code></div>
-                <pre class="mb-0 p-2 small" style="max-height: 320px; overflow: auto" th:text="${inspectJson}"></pre></div>
+            <div class="card" th:if="${inspectJson}"><div class="card-header d-flex justify-content-between align-items-center">
+                <span>Результат <code>k6 inspect</code></span>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 k6-copy-btn" data-copy-target="#v-inspect-json"><i class="bi bi-clipboard me-1"></i>Копировать</button>
+            </div>
+                <pre id="v-inspect-json" class="mb-0 p-2 small" style="max-height: 320px; overflow: auto" th:text="${inspectJson}"></pre></div>
             <div class="alert alert-secondary" th:if="${v.inspectError}" th:text="${v.inspectError}"></div>
         </div>
     </div>

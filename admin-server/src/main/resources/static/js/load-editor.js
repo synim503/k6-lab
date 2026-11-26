@@ -282,20 +282,28 @@
     }
 
     function stepRowHtml(tg, hold, ramp, unitShort) {
-        return '<div class="input-group input-group-sm op-step">' +
-            '<span class="input-group-text op-stage-num">#</span>' +
-            '<span class="input-group-text">Уровень</span>' +
-            '<input class="form-control op-stp-t op-calc" style="min-width:74px" type="text" inputmode="decimal" autocomplete="off"' +
-                ' title="Нагрузка на ступени. Можно выражение: 150*1.2, 95+95" value="' + esc(tg) + '">' +
-            '<span class="input-group-text op-stp-unit">' + esc(unitShort) + '</span>' +
-            '<span class="input-group-text">Полка</span>' +
-            '<input class="form-control op-stp-h" style="max-width:86px" placeholder="5m" value="' + esc(hold) + '" title="Длительность удержания ступени: 3m, 5m, 10m">' +
-            '<span class="input-group-text">Переход</span>' +
-            '<input class="form-control op-stp-r" style="max-width:76px" placeholder="0s" value="' + esc(ramp) + '" title="Время выхода на уровень: 0s — скачком, 30s — плавный разгон">' +
-            '<span class="input-group-text op-stp-pct" title="Доля от первой ступени">—</span>' +
-            '<button type="button" class="btn btn-outline-secondary op-step-up" title="Переместить выше"><i class="bi bi-arrow-up"></i></button>' +
-            '<button type="button" class="btn btn-outline-secondary op-step-down" title="Переместить ниже"><i class="bi bi-arrow-down"></i></button>' +
-            '<button type="button" class="btn btn-outline-danger op-step-del" title="Убрать ступень" aria-label="Убрать ступень">×</button>' +
+        return '<div class="op-step-row op-step">' +
+            '<span class="badge text-bg-light border op-stage-num">#</span>' +
+            '<div class="input-group input-group-sm">' +
+                '<span class="input-group-text">Уровень</span>' +
+                '<input class="form-control op-stp-t op-calc" style="width:86px" type="text" inputmode="decimal" autocomplete="off"' +
+                    ' title="Нагрузка на ступени. Можно выражение: 150*1.2, 95+95" value="' + esc(tg) + '">' +
+                '<span class="input-group-text op-stp-unit">' + esc(unitShort) + '</span>' +
+            '</div>' +
+            '<div class="input-group input-group-sm">' +
+                '<span class="input-group-text">Полка</span>' +
+                '<input class="form-control op-stp-h" style="width:74px" placeholder="5m" value="' + esc(hold) + '" title="Длительность удержания ступени: 3m, 5m, 10m">' +
+            '</div>' +
+            '<div class="input-group input-group-sm">' +
+                '<span class="input-group-text">Переход</span>' +
+                '<input class="form-control op-stp-r" style="width:68px" placeholder="0s" value="' + esc(ramp) + '" title="Время выхода на уровень: 0s — скачком, 30s — плавный разгон">' +
+            '</div>' +
+            '<span class="badge op-stp-pct" title="Доля от первой ступени">—</span>' +
+            '<div class="btn-group btn-group-sm ms-auto">' +
+                '<button type="button" class="btn btn-outline-secondary op-step-up" title="Переместить выше" aria-label="Переместить выше"><i class="bi bi-arrow-up"></i></button>' +
+                '<button type="button" class="btn btn-outline-secondary op-step-down" title="Переместить ниже" aria-label="Переместить ниже"><i class="bi bi-arrow-down"></i></button>' +
+                '<button type="button" class="btn btn-outline-danger op-step-del" title="Убрать ступень" aria-label="Убрать ступень"><i class="bi bi-x-lg"></i></button>' +
+            '</div>' +
             '</div>';
     }
 
@@ -1555,29 +1563,57 @@
         }
     });
 
-    // Search & collapse-all operations
+    // Search, enabled filter & collapse-all operations
     var opSearch = document.getElementById('ld-op-search');
-    if (opSearch) {
-        opSearch.addEventListener('input', function () {
-            var q = opSearch.value.trim().toLowerCase();
-            body.querySelectorAll('.op-row').forEach(function (r) {
-                var name = (r.querySelector('input[name$=".name"]').value || '').toLowerCase();
-                var fn = (r.dataset.fn || '').toLowerCase();
-                r.classList.toggle('d-none', !!q && name.indexOf(q) < 0 && fn.indexOf(q) < 0);
-            });
+    var opFilterMode = 'all';
+    function applyOpFilters() {
+        var q = opSearch ? opSearch.value.trim().toLowerCase() : '';
+        body.querySelectorAll('.op-row').forEach(function (r) {
+            var name = (r.querySelector('input[name$=".name"]').value || '').toLowerCase();
+            var fn = (r.dataset.fn || '').toLowerCase();
+            var isOn = !!(r.querySelector('.op-on') && r.querySelector('.op-on').checked);
+            var ok = (!q || name.indexOf(q) >= 0 || fn.indexOf(q) >= 0) && (opFilterMode !== 'on' || isOn);
+            r.classList.toggle('d-none', !ok);
         });
     }
+    if (opSearch) { opSearch.addEventListener('input', applyOpFilters); }
+    document.querySelectorAll('#ld-op-filter-seg [data-op-filter]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            opFilterMode = btn.dataset.opFilter || 'all';
+            document.querySelectorAll('#ld-op-filter-seg [data-op-filter]').forEach(function (b) { b.classList.toggle('active', b === btn); });
+            applyOpFilters();
+        });
+    });
+
     var btnCollapseAll = document.getElementById('ld-collapse-all');
+    function syncCollapseAllBtn() {
+        if (!btnCollapseAll) { return; }
+        var rows = Array.prototype.slice.call(body.querySelectorAll('.op-row:not(.is-off)'));
+        if (!rows.length) { rows = Array.prototype.slice.call(body.querySelectorAll('.op-row')); }
+        var anyOpen = rows.some(function (r) { return !r.classList.contains('is-collapsed'); });
+        btnCollapseAll.innerHTML = anyOpen
+            ? '<i class="bi bi-arrows-collapse me-1"></i>Свернуть все'
+            : '<i class="bi bi-arrows-expand me-1"></i>Развернуть все';
+    }
     if (btnCollapseAll) {
         btnCollapseAll.addEventListener('click', function () {
             var rows = Array.prototype.slice.call(body.querySelectorAll('.op-row'));
-            var anyOpen = rows.some(function (r) { return !r.classList.contains('is-collapsed'); });
+            var anyOpen = rows.some(function (r) { return !r.classList.contains('is-collapsed') && !r.classList.contains('is-off'); });
             rows.forEach(function (r) { r.classList.toggle('is-collapsed', anyOpen); });
-            btnCollapseAll.innerHTML = anyOpen
-                ? '<i class="bi bi-arrows-expand me-1"></i>Развернуть все'
-                : '<i class="bi bi-arrows-collapse me-1"></i>Свернуть все';
+            syncCollapseAllBtn();
         });
     }
+    body.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('.op-collapse-btn')) {
+            setTimeout(syncCollapseAllBtn, 0);
+        }
+    });
+    body.addEventListener('change', function (e) {
+        if (e.target && e.target.classList && e.target.classList.contains('op-on')) {
+            applyOpFilters();
+            syncCollapseAllBtn();
+        }
+    });
 
     // ==================== Dual-Mode Env & Secrets Editor ====================
     var envTa = document.getElementById('ld-env-ta');
@@ -1749,37 +1785,38 @@
         if (!ccRowsBox) { return; }
         var p = preset || { name: '', promql: '', cmp: 'LTE', threshold: 80, unit: '%', stepSla: true, autoStop: false };
         var idx = ccRowsBox.querySelectorAll('.ld-cc-row').length;
-        var html = '<div class="ld-cc-row p-2 rounded border bg-light-subtle">' +
+        var html = '<div class="ld-cc-row ld-cc-card">' +
             '<div class="row g-2 align-items-center">' +
-                '<div class="col-md-3">' +
-                    '<input class="form-control form-control-sm ld-cc-name" name="stop.customChecks[' + idx + '].name" value="' + esc(p.name) + '" maxlength="120" placeholder="Название (например CPU серверов)">' +
+                '<div class="col-md-5">' +
+                    '<input class="form-control form-control-sm ld-cc-name" name="stop.customChecks[' + idx + '].name" value="' + esc(p.name) + '" maxlength="120" placeholder="Название (например CPU серверов)" aria-label="Название метрики">' +
                 '</div>' +
                 '<div class="col-md-4">' +
-                    '<input class="form-control form-control-sm font-monospace ld-cc-promql" name="stop.customChecks[' + idx + '].promql" value="' + esc(p.promql) + '" placeholder="PromQL (доступны {range}, {run_id}, $var)">' +
-                '</div>' +
-                '<div class="col-md-2">' +
                     '<div class="input-group input-group-sm">' +
-                        '<select class="form-select ld-cc-cmp" style="max-width:64px" name="stop.customChecks[' + idx + '].cmp">' +
+                        '<span class="input-group-text text-muted">Порог</span>' +
+                        '<select class="form-select ld-cc-cmp" style="max-width:62px" name="stop.customChecks[' + idx + '].cmp" aria-label="Условие">' +
                             '<option value="LTE"' + (p.cmp === 'LTE' ? ' selected' : '') + '>≤</option>' +
                             '<option value="LT"' + (p.cmp === 'LT' ? ' selected' : '') + '>&lt;</option>' +
                             '<option value="GTE"' + (p.cmp === 'GTE' ? ' selected' : '') + '>≥</option>' +
                             '<option value="GT"' + (p.cmp === 'GT' ? ' selected' : '') + '>&gt;</option>' +
                         '</select>' +
-                        '<input class="form-control ld-cc-thr" type="number" step="any" name="stop.customChecks[' + idx + '].threshold" value="' + esc(p.threshold) + '" placeholder="80">' +
-                        '<input class="form-control ld-cc-unit" style="max-width:52px" name="stop.customChecks[' + idx + '].unit" value="' + esc(p.unit) + '" maxlength="16" placeholder="%">' +
+                        '<input class="form-control ld-cc-thr" type="number" step="any" name="stop.customChecks[' + idx + '].threshold" value="' + esc(p.threshold) + '" placeholder="80" aria-label="Пороговое значение">' +
+                        '<input class="form-control ld-cc-unit" style="max-width:58px" name="stop.customChecks[' + idx + '].unit" value="' + esc(p.unit) + '" maxlength="16" placeholder="%" aria-label="Единицы">' +
                     '</div>' +
                 '</div>' +
-                '<div class="col-md-3 d-flex align-items-center justify-content-end gap-2">' +
-                    '<div class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">' +
+                '<div class="col-md-3 d-flex align-items-center justify-content-md-end gap-2 flex-wrap">' +
+                    '<label class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">' +
                         '<input type="hidden" class="ld-cc-sla-h" name="_stop.customChecks[' + idx + '].stepSla" value="on">' +
                         '<input class="form-check-input ld-cc-sla" type="checkbox" value="true" name="stop.customChecks[' + idx + '].stepSla"' + (p.stepSla !== false ? ' checked' : '') + '>' +
-                        '<label class="form-check-label small">SLA отчёта</label>' +
-                    '</div>' +
-                    '<div class="form-check form-check-inline m-0" title="Останавливать тест при нарушении N проверок подряд">' +
+                        '<span class="form-check-label small">SLA</span>' +
+                    '</label>' +
+                    '<label class="form-check form-check-inline m-0" title="Останавливать тест при нарушении N проверок подряд">' +
                         '<input class="form-check-input ld-cc-stop" type="checkbox" value="true" name="stop.customChecks[' + idx + '].autoStop"' + (p.autoStop ? ' checked' : '') + '>' +
-                        '<label class="form-check-label small">Автостоп</label>' +
-                    '</div>' +
-                    '<button type="button" class="btn btn-sm btn-outline-danger py-0 px-2 ld-cc-del" title="Удалить правило"><i class="bi bi-x-lg"></i></button>' +
+                        '<span class="form-check-label small">Автостоп</span>' +
+                    '</label>' +
+                    '<button type="button" class="btn btn-sm btn-outline-danger btn-icon-sm ld-cc-del" title="Удалить правило" aria-label="Удалить правило"><i class="bi bi-x-lg"></i></button>' +
+                '</div>' +
+                '<div class="col-12">' +
+                    '<input class="form-control form-control-sm font-monospace ld-cc-promql" name="stop.customChecks[' + idx + '].promql" value="' + esc(p.promql) + '" placeholder="PromQL (доступны {range}, {run_id}, $var)" aria-label="PromQL-запрос">' +
                 '</div>' +
             '</div>' +
         '</div>';
@@ -1912,12 +1949,8 @@
     document.querySelectorAll('[data-copy-example]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var src = document.getElementById(btn.dataset.copyExample);
-            if (!src || !navigator.clipboard) { return; }
-            navigator.clipboard.writeText(src.textContent.trim()).then(function () {
-                var prev = btn.innerHTML;
-                btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Скопировано';
-                setTimeout(function () { btn.innerHTML = prev; }, 1600);
-            });
+            if (!src) { return; }
+            if (window.k6Copy) { window.k6Copy(src.textContent.trim(), btn); }
         });
     });
 
@@ -1952,7 +1985,9 @@
                 var card = bad.closest('.op-row');
                 if (card) { card.classList.remove('is-collapsed'); }
                 bad.focus();
-                alert('Не удаётся вычислить выражение в числовом поле. Допустимы числа и знаки + - * / ( ).');
+                if (window.k6Toast) {
+                    window.k6Toast('Не удаётся вычислить выражение в числовом поле. Допустимы числа и знаки + - * / ( ).', 'err');
+                }
                 return;
             }
             if (envTablePane && !envTablePane.classList.contains('d-none')) { syncEnvToTextarea(); }
@@ -1978,9 +2013,29 @@
     }
 
     gwFromJson();
-    body.querySelectorAll('.op-row').forEach(initRow);
+    var allOpRows = body.querySelectorAll('.op-row');
+    allOpRows.forEach(initRow);
+    // При большом списке операций (> 4) сворачиваем карточки по умолчанию, чтобы было удобно ориентироваться
+    if (allOpRows.length > 4) {
+        allOpRows.forEach(function (r) { r.classList.add('is-collapsed'); });
+    }
+    syncCollapseAllBtn();
     refreshAll();
     updateDashboard();
+
+    // Scroll-spy для липкой навигации по разделам нагрузки
+    (function () {
+        var pills = [].slice.call(document.querySelectorAll('.ld-nav-pills .ld-nav-pill[href^="#"]'));
+        var secs = pills.map(function (a) { return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
+        if (!secs.length) { return; }
+        function syncSpy() {
+            var cur = secs[0], y = window.scrollY + 140;
+            secs.forEach(function (el) { if (el.offsetTop <= y) { cur = el; } });
+            pills.forEach(function (a) { a.classList.toggle('active', cur && a.getAttribute('href') === '#' + cur.id); });
+        }
+        window.addEventListener('scroll', syncSpy, {passive: true});
+        syncSpy();
+    })();
 
     dirty = false;
     if (form) { form.classList.remove('is-dirty'); }
@@ -2004,7 +2059,8 @@
                     title: 'Не выбраны разделы',
                     message: 'Отметьте хотя бы один раздел, который нужно отправить в остальные профили.',
                     confirmText: 'Понятно',
-                    variant: 'warning'
+                    variant: 'warning',
+                    hideCancel: true
                 });
                 return;
             }

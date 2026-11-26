@@ -4,6 +4,7 @@
 <head><title>Профиль хоста</title></head>
 <body>
 <th:block layout:fragment="content">
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/generators}">Генераторы</a><i class="bi bi-chevron-right"></i><a th:href="@{/tuning}">Профилирование хостов</a><i class="bi bi-chevron-right"></i><span th:text="${p.generatorName}"></span></nav>
     <div class="page-head">
         <h3 class="mb-0"><span class="icon-tile"><i class="bi bi-speedometer2"></i></span>Профиль: <span th:text="${p.generatorName}"></span></h3>
         <a class="btn btn-outline-secondary" th:href="@{/tuning}"><i class="bi bi-arrow-left me-1"></i>К списку</a>

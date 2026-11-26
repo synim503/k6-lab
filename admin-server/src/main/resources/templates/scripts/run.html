@@ -62,8 +62,9 @@
                             </div>
                         </div>
 
-                        <details class="mt-3">
-                            <summary class="small fw-semibold text-muted"><i class="bi bi-pc-display me-1"></i>Выбрать конкретные серверы (необязательно)</summary>
+                        <details class="mt-3 k6-disclosure">
+                            <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-pc-display"></i>Выбрать конкретные серверы (необязательно)
+                                <span class="badge text-bg-primary d-none" id="now-hosts-badge"></span></summary>
                             <div class="mt-2 sch-host-grid">
                                 <label class="sch-host-pill" th:each="g : ${generators}" th:classappend="${!g.availableForRuns} ? 'is-off'">
                                     <input class="form-check-input host-pick" type="checkbox" name="generatorId" th:id="'g' + ${g.id}" th:value="${g.id}"
@@ -77,8 +78,9 @@
                             <div class="form-text">Если отмечены серверы, количество берётся по ним.</div>
                         </details>
 
-                        <details class="mt-3">
-                            <summary class="small fw-semibold text-muted"><i class="bi bi-bug me-1"></i>Параметры k6 и отладка (необязательно)</summary>
+                        <details class="mt-3 k6-disclosure">
+                            <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-bug"></i>Параметры k6 и отладка (необязательно)
+                                <span class="badge text-bg-warning d-none" id="now-flags-badge"></span></summary>
                             <div class="mt-2 pt-2 border-top">
                                 <label class="form-label small fw-semibold mb-1" for="http-debug">HTTP-отладка</label>
                                 <select class="form-select form-select-sm" style="max-width:420px" name="httpDebug" id="http-debug">
@@ -88,7 +90,7 @@
                                 </select>
                                 <div class="form-text mb-3">Включайте на малой нагрузке: строк лога очень много. В телах могут быть секреты.</div>
                                 <div class="form-check mb-2" th:each="f : ${k6Flags}">
-                                    <input class="form-check-input" type="checkbox" name="flag" th:id="'f-' + ${f.name()}" th:value="${f.name()}">
+                                    <input class="form-check-input now-k6-flag" type="checkbox" name="flag" th:id="'f-' + ${f.name()}" th:value="${f.name()}">
                                     <label class="form-check-label" th:for="'f-' + ${f.name()}">
                                         <span class="fw-semibold" th:text="${f.title}"></span> <code class="small" th:text="${f.arg}"></code>
                                         <span class="badge text-bg-warning ms-1" th:if="${f.changesLoad}" title="Меняет поведение скрипта или нагрузку">меняет нагрузку</span>
@@ -104,7 +106,6 @@
                         </button>
                         <a class="btn btn-outline-secondary" th:href="@{/scripts/{id}(id=${script.id})}">Отмена</a>
                     </div>
-                    <div class="alert alert-danger mt-3 mb-0" th:if="${error}" th:text="${error}"></div>
                 </form>
             </div>
 
@@ -159,6 +160,7 @@
                                 <button type="button" class="sch-preset-chip" data-time-preset="+1h">+1 час</button>
                                 <button type="button" class="sch-preset-chip" data-time-preset="22:00">22:00</button>
                             </div>
+                            <div class="form-text text-primary fw-semibold mt-1" id="sch-pos-note">Ближайшее свободное окно подберётся автоматически.</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-semibold mb-1" for="sch-count">Генераторов</label>
@@ -180,43 +182,47 @@
                         </select>
                     </div>
 
-                    <details class="mt-3" th:unless="${generators.isEmpty()}">
-                        <summary class="small fw-semibold text-muted"><i class="bi bi-pc-display me-1"></i>Выбрать конкретные серверы (необязательно)</summary>
+                    <details class="mt-3 k6-disclosure" th:unless="${generators.isEmpty()}">
+                        <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-pc-display"></i>Выбрать конкретные серверы (необязательно)
+                            <span class="badge text-bg-primary d-none" id="sch-hosts-badge"></span></summary>
                         <div class="mt-2 sch-host-grid">
-                            <label class="sch-host-pill" th:each="g : ${generators}">
-                                <input class="form-check-input" type="checkbox" name="generatorId" th:id="'sg' + ${g.id}" th:value="${g.id}">
+                            <label class="sch-host-pill" th:each="g : ${generators}" th:classappend="${g.status.name() != 'ONLINE'} ? 'is-off'">
+                                <input class="form-check-input sch-host-pick" type="checkbox" name="generatorId" th:id="'sg' + ${g.id}" th:value="${g.id}">
+                                <span class="dot" th:classappend="${g.status.name() == 'ONLINE'} ? (${g.busy} ? 'dot-busy' : 'dot-ok') : 'dot-bad'"></span>
                                 <span th:text="${g.name}"></span>
+                                <span class="text-muted small" th:if="${g.status.name() != 'ONLINE'}" th:text="'(' + ${g.status.title} + ')'"></span>
                             </label>
                         </div>
                     </details>
 
-                    <div class="mt-3 pt-3 border-top">
-                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-                            <span class="small fw-semibold"><i class="bi bi-sliders me-1 text-primary"></i>Масштаб интенсивности по операциям</span>
-                            <div class="sch-preset-chips m-0">
+                    <details class="mt-3 pt-3 border-top k6-disclosure">
+                        <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-sliders text-primary"></i>Масштаб интенсивности по операциям (необязательно)
+                            <span class="badge text-bg-warning d-none" id="sch-ops-badge"></span></summary>
+                        <div class="mt-2">
+                            <div class="sch-preset-chips mb-2">
                                 <button type="button" class="sch-preset-chip" data-pct-all="50">50%</button>
                                 <button type="button" class="sch-preset-chip" data-pct-all="80">80%</button>
-                                <button type="button" class="sch-preset-chip" data-pct-all="100">100%</button>
+                                <button type="button" class="sch-preset-chip active" data-pct-all="100">100%</button>
                                 <button type="button" class="sch-preset-chip" data-pct-all="120">120%</button>
                                 <button type="button" class="sch-preset-chip" data-pct-all="150">150%</button>
                                 <button type="button" class="sch-preset-chip" data-pct-all="200">200%</button>
                             </div>
-                        </div>
-                        <div class="text-muted small" id="sch-ops-empty" th:classappend="${!ops.isEmpty()} ? 'd-none'">Нагрузка не описана.</div>
-                        <div class="row g-2" id="sch-ops">
-                            <div class="col-md-6" th:each="o : ${ops}">
-                                <div class="input-group input-group-sm">
-                                    <span class="input-group-text flex-grow-1 text-start" th:text="${o.name}"></span>
-                                    <input class="form-control" style="max-width:86px" type="number" min="1" max="10000" step="any" value="100"
-                                           th:name="'pct_' + ${o.name}" aria-label="Процент интенсивности">
-                                    <span class="input-group-text">%</span>
+                            <div class="text-muted small" id="sch-ops-empty" th:classappend="${!ops.isEmpty()} ? 'd-none'">Нагрузка не описана.</div>
+                            <div class="row g-2" id="sch-ops">
+                                <div class="col-md-6" th:each="o : ${ops}">
+                                    <div class="input-group input-group-sm">
+                                        <span class="input-group-text flex-grow-1 text-start" th:text="${o.name}"></span>
+                                        <input class="form-control" style="max-width:86px" type="number" min="1" max="10000" step="any" value="100"
+                                               th:name="'pct_' + ${o.name}" aria-label="Процент интенсивности">
+                                        <span class="input-group-text">%</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
-                    <details class="mt-3">
-                        <summary class="small fw-semibold text-muted"><i class="bi bi-braces me-1"></i>Переменные запуска (необязательно)</summary>
+                    <details class="mt-3 k6-disclosure">
+                        <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-braces"></i>Переменные запуска (необязательно)</summary>
                         <div class="mt-2">
                             <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="env-script" value="script" checked>
                                 <label class="form-check-label small" for="env-script">Как в скрипте (или в выбранном профиле)</label></div>
@@ -251,7 +257,7 @@
                         <div><div class="text-muted small">Переменных</div><b id="sum-env">—</b></div>
                     </div>
                 </div>
-                <ul class="list-group list-group-flush" id="sum-ops-list">
+                <ul class="list-group list-group-flush" id="sum-ops-list" style="max-height:46vh;overflow-y:auto">
                     <li class="list-group-item text-muted" th:if="${ops.isEmpty()}">Нагрузка не описана</li>
                     <li class="list-group-item d-flex justify-content-between align-items-center gap-2" th:each="o : ${ops}">
                         <span><span class="fw-semibold" th:text="${o.name}"></span><br><code class="small" th:text="${o.execFn}"></code></span>
@@ -284,8 +290,10 @@
             var btnNow = document.getElementById('mode-now-btn'), btnSch = document.getElementById('mode-sch-btn');
             var timelineInited = false;
 
+            var currentMode = 'now';
             function setMode(mode) {
-                var isSch = mode === 'schedule';
+                currentMode = mode === 'schedule' ? 'schedule' : 'now';
+                var isSch = currentMode === 'schedule';
                 paneNow.classList.toggle('d-none', isSch);
                 paneSch.classList.toggle('d-none', !isSch);
                 btnNow.classList.toggle('active', !isSch);
@@ -299,6 +307,7 @@
                 }
                 syncSummary(isSch ? (document.getElementById('sch-profile') ? document.getElementById('sch-profile').value : '')
                     : (document.getElementById('run-profile') ? document.getElementById('run-profile').value : ''));
+                syncGenCountSummary();
             }
             btnNow.addEventListener('click', function () { setMode('now'); history.replaceState(null, '', location.pathname + location.search); });
             btnSch.addEventListener('click', function () { setMode('schedule'); history.replaceState(null, '', location.pathname + location.search + '#schedule'); });
@@ -358,43 +367,81 @@
             }
 
             var runProf = document.getElementById('run-profile');
+            var schProf = document.getElementById('sch-profile');
             if (runProf) {
-                runProf.addEventListener('change', function () { syncSummary(runProf.value); });
+                runProf.addEventListener('change', function () {
+                    if (schProf && schProf.value !== runProf.value) {
+                        schProf.value = runProf.value;
+                        applySchProfile(schProf.value);
+                    } else {
+                        syncSummary(runProf.value);
+                    }
+                });
             }
 
             // Планирование: время, пресеты времени, профиль, множитель интенсивности, переменные
-            var at = document.getElementById('sch-at'), iso = document.getElementById('sch-iso'), pos = document.getElementById('sch-pos'), env = document.getElementById('sch-env');
+            var at = document.getElementById('sch-at'), iso = document.getElementById('sch-iso'),
+                pos = document.getElementById('sch-pos'), posNote = document.getElementById('sch-pos-note'),
+                env = document.getElementById('sch-env');
+            var settingPreset = false;
+            function updatePosNote() {
+                if (!posNote) { return; }
+                var p = pos ? pos.value : '';
+                if (p === 'front') { posNote.textContent = 'Позиция: в начало очереди — сразу после текущего теста.'; posNote.classList.remove('d-none'); }
+                else if (p === 'back') { posNote.textContent = 'Позиция: в конец очереди — после всех ожидающих тестов.'; posNote.classList.remove('d-none'); }
+                else if (!at || !at.value) { posNote.textContent = 'Ближайшее свободное окно подберётся автоматически.'; posNote.classList.remove('d-none'); }
+                else { posNote.textContent = ''; posNote.classList.add('d-none'); }
+            }
             if (at) {
                 at.addEventListener('input', function () {
                     var d = new Date(at.value);
                     iso.value = isNaN(d) ? '' : d.toISOString();
                     if (!isNaN(d) && pos) { pos.value = ''; }
+                    if (!settingPreset && !isNaN(d)) {
+                        document.querySelectorAll('[data-time-preset]').forEach(function (b) { b.classList.remove('active'); });
+                    }
+                    updatePosNote();
                 });
                 document.querySelectorAll('[data-time-preset]').forEach(function (btn) {
                     btn.addEventListener('click', function () {
                         var p = btn.dataset.timePreset, d = new Date();
                         document.querySelectorAll('[data-time-preset]').forEach(function (b) { b.classList.toggle('active', b === btn); });
-                        if (p === 'front' || p === 'back') {
-                            at.value = '';
-                            iso.value = '';
-                            if (pos) { pos.value = p; }
+                        settingPreset = true;
+                        try {
+                            if (p === 'front' || p === 'back') {
+                                at.value = '';
+                                iso.value = '';
+                                if (pos) { pos.value = p; }
+                                at.dispatchEvent(new Event('input'));
+                                return;
+                            }
+                            if (pos) { pos.value = ''; }
+                            if (p === 'auto') { at.value = ''; iso.value = ''; at.dispatchEvent(new Event('input')); return; }
+                            if (p === '+15m') { d.setMinutes(d.getMinutes() + 15); }
+                            else if (p === '+1h') { d.setHours(d.getHours() + 1); }
+                            else if (p === '22:00') { d.setHours(22, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
+                            else if (p === '02:00') { d.setHours(2, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
+                            at.value = toLocalVal(d);
                             at.dispatchEvent(new Event('input'));
-                            return;
+                        } finally {
+                            settingPreset = false;
                         }
-                        if (pos) { pos.value = ''; }
-                        if (p === 'auto') { at.value = ''; iso.value = ''; at.dispatchEvent(new Event('input')); return; }
-                        if (p === '+15m') { d.setMinutes(d.getMinutes() + 15); }
-                        else if (p === '+1h') { d.setHours(d.getHours() + 1); }
-                        else if (p === '22:00') { d.setHours(22, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
-                        else if (p === '02:00') { d.setHours(2, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
-                        at.value = toLocalVal(d);
-                        at.dispatchEvent(new Event('input'));
                     });
                 });
+                updatePosNote();
             }
 
             var box = document.getElementById('sch-profile-box');
-            var schProf = document.getElementById('sch-profile');
+            var schOpsBadge = document.getElementById('sch-ops-badge');
+            function syncOpsBadge() {
+                if (!schOpsBadge) { return; }
+                var changed = 0;
+                document.querySelectorAll('#sch-ops input[name^="pct_"]').forEach(function (i) {
+                    if (parseFloat(i.value) !== 100) { changed++; }
+                });
+                schOpsBadge.textContent = changed > 0 ? ('изменено: ' + changed) : '';
+                schOpsBadge.classList.toggle('d-none', changed === 0);
+            }
             function applySchProfile(key) {
                 if (!box) { return; }
                 var opsBy = JSON.parse(box.dataset.ops || '{}'), envBy = JSON.parse(box.dataset.env || '{}');
@@ -408,36 +455,79 @@
                 var schEmpty = document.getElementById('sch-ops-empty');
                 if (schEmpty) { schEmpty.classList.toggle('d-none', names.length > 0); }
                 if (env && !document.getElementById('env-custom').checked && envBy[key] !== undefined) { env.value = envBy[key]; }
+                syncOpsBadge();
                 syncSummary(key);
             }
             if (schProf) {
-                schProf.addEventListener('change', function () { applySchProfile(schProf.value); });
+                schProf.addEventListener('change', function () {
+                    if (runProf && runProf.value !== schProf.value) { runProf.value = schProf.value; }
+                    applySchProfile(schProf.value);
+                });
                 if (schProf.value) { applySchProfile(schProf.value); }
             }
 
             document.querySelectorAll('[data-pct-all]').forEach(function (btn) {
                 btn.addEventListener('click', function () {
+                    document.querySelectorAll('[data-pct-all]').forEach(function (b) { b.classList.toggle('active', b === btn); });
                     document.querySelectorAll('#sch-ops input[name^="pct_"]').forEach(function (i) { i.value = btn.dataset.pctAll; });
+                    syncOpsBadge();
                 });
             });
+            var schOpsEl = document.getElementById('sch-ops');
+            if (schOpsEl) { schOpsEl.addEventListener('input', syncOpsBadge); }
 
             document.querySelectorAll('input[name=envMode]').forEach(function (r) {
                 r.addEventListener('change', function () { if (env) { env.disabled = !document.getElementById('env-custom').checked; } });
             });
 
-            // Хосты и синхронизация счётчика генераторов
-            var cnt = document.getElementById('gen-count'), sumGens = document.getElementById('sum-gens');
-            var picks = document.querySelectorAll('.host-pick');
+            // Хосты, флаги k6 и синхронизация счётчика генераторов между вкладками
+            var cnt = document.getElementById('gen-count'), schCnt = document.getElementById('sch-count'), sumGens = document.getElementById('sum-gens');
+            var picks = document.querySelectorAll('.host-pick'), schPicks = document.querySelectorAll('.sch-host-pick');
+            var nowHostsBadge = document.getElementById('now-hosts-badge'), schHostsBadge = document.getElementById('sch-hosts-badge');
+            var nowFlagsBadge = document.getElementById('now-flags-badge');
+
+            function syncGenCountSummary() {
+                if (!sumGens) { return; }
+                var activeEl = currentMode === 'schedule' ? schCnt : cnt;
+                if (activeEl) { sumGens.textContent = activeEl.value || '1'; }
+            }
             if (cnt) {
                 function syncHosts() {
                     var n = 0; picks.forEach(function (p) { if (p.checked) { n++; } });
                     if (n > 0) { cnt.value = n; }
                     cnt.readOnly = n > 0;
-                    if (sumGens) { sumGens.textContent = cnt.value; }
+                    if (nowHostsBadge) { nowHostsBadge.textContent = 'выбрано: ' + n; nowHostsBadge.classList.toggle('d-none', n === 0); }
+                    syncGenCountSummary();
                 }
                 picks.forEach(function (p) { p.addEventListener('change', syncHosts); });
-                cnt.addEventListener('input', function () { if (sumGens) { sumGens.textContent = cnt.value; } });
+                cnt.addEventListener('input', function () {
+                    if (schCnt && !schCnt.readOnly) { schCnt.value = cnt.value; }
+                    syncGenCountSummary();
+                });
             }
+            if (schCnt) {
+                function syncSchHosts() {
+                    var n = 0; schPicks.forEach(function (p) { if (p.checked) { n++; } });
+                    if (n > 0) { schCnt.value = n; }
+                    schCnt.readOnly = n > 0;
+                    if (schHostsBadge) { schHostsBadge.textContent = 'выбрано: ' + n; schHostsBadge.classList.toggle('d-none', n === 0); }
+                    syncGenCountSummary();
+                }
+                schPicks.forEach(function (p) { p.addEventListener('change', syncSchHosts); });
+                schCnt.addEventListener('input', function () {
+                    if (cnt && !cnt.readOnly) { cnt.value = schCnt.value; }
+                    syncGenCountSummary();
+                });
+            }
+            function syncNowFlags() {
+                if (!nowFlagsBadge) { return; }
+                var n = document.querySelectorAll('.now-k6-flag:checked').length + (document.getElementById('http-debug') && document.getElementById('http-debug').value ? 1 : 0);
+                nowFlagsBadge.textContent = 'активно: ' + n;
+                nowFlagsBadge.classList.toggle('d-none', n === 0);
+            }
+            document.querySelectorAll('.now-k6-flag').forEach(function (c) { c.addEventListener('change', syncNowFlags); });
+            var httpDbg = document.getElementById('http-debug');
+            if (httpDbg) { httpDbg.addEventListener('change', syncNowFlags); }
 
             // Инициализация режима по хэшу #schedule
             if (location.hash === '#schedule') { setMode('schedule'); }

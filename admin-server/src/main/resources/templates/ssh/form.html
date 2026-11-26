@@ -4,44 +4,61 @@
 <head><title>SSH-учётка</title></head>
 <body>
 <th:block layout:fragment="content">
-    <h3 class="mb-3" th:text="${form.id == null} ? 'Новая SSH-учётка' : 'SSH-учётка: ' + ${form.name}"></h3>
+    <nav class="crumbs" aria-label="Навигация"><a th:href="@{/ssh-credentials}">SSH-учётки</a><i class="bi bi-chevron-right"></i><span th:text="${form.id == null} ? 'Новая' : ${form.name}"></span></nav>
+    <div class="page-head"><h3><span class="icon-tile"><i class="bi bi-terminal"></i></span><span th:text="${form.id == null} ? 'Новая SSH-учётка' : 'SSH-учётка: ' + ${form.name}"></span></h3></div>
     <form th:action="@{/ssh-credentials}" th:object="${form}" method="post" class="card card-body" autocomplete="off">
         <input type="hidden" th:field="*{id}">
         <div class="row g-3">
-            <div class="col-md-4"><label class="form-label">Имя учётки</label><input class="form-control" th:field="*{name}" required></div>
-            <div class="col-md-4"><label class="form-label">Пользователь</label><input class="form-control" th:field="*{username}" required></div>
-            <div class="col-md-4"><label class="form-label">Тип</label>
+            <div class="col-md-4"><label class="form-label" for="name">Имя учётки</label><input class="form-control" th:field="*{name}" required></div>
+            <div class="col-md-4"><label class="form-label" for="username">Пользователь</label><input class="form-control" th:field="*{username}" required></div>
+            <div class="col-md-4"><label class="form-label" for="authType">Тип</label>
                 <select class="form-select" th:field="*{authType}">
                     <option value="KEY">Приватный ключ</option><option value="PASSWORD">Пароль</option></select></div>
             <div class="col-12">
-                <label class="form-label">Секрет (приватный ключ в формате PEM / OpenSSH или пароль)</label>
+                <label class="form-label" for="secret" id="ssh-secret-lbl">Секрет (приватный ключ в формате PEM / OpenSSH или пароль)</label>
                 <textarea class="form-control font-monospace" rows="5" th:field="*{secret}" autocomplete="off"
                           placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
                 <div class="secret-hint" th:if="${form.hasSecret}">Секрет сохранён и не показывается. Оставьте поле пустым, чтобы не менять.</div>
             </div>
-            <div class="col-md-6">
-                <label class="form-label">Passphrase ключа (если есть)</label>
+            <div class="col-md-6" id="ssh-passphrase-wrap">
+                <label class="form-label" for="passphrase">Passphrase ключа (если есть)</label>
                 <input class="form-control" type="password" th:field="*{passphrase}" autocomplete="new-password">
                 <div class="secret-hint" th:if="${form.hasPassphrase}">Задан. <label><input type="checkbox" th:field="*{clearPassphrase}"> стереть</label></div>
             </div>
             <div class="col-md-6">
-                <label class="form-label">Пароль sudo (если sudo требует пароль)</label>
+                <label class="form-label" for="sudoPassword">Пароль sudo (если sudo требует пароль)</label>
                 <input class="form-control" type="password" th:field="*{sudoPassword}" autocomplete="new-password">
                 <div class="secret-hint">Передаётся только через stdin (<code>sudo -S</code>), не попадает в командную строку и логи.</div>
                 <div class="secret-hint" th:if="${form.hasSudoPassword}">Задан. <label><input type="checkbox" th:field="*{clearSudoPassword}"> стереть</label></div>
             </div>
-            <div class="col-12"><hr><h6>Jump-host (ProxyJump), необязательно</h6></div>
-            <div class="col-md-5"><label class="form-label">Хост</label><input class="form-control" th:field="*{jumpHost}" placeholder="bastion.example"></div>
-            <div class="col-md-2"><label class="form-label">Порт</label><input class="form-control" type="number" th:field="*{jumpPort}" placeholder="22"></div>
-            <div class="col-md-5"><label class="form-label">Учётка для jump-host</label>
+            <div class="col-12"><hr class="my-1"><h6 class="mb-0 mt-2">Jump-host (ProxyJump), необязательно</h6></div>
+            <div class="col-md-5"><label class="form-label" for="jumpHost">Хост</label><input class="form-control" th:field="*{jumpHost}" placeholder="bastion.example"></div>
+            <div class="col-md-2"><label class="form-label" for="jumpPort">Порт</label><input class="form-control" type="number" min="1" max="65535" th:field="*{jumpPort}" placeholder="22"></div>
+            <div class="col-md-5"><label class="form-label" for="jumpCredentialId">Учётка для jump-host</label>
                 <select class="form-select" th:field="*{jumpCredentialId}"><option value="">—</option>
                     <option th:each="c : ${others}" th:value="${c.id}" th:text="${c.name}"></option></select></div>
         </div>
         <div class="mt-4 d-flex gap-2">
-            <button class="btn btn-primary" type="submit">Сохранить</button>
-            <a class="btn btn-link" th:href="@{/ssh-credentials}">Отмена</a>
+            <button class="btn btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>Сохранить</button>
+            <a class="btn btn-outline-secondary" th:href="@{/ssh-credentials}">Отмена</a>
         </div>
     </form>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        (function () {
+            var type = document.getElementById('authType'), pp = document.getElementById('ssh-passphrase-wrap'),
+                lbl = document.getElementById('ssh-secret-lbl'), ta = document.getElementById('secret');
+            function sync() {
+                if (!type) { return; }
+                var isKey = type.value === 'KEY';
+                if (pp) { pp.classList.toggle('d-none', !isKey); }
+                if (lbl) { lbl.textContent = isKey ? 'Приватный ключ (формат PEM / OpenSSH)' : 'Пароль SSH'; }
+                if (ta) { ta.rows = isKey ? 5 : 2; ta.placeholder = isKey ? '-----BEGIN OPENSSH PRIVATE KEY-----' : 'Введите пароль SSH'; }
+            }
+            if (type) { type.addEventListener('change', sync); sync(); }
+        })();
+    </script>
 </th:block>
 </body>
 </html>

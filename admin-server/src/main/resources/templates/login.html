@@ -12,10 +12,10 @@
             <div class="alert alert-danger py-2" th:if="${param.error}">Неверный логин или пароль</div>
             <div class="alert alert-info py-2" th:if="${param.logout}">Вы вышли из системы</div>
             <form th:action="@{/login}" method="post">
-                <div class="mb-3"><label class="form-label">Логин</label>
-                    <input class="form-control form-control-lg" name="username" autofocus required></div>
-                <div class="mb-4"><label class="form-label">Пароль</label>
-                    <input class="form-control form-control-lg" type="password" name="password" required></div>
+                <div class="mb-3"><label class="form-label" for="login-username">Логин</label>
+                    <input class="form-control form-control-lg" id="login-username" name="username" autocomplete="username" autofocus required></div>
+                <div class="mb-4"><label class="form-label" for="login-password">Пароль</label>
+                    <input class="form-control form-control-lg" id="login-password" type="password" name="password" autocomplete="current-password" required></div>
                 <button class="btn btn-primary btn-lg w-100" type="submit">Войти</button>
             </form>
         </div>

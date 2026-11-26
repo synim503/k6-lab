@@ -70,7 +70,8 @@
         var selectable = opts.selectable !== false;
         var box = document.createElement('div');
         box.className = 'col-12';
-        box.innerHTML = '<div class="card"><div class="card-header small">' + title + '</div>'
+        box.innerHTML = '<div class="card"><div class="card-header small d-flex align-items-center justify-content-between gap-2"><span>' + title + '</span>'
+            + (selectable ? '<button type="button" class="btn btn-sm btn-outline-primary py-0 px-2 d-none legend-reset-btn">Показать все</button>' : '') + '</div>'
             + '<div class="chart-wrap"><div class="chart-canvas"><canvas></canvas></div>'
             + '<div class="chart-legend"><table class="legend-table"><thead><tr><th></th><th>' + (opts.label || 'Операция') + '</th><th>Last</th><th>Mean</th><th>Max</th></tr></thead><tbody></tbody></table>'
             + (selectable ? '<div class="legend-hint">Клик — только эта операция. Ctrl/Cmd+клик — добавить к выбору.</div>' : '') + '</div></div></div>';
@@ -96,6 +97,10 @@
             box.querySelector('tbody').addEventListener('keydown', function (e) {
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onLegendClick(e); }
             });
+            var resetBtn = box.querySelector('.legend-reset-btn');
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function () { selection = null; applySelection(); });
+            }
         }
         charts[key] = c;
         return c;
@@ -148,6 +153,8 @@
             c.data.datasets.forEach(function (ds) { ds.hidden = !!selection && !selection.has(ds.grp); });
             c.update('none');
             renderLegend(c);
+            var rb = c.$box && c.$box.querySelector('.legend-reset-btn');
+            if (rb) { rb.classList.toggle('d-none', !selection); }
         });
     }
     function onLegendClick(e) {
@@ -241,6 +248,12 @@
         Object.keys(charts).forEach(function (k) { charts[k].update('none'); renderLegend(charts[k]); });
         if (lastMsg) { renderCurrent(lastMsg, lastT); }
     });
+    // При переключении на вкладку «Системные метрики» или обратно — пересчитать размеры canvas Chart.js
+    document.addEventListener('shown.bs.tab', function () {
+        Object.keys(charts).forEach(function (k) {
+            try { charts[k].resize(); charts[k].update('none'); } catch (_) {}
+        });
+    });
 
     // период таблицы, как в Grafana: последняя минута (окно расчёта) или весь тест; выбор запоминается в браузере
     var range = 'window', lastMsg = null, lastT = '';
@@ -282,9 +295,20 @@
                 if (r.dropped !== undefined && r.dropped !== null && secs > 0) {
                     dropTxt += (r.target > 0 ? ' · ' + fmt(r.dropped / (r.target * secs) * 100, 1) + ' %' : '') + ' · ' + fmt(r.dropped / secs, 2) + ' ит/с';
                 }
-                html += '<tr class="' + (r.violation ? 'table-danger' : '') + '"><td>' + esc(r.op) + '</td><td>' + fmt(r.actual) + ' / ' + fmt(r.target) +
-                    '</td><td>' + fmt(r.pct, 0) + ' / ' + r.sla + ' мс (p' + r.pctN + ')</td><td>' + fmt(r.err, 2) + ' / ' + r.maxErr +
-                    ' %</td><td>' + dropTxt + '</td><td class="small">' + (r.reasons || []).join(', ') + '</td></tr>';
+                var rateTxt = fmt(r.actual) + ' / ' + fmt(r.target);
+                var latTxt = fmt(r.pct, 0) + ' / ' + r.sla + ' мс (p' + r.pctN + ')';
+                var errTxt = fmt(r.err, 2) + ' / ' + r.maxErr + ' %';
+                var reasonsTxt = (r.reasons || []).join(', ');
+                var statusCell = reasonsTxt
+                    ? '<span class="text-danger fw-semibold" title="' + esc(reasonsTxt) + '">' + esc(reasonsTxt) + '</span>'
+                    : '<span class="badge text-bg-success">ОК</span>';
+                html += '<tr class="' + (r.violation ? 'table-danger' : '') + '">'
+                    + '<td class="fw-semibold" title="' + esc(r.op) + '">' + esc(r.op) + '</td>'
+                    + '<td title="' + esc(rateTxt) + '">' + rateTxt + '</td>'
+                    + '<td title="' + esc(latTxt) + '">' + latTxt + '</td>'
+                    + '<td title="' + esc(errTxt) + '">' + errTxt + '</td>'
+                    + '<td title="' + esc(dropTxt) + '">' + dropTxt + '</td>'
+                    + '<td class="small">' + statusCell + '</td></tr>';
             });
             tb.innerHTML = html || '<tr><td colspan="6" class="text-muted">Нет данных</td></tr>';
         }

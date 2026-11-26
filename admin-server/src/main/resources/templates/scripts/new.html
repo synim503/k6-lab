@@ -28,13 +28,13 @@
                             <span class="picked">Перетащите файл или нажмите для выбора</span>
                             <span class="d-block small mt-1">.js, либо архив .zip / .tar.gz с модулями, данными и сертификатами</span>
                             <input class="visually-hidden" id="s-file" type="file" name="file" required></label></div>
-                    <div class="col-md-5"><label class="form-label" for="s-entry">Главный файл (для архива)</label>
+                    <div class="col-md-5" id="s-entry-wrap"><label class="form-label" for="s-entry">Главный файл (для архива)</label>
                         <input class="form-control" id="s-entry" name="entrypoint" placeholder="main.js">
-                        <div class="form-text">Для одиночного .js не нужен.</div></div>
+                        <div class="form-text" id="s-entry-help">Для одиночного .js не нужен.</div></div>
                     <div class="col-md-7"><label class="form-label" for="s-comment">Комментарий к версии</label>
                         <input class="form-control" id="s-comment" name="comment" placeholder="необязательно"></div>
-                    <div class="col-12 form-actions"><button class="btn btn-primary">Загрузить и проверить</button>
-                        <a class="btn btn-link" th:href="@{/scripts}">Отмена</a></div>
+                    <div class="col-12 form-actions"><button class="btn btn-primary"><i class="bi bi-cloud-arrow-up me-1"></i>Загрузить и проверить</button>
+                        <a class="btn btn-outline-secondary" th:href="@{/scripts}">Отмена</a></div>
                 </form>
 
                 <form id="src-git" class="row g-3 d-none" th:action="@{/scripts/git}" method="post">
@@ -47,8 +47,8 @@
                     <div class="col-md-7"><label class="form-label" for="g-entry">Путь к главному файлу</label>
                         <input class="form-control" id="g-entry" name="entrypoint" placeholder="scripts/payments.js" required>
                         <div class="form-text">От корня репозитория.</div></div>
-                    <div class="col-12 form-actions"><button class="btn btn-primary" th:disabled="${repos.isEmpty()}">Импортировать</button>
-                        <a class="btn btn-link" th:href="@{/scripts}">Отмена</a></div>
+                    <div class="col-12 form-actions"><button class="btn btn-primary" th:disabled="${repos.isEmpty()}"><i class="bi bi-git me-1"></i>Импортировать</button>
+                        <a class="btn btn-outline-secondary" th:href="@{/scripts}">Отмена</a></div>
                 </form>
             </div></div>
         </div>
@@ -71,20 +71,28 @@
 <th:block layout:fragment="scripts">
     <script th:inline="none">
         (function () {
+            var sName = document.getElementById('s-name'), gName = document.getElementById('g-name');
             document.querySelectorAll('.seg [data-src]').forEach(function (b) {
                 b.addEventListener('click', function () {
                     document.querySelectorAll('.seg [data-src]').forEach(function (x) { x.classList.toggle('active', x === b); });
-                    document.getElementById('src-file').classList.toggle('d-none', b.dataset.src !== 'file');
-                    document.getElementById('src-git').classList.toggle('d-none', b.dataset.src !== 'git');
+                    var isGit = b.dataset.src === 'git';
+                    document.getElementById('src-file').classList.toggle('d-none', isGit);
+                    document.getElementById('src-git').classList.toggle('d-none', !isGit);
+                    if (isGit && sName && gName && sName.value && !gName.value) { gName.value = sName.value; }
+                    if (!isGit && sName && gName && gName.value && !sName.value) { sName.value = gName.value; }
                 });
             });
-            var dz = document.querySelector('.dropzone'), input = document.getElementById('s-file'), name = document.getElementById('s-name');
+            var dz = document.querySelector('.dropzone'), input = document.getElementById('s-file'),
+                entryIn = document.getElementById('s-entry'), entryHelp = document.getElementById('s-entry-help');
             if (!dz || !input) return;
             var label = dz.querySelector('.picked'), initial = label.textContent;
             function picked() {
-                label.textContent = input.files.length ? input.files[0].name : initial;
-                // имя скрипта подсказываем по имени файла, пока пользователь его не ввёл
-                if (input.files.length && name && !name.value) name.value = input.files[0].name.replace(/\.(js|mjs|ts|zip|tar\.gz|tgz)$/i, '');
+                var fname = input.files.length ? input.files[0].name : '';
+                label.textContent = fname || initial;
+                var isArch = /\.(zip|tar\.gz|tgz)$/i.test(fname);
+                if (entryIn) { entryIn.classList.toggle('border-primary', isArch); }
+                if (entryHelp) { entryHelp.textContent = isArch ? 'Укажите главный .js файл внутри архива (если не main.js).' : 'Для одиночного .js не нужен.'; }
+                if (fname && sName && !sName.value) sName.value = fname.replace(/\.(js|mjs|ts|zip|tar\.gz|tgz)$/i, '');
             }
             input.addEventListener('change', picked);
             ['dragenter', 'dragover'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add('drag'); }); });

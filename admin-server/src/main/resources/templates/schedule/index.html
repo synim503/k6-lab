@@ -49,8 +49,8 @@
 
     <!-- Сводка KPI (клик по карточке фильтрует таблицу ниже) -->
     <div class="sch-kpi-grid">
-        <div class="sch-kpi sch-kpi-clickable" data-kpi-filter="pending" title="Нажмите, чтобы показать ожидающие в очереди тесты">
-            <div class="k"><i class="bi bi-hourglass-split text-primary"></i>Ожидают в очереди</div>
+        <div class="sch-kpi sch-kpi-clickable" data-kpi-filter="pending" tabindex="0" role="button" title="Нажмите, чтобы показать ожидающие в очереди тесты">
+            <div class="k"><i class="bi bi-hourglass-split text-primary"></i>Ожидают в очереди <i class="bi bi-funnel ms-auto opacity-50"></i></div>
             <div class="v">
                 <span th:text="${pendingCount}">0</span>
                 <span class="fs-6 fw-normal text-muted" th:if="${pendingCount > 0}" th:text="'(~' + ${totalQueueMin} + ' мин)'"></span>
@@ -70,15 +70,15 @@
             </div>
             <div class="s" th:if="${activeRuns.isEmpty()}">нет активных тестов</div>
         </div>
-        <div class="sch-kpi">
-            <div class="k"><i class="bi bi-hdd-network text-primary"></i>Генераторы</div>
+        <a class="sch-kpi sch-kpi-clickable text-reset text-decoration-none d-block" th:href="@{/generators}" title="Открыть список генераторов">
+            <div class="k"><i class="bi bi-hdd-network text-primary"></i>Генераторы <i class="bi bi-arrow-right ms-auto opacity-50"></i></div>
             <div class="v"><span th:text="${freeGenCount}">0</span> <span class="fs-6 fw-normal text-muted">свободно</span></div>
             <div class="s"><span th:text="${onlineGenCount}">0</span> из <span th:text="${generators.size()}">0</span> в сети</div>
-        </div>
-        <div class="sch-kpi sch-kpi-clickable" data-kpi-filter="started" title="Нажмите, чтобы показать запущенные и завершённые записи">
-            <div class="k"><i class="bi bi-clock-history text-primary"></i>История расписания</div>
+        </a>
+        <div class="sch-kpi sch-kpi-clickable" data-kpi-filter="started" tabindex="0" role="button" title="Нажмите, чтобы показать запущенные и завершённые записи">
+            <div class="k"><i class="bi bi-clock-history text-primary"></i>История расписания <i class="bi bi-funnel ms-auto opacity-50"></i></div>
             <div class="v" th:text="${startedCount}">0</div>
-            <div class="s">запущено · <span class="sch-kpi-err-link" data-kpi-filter="other" th:classappend="${failedCount > 0} ? 'text-danger fw-semibold'" th:text="${failedCount} + ' с ошибкой'"></span></div>
+            <div class="s">запущено · <span class="sch-kpi-err-link" data-kpi-filter="other" tabindex="0" role="button" th:classappend="${failedCount > 0} ? 'text-danger fw-semibold'" th:text="${failedCount} + ' с ошибкой'"></span></div>
         </div>
     </div>
 
@@ -106,144 +106,8 @@
         <div class="tl-detail"></div>
     </div>
 
-    <!-- Автопроверки планировщика (Prometheus -> SSH-скрипт) -->
-    <div class="card mb-3" id="guards">
-        <div class="d-none" id="sch-guards-json" th:text="${guardsJson}">[]</div>
-        <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
-            <div class="d-flex align-items-center gap-2 flex-wrap">
-                <span class="fw-semibold small"><i class="bi bi-shield-check me-1 text-primary"></i>Автопроверки (Prometheus → SSH-скрипт)</span>
-                <span class="badge text-bg-light border" th:if="${guards.isEmpty()}">не настроены</span>
-                <span class="badge text-bg-success" th:if="${enabledGuardsCount > 0}"
-                      th:text="'активно: ' + ${enabledGuardsCount} + ' из ' + ${guards.size()}"></span>
-                <span class="badge text-bg-secondary" th:if="${!guards.isEmpty() and enabledGuardsCount == 0}"
-                      th:text="'выключены (' + ${guards.size()} + ')'"></span>
-                <span class="small text-muted d-none d-md-inline">проверка метрики после прогона / перед стартом и автозапуск SSH-скрипта (например, очистка диска)</span>
-            </div>
-            <div class="d-flex align-items-center gap-2" sec:authorize="hasRole('ADMIN')">
-                <button type="button" class="btn btn-sm btn-outline-primary" id="sch-guard-add-btn"
-                        data-bs-toggle="modal" data-bs-target="#sch-guard-modal">
-                    <i class="bi bi-plus-lg me-1"></i>Добавить проверку
-                </button>
-            </div>
-        </div>
-
-        <!-- Подтверждение нового SSH-ключа хоста (если хост ещё не в known_hosts) -->
-        <div class="alert alert-warning rounded-0 border-0 border-bottom mb-0 d-flex flex-wrap align-items-center gap-2"
-             th:if="${guardHostKey != null}" sec:authorize="hasRole('ADMIN')">
-            <div class="me-auto small">
-                <b><i class="bi bi-key me-1"></i>Подтвердите ключ SSH-хоста</b>
-                <code th:text="${guardHostKey.get('host')} + ':' + ${guardHostKey.get('port')}"></code>:
-                <code th:text="${guardHostKey.get('keyType')}"></code>
-                <code th:text="${guardHostKey.get('fingerprint')}"></code>
-            </div>
-            <form class="m-0" th:action="@{/schedule/guards/confirm-host-key}" method="post">
-                <input type="hidden" name="host" th:value="${guardHostKey.get('host')}">
-                <input type="hidden" name="port" th:value="${guardHostKey.get('port')}">
-                <input type="hidden" name="keyType" th:value="${guardHostKey.get('keyType')}">
-                <input type="hidden" name="fingerprint" th:value="${guardHostKey.get('fingerprint')}">
-                <input type="hidden" name="publicKey" th:value="${guardHostKey.get('publicKey')}">
-                <button type="submit" class="btn btn-sm btn-warning fw-semibold">
-                    <i class="bi bi-check-lg me-1"></i>Подтвердить ключ хоста
-                </button>
-            </form>
-        </div>
-
-        <div class="card-body py-2 small text-muted" th:if="${guards.isEmpty()}">
-            Здесь можно настроить правило: если метрика из Prometheus (например, заполненность диска или памяти) превышает порог —
-            админка сама выполнит нужный SSH-скрипт очистки после завершения теста или перед стартом следующего теста из очереди.
-        </div>
-
-        <div class="list-group list-group-flush" th:unless="${guards.isEmpty()}">
-            <div class="list-group-item py-2" th:each="g : ${guards}" th:classappend="${!g.enabled} ? 'bg-light-subtle opacity-75'">
-                <div class="d-flex flex-wrap align-items-start justify-content-between gap-2">
-                    <div class="flex-grow-1" style="min-width:260px">
-                        <div class="d-flex flex-wrap align-items-center gap-2">
-                            <form class="m-0 d-inline" sec:authorize="hasRole('ADMIN')"
-                                  th:action="@{/schedule/guards/{id}/toggle(id=${g.id})}" method="post">
-                                <input type="hidden" name="enabled" th:value="${!g.enabled}">
-                                <button type="submit" class="btn btn-sm py-0 px-2"
-                                        th:classappend="${g.enabled} ? 'btn-success' : 'btn-outline-secondary'"
-                                        th:title="${g.enabled} ? 'Включена (нажмите, чтобы выключить)' : 'Выключена (нажмите, чтобы включить)'">
-                                    <i class="bi" th:classappend="${g.enabled} ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
-                                </button>
-                            </form>
-                            <span class="fw-semibold" th:text="${g.name}"></span>
-                            <span class="badge text-bg-primary-subtle text-primary-emphasis border"
-                                  th:text="'если ' + ${g.formatThreshold()}"></span>
-                            <span class="badge text-bg-light border" th:text="${g.runWhen.title}"></span>
-                            <span class="badge text-bg-warning-subtle text-warning-emphasis border" th:if="${g.blockOnFail}"
-                                  title="При ошибке SSH/Prometheus планировщик встанет на паузу и не запустит следующий тест">
-                                <i class="bi bi-pause-circle me-1"></i>пауза при ошибке
-                            </span>
-                            <!-- Статус последней проверки -->
-                            <th:block th:if="${g.lastStatus != null}">
-                                <span class="badge"
-                                      th:classappend="${g.lastStatus.name() == 'OK'} ? 'text-bg-success' : (${g.lastStatus.name() == 'EXECUTED'} ? 'text-bg-info' : (${g.lastStatus.name() == 'SKIPPED_COOLDOWN'} ? 'text-bg-secondary' : 'text-bg-danger'))"
-                                      th:text="${g.lastStatus.title} + (${g.lastValue != null} ? ': ' + ${g.formatValue()} : '')"></span>
-                            </th:block>
-                            <span class="badge text-bg-light border text-muted" th:if="${g.lastStatus == null}">ещё не проверялась</span>
-                        </div>
-
-                        <div class="small text-muted mt-1 d-flex flex-wrap align-items-center gap-3">
-                            <span>
-                                <i class="bi bi-terminal me-1"></i>SSH:
-                                <code th:text="${g.hostSummary()}"></code>
-                                · <span th:text="${sshCredNames.getOrDefault(g.sshCredentialId, '#' + g.sshCredentialId)}"></span>
-                                <span class="badge text-bg-secondary ms-1" th:if="${g.useSudo}">sudo</span>
-                            </span>
-                            <span th:if="${g.lastCheckedAt != null}">
-                                проверка: <time class="local-time" th:attr="datetime=${g.lastCheckedAt}" th:text="${fmt.dt(g.lastCheckedAt)}"></time>
-                            </span>
-                            <span th:if="${g.lastTriggeredAt != null}">
-                                SSH выполнен: <time class="local-time" th:attr="datetime=${g.lastTriggeredAt}" th:text="${fmt.dt(g.lastTriggeredAt)}"></time>
-                            </span>
-                        </div>
-
-                        <div class="small mt-1 text-truncate" style="max-width:780px" th:title="${g.promql}">
-                            <span class="text-muted">PromQL:</span> <code th:text="${g.promql}"></code>
-                        </div>
-
-                        <details class="mt-1" th:if="${g.lastOutput != null and !g.lastOutput.isBlank()}">
-                            <summary class="small text-muted" style="cursor:pointer">Последний результат / вывод SSH</summary>
-                            <pre class="mb-0 mt-1 p-2 rounded border bg-dark text-light font-monospace" style="font-size:.74rem;max-height:180px;overflow:auto" th:text="${g.lastOutput}"></pre>
-                        </details>
-                    </div>
-
-                    <div class="d-flex flex-wrap align-items-center gap-1" sec:authorize="hasRole('ADMIN')">
-                        <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=false)}" method="post">
-                            <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2" title="Запросить метрику из Prometheus сейчас (без запуска SSH)">
-                                <i class="bi bi-activity me-1"></i>Метрика
-                            </button>
-                        </form>
-                        <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=true)}" method="post">
-                            <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Проверить метрику и выполнить SSH-скрипт, если порог превышен">
-                                <i class="bi bi-play-circle me-1"></i>Проверить
-                            </button>
-                        </form>
-                        <form class="m-0" th:action="@{/schedule/guards/{id}/run-ssh(id=${g.id})}" method="post"
-                              data-confirm="Выполнить SSH-скрипт прямо сейчас независимо от значения метрики?">
-                            <button type="submit" class="btn btn-sm btn-outline-warning py-0 px-2" title="Принудительно выполнить SSH-скрипт сейчас (для отладки)">
-                                <i class="bi bi-terminal me-1"></i>SSH
-                            </button>
-                        </form>
-                        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 sch-guard-edit-btn"
-                                th:attr="data-guard-id=${g.id}" data-bs-toggle="modal" data-bs-target="#sch-guard-modal" title="Редактировать правило">
-                            <i class="bi bi-pencil"></i>
-                        </button>
-                        <form class="m-0" th:action="@{/schedule/guards/{id}/delete(id=${g.id})}" method="post"
-                              data-confirm="Удалить автопроверку?">
-                            <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Удалить правило">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Очередь и история расписания -->
-    <div class="card empty-state" th:if="${items.isEmpty()}">
+    <!-- Очередь и история расписания (сразу под таймлайном, чтобы очередь была видна без прокрутки) -->
+    <div class="card empty-state mb-3" th:if="${items.isEmpty()}">
         <i class="bi bi-calendar-check"></i>
         <div class="fw-semibold text-body mb-1">Запланированных запусков пока нет</div>
         <div class="small mb-3">Назначьте запуск любого скрипта с нужным профилем или загрузите пакетный список из JSON.</div>
@@ -257,7 +121,7 @@
         </div>
     </div>
 
-    <div class="card" th:unless="${items.isEmpty()}" id="sch-table-card" th:attr="data-reorder-url=@{/schedule/reorder}">
+    <div class="card mb-3" th:unless="${items.isEmpty()}" id="sch-table-card" th:attr="data-reorder-url=@{/schedule/reorder}">
         <div class="sch-list-toolbar">
             <div class="seg">
                 <button type="button" class="btn btn-sm active" data-sch-filter="all">Все <span class="badge text-bg-light ms-1" th:text="${items.size()}"></span></button>
@@ -271,7 +135,7 @@
                 </span>
                 <input class="form-control form-control-sm" style="width:230px" type="search" id="sch-search" placeholder="Поиск по скрипту, профилю, серверу…">
                 <div class="dropdown">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" title="Массовые операции с расписанием">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" title="Массовые операции с расписанием" aria-label="Массовые операции">
                         <i class="bi bi-three-dots"></i>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end">
@@ -302,21 +166,21 @@
             <div class="d-flex flex-wrap align-items-center gap-1 ms-auto">
                 <form th:action="@{/schedule/bulk-requeue(position='front')}" method="post" class="m-0 sch-bulk-form">
                     <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Поставить все выбранные прогоны в начало очереди (сразу после текущего запуска)">
-                        <i class="bi bi-chevron-bar-up me-1"></i>Выбранные в начало (после текущего)
+                        <i class="bi bi-chevron-bar-up me-1"></i>В начало (после текущего)
                     </button>
                 </form>
                 <form th:action="@{/schedule/bulk-requeue(position='back')}" method="post" class="m-0 sch-bulk-form">
                     <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Поставить все выбранные прогоны в конец очереди">
-                        <i class="bi bi-chevron-bar-down me-1"></i>Выбранные в конец очереди
+                        <i class="bi bi-chevron-bar-down me-1"></i>В конец очереди
                     </button>
                 </form>
                 <form th:action="@{/schedule/bulk-cancel}" method="post" class="m-0 sch-bulk-form"
                       data-confirm="Отменить выбранные ожидающие записи расписания?">
-                    <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Отменить выбранные ожидающие записи">
+                    <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" id="sch-bulk-cancel-btn" title="Отменить выбранные ожидающие записи">
                         <i class="bi bi-x-lg me-1"></i>Отменить ожидающие
                     </button>
                 </form>
-                <button type="button" class="btn btn-sm btn-link text-muted py-0 px-2" id="sch-bulk-clear">Снять выбор</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" id="sch-bulk-clear">Снять выбор</button>
             </div>
         </div>
 
@@ -326,7 +190,7 @@
                 <tr>
                     <th style="width:52px">
                         <div class="d-flex align-items-center gap-1">
-                            <input type="checkbox" class="form-check-input m-0" id="sch-select-all" title="Выбрать все видимые строки">
+                            <input type="checkbox" class="form-check-input m-0" id="sch-select-all" title="Выбрать все видимые строки" aria-label="Выбрать все видимые">
                             <span>№</span>
                         </div>
                     </th>
@@ -338,7 +202,7 @@
                 </tr>
                 </thead>
                 <tbody id="sch-tbody">
-                <tr class="sch-row" th:each="s : ${items}"
+                <tr class="sch-row" th:each="s : ${items}" th:id="'sch-row-' + ${s.id}"
                     th:with="qPos=${queueOrderById.get(s.id)},durMin=${durationMinById.get(s.id)},genSum=${genSummaryById.get(s.id)},envTxt=${envTextById.get(s.id)},pctJson=${pctJsonById.get(s.id)}"
                     th:attr="data-status=${s.status.name()},data-schedule-id=${s.id},data-pending=${s.pending},draggable=${s.pending and pendingCount > 1}">
                     <td class="text-nowrap">
@@ -407,60 +271,61 @@
                     </td>
                     <td class="text-end text-nowrap">
                         <div class="d-inline-flex align-items-center gap-1">
-                            <!-- Управление позицией ожидающего теста в очереди + запуск прямо сейчас -->
+                            <!-- Компактные быстрые действия для ожидающего теста -->
                             <th:block th:if="${s.pending}">
                                 <form th:action="@{/schedule/{id}/start-now(id=${s.id})}" method="post" class="d-inline m-0"
                                       data-confirm="Запустить этот тест прямо сейчас (если генераторы свободны)? Остальные записи очереди сдвинутся следом.">
-                                    <button type="submit" class="btn btn-sm btn-outline-success py-0 px-1"
-                                            title="Запустить прямо сейчас вне очереди (если генераторы свободны)">
+                                    <button type="submit" class="btn btn-sm btn-outline-success btn-icon-sm"
+                                            title="Запустить прямо сейчас вне очереди" aria-label="Запустить сейчас">
                                         <i class="bi bi-play-fill"></i>
                                     </button>
                                 </form>
-                                <div class="btn-group btn-group-sm" th:if="${pendingCount > 1}" role="group" aria-label="Позиция в очереди">
-                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='front')}" method="post" class="d-inline m-0">
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
-                                                th:disabled="${qPos == 1}"
-                                                title="В самое начало очереди (сразу после текущего запуска)">
-                                            <i class="bi bi-chevron-bar-up"></i>
-                                        </button>
-                                    </form>
-                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='up')}" method="post" class="d-inline m-0">
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
-                                                th:disabled="${qPos == 1}"
-                                                title="На 1 позицию выше в очереди">
+                                <div class="sch-shift-pill" th:if="${pendingCount > 1}" role="group" aria-label="Сдвиг в очереди">
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='up')}" method="post">
+                                        <button type="submit" class="btn" th:disabled="${qPos == 1}" title="На 1 позицию выше" aria-label="Выше">
                                             <i class="bi bi-chevron-up"></i>
                                         </button>
                                     </form>
-                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='down')}" method="post" class="d-inline m-0">
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
-                                                th:disabled="${qPos == pendingCount}"
-                                                title="На 1 позицию ниже в очереди">
+                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='down')}" method="post">
+                                        <button type="submit" class="btn" th:disabled="${qPos == pendingCount}" title="На 1 позицию ниже" aria-label="Ниже">
                                             <i class="bi bi-chevron-down"></i>
-                                        </button>
-                                    </form>
-                                    <form th:action="@{/schedule/{id}/move(id=${s.id},position='back')}" method="post" class="d-inline m-0">
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1"
-                                                th:disabled="${qPos == pendingCount}"
-                                                title="В самый конец очереди">
-                                            <i class="bi bi-chevron-bar-down"></i>
                                         </button>
                                     </form>
                                 </div>
                             </th:block>
 
-                            <!-- Повторное добавление прогона в очередь (в начало после текущего или в конец) -->
+                            <!-- Повторное добавление и вторичные действия в выпадающем меню (не обрезается таблицей) -->
                             <div class="btn-group btn-group-sm">
                                 <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='back')}" method="post" class="d-inline m-0">
-                                    <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-1"
-                                            title="Снова добавить этот прогон в конец очереди (со всеми параметрами)">
-                                        <i class="bi bi-arrow-repeat"></i><span class="d-none d-xxl-inline ms-1">В очередь</span>
+                                    <button type="submit" class="btn btn-sm btn-outline-primary btn-icon-sm"
+                                            title="Снова добавить этот прогон в конец очереди (со всеми параметрами)" aria-label="Повторить в конец очереди">
+                                        <i class="bi bi-arrow-repeat"></i>
                                     </button>
                                 </form>
-                                <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split py-0 px-1"
-                                        data-bs-toggle="dropdown" aria-expanded="false" title="Выбрать позицию в очереди">
-                                    <span class="visually-hidden">Выбрать позицию</span>
+                                <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split px-1"
+                                        data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="Дополнительные действия">
+                                    <span class="visually-hidden">Действия</span>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
+                                    <th:block th:if="${s.pending and pendingCount > 1}">
+                                        <li><h6 class="dropdown-header">Позиция в очереди</h6></li>
+                                        <li>
+                                            <form th:action="@{/schedule/{id}/move(id=${s.id},position='front')}" method="post" class="m-0">
+                                                <button type="submit" class="dropdown-item small" th:disabled="${qPos == 1}">
+                                                    <i class="bi bi-chevron-bar-up me-2 text-primary"></i>Переместить в самое начало
+                                                </button>
+                                            </form>
+                                        </li>
+                                        <li>
+                                            <form th:action="@{/schedule/{id}/move(id=${s.id},position='back')}" method="post" class="m-0">
+                                                <button type="submit" class="dropdown-item small" th:disabled="${qPos == pendingCount}">
+                                                    <i class="bi bi-chevron-bar-down me-2 text-primary"></i>Переместить в самый конец
+                                                </button>
+                                            </form>
+                                        </li>
+                                        <li><hr class="dropdown-divider"></li>
+                                    </th:block>
+                                    <li><h6 class="dropdown-header">Повторить запуск</h6></li>
                                     <li>
                                         <form th:action="@{/schedule/{id}/requeue(id=${s.id},position='front')}" method="post" class="m-0">
                                             <button type="submit" class="dropdown-item small">
@@ -495,7 +360,7 @@
 
                             <form th:if="${s.pending}" th:action="@{/schedule/{id}/cancel(id=${s.id})}" method="post" class="d-inline m-0"
                                   data-confirm="Отменить запланированный запуск?">
-                                <button class="btn btn-sm btn-outline-danger py-0 px-1" title="Отменить"><i class="bi bi-x-lg"></i></button>
+                                <button class="btn btn-sm btn-outline-danger btn-icon-sm" title="Отменить" aria-label="Отменить"><i class="bi bi-x-lg"></i></button>
                             </form>
                         </div>
                     </td>
@@ -506,9 +371,149 @@
         </div>
     </div>
 
+    <!-- Автопроверки планировщика (Prometheus -> SSH-скрипт): компактно под очередью, сворачиваемые -->
+    <div class="card mb-3" id="guards">
+        <div class="d-none" id="sch-guards-json" th:text="${guardsJson}">[]</div>
+        <details class="k6-disclosure" id="sch-guards-details" th:open="${guardHostKey != null}" th:attr="data-force-open=${guardHostKey != null}">
+            <summary class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2 py-2 border-0">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span>
+                    <span class="fw-semibold small"><i class="bi bi-shield-check me-1 text-primary"></i>Автопроверки (Prometheus → SSH-скрипт)</span>
+                    <span class="badge text-bg-light border" th:if="${guards.isEmpty()}">не настроены</span>
+                    <span class="badge text-bg-success" th:if="${enabledGuardsCount > 0}"
+                          th:text="'активно: ' + ${enabledGuardsCount} + ' из ' + ${guards.size()}"></span>
+                    <span class="badge text-bg-secondary" th:if="${!guards.isEmpty() and enabledGuardsCount == 0}"
+                          th:text="'выключены (' + ${guards.size()} + ')'"></span>
+                    <span class="badge text-bg-warning" th:if="${guardHostKey != null}">требуется подтверждение SSH-ключа</span>
+                    <span class="small text-muted d-none d-md-inline">проверка метрики после прогона / перед стартом и автозапуск SSH-скрипта</span>
+                </div>
+                <div class="d-flex align-items-center gap-2 ms-auto" sec:authorize="hasRole('ADMIN')" onclick="event.stopPropagation()">
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="sch-guard-add-btn"
+                            data-bs-toggle="modal" data-bs-target="#sch-guard-modal">
+                        <i class="bi bi-plus-lg me-1"></i>Добавить проверку
+                    </button>
+                </div>
+            </summary>
+
+            <!-- Подтверждение нового SSH-ключа хоста (если хост ещё не в known_hosts) -->
+            <div class="alert alert-warning rounded-0 border-0 border-top border-bottom mb-0 d-flex flex-wrap align-items-center gap-2"
+                 th:if="${guardHostKey != null}" sec:authorize="hasRole('ADMIN')">
+                <div class="me-auto small">
+                    <b><i class="bi bi-key me-1"></i>Подтвердите ключ SSH-хоста</b>
+                    <code th:text="${guardHostKey.get('host')} + ':' + ${guardHostKey.get('port')}"></code>:
+                    <code th:text="${guardHostKey.get('keyType')}"></code>
+                    <code th:text="${guardHostKey.get('fingerprint')}"></code>
+                </div>
+                <form class="m-0" th:action="@{/schedule/guards/confirm-host-key}" method="post">
+                    <input type="hidden" name="host" th:value="${guardHostKey.get('host')}">
+                    <input type="hidden" name="port" th:value="${guardHostKey.get('port')}">
+                    <input type="hidden" name="keyType" th:value="${guardHostKey.get('keyType')}">
+                    <input type="hidden" name="fingerprint" th:value="${guardHostKey.get('fingerprint')}">
+                    <input type="hidden" name="publicKey" th:value="${guardHostKey.get('publicKey')}">
+                    <button type="submit" class="btn btn-sm btn-warning fw-semibold">
+                        <i class="bi bi-check-lg me-1"></i>Подтвердить ключ хоста
+                    </button>
+                </form>
+            </div>
+
+            <div class="card-body py-2 small text-muted border-top" th:if="${guards.isEmpty()}">
+                Здесь можно настроить правило: если метрика из Prometheus (например, заполненность диска или памяти) превышает порог —
+                админка сама выполнит нужный SSH-скрипт очистки после завершения теста или перед стартом следующего теста из очереди.
+            </div>
+
+            <div class="list-group list-group-flush border-top" th:unless="${guards.isEmpty()}">
+                <div class="list-group-item py-2" th:each="g : ${guards}" th:classappend="${!g.enabled} ? 'bg-light-subtle opacity-75'">
+                    <div class="d-flex flex-wrap align-items-start justify-content-between gap-2">
+                        <div class="flex-grow-1" style="min-width:260px">
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <form class="m-0 d-inline" sec:authorize="hasRole('ADMIN')"
+                                      th:action="@{/schedule/guards/{id}/toggle(id=${g.id})}" method="post">
+                                    <input type="hidden" name="enabled" th:value="${!g.enabled}">
+                                    <button type="submit" class="btn btn-sm py-0 px-2"
+                                            th:classappend="${g.enabled} ? 'btn-success' : 'btn-outline-secondary'"
+                                            th:title="${g.enabled} ? 'Включена (нажмите, чтобы выключить)' : 'Выключена (нажмите, чтобы включить)'">
+                                        <i class="bi" th:classappend="${g.enabled} ? 'bi-toggle-on' : 'bi-toggle-off'"></i>
+                                    </button>
+                                </form>
+                                <span class="fw-semibold" th:text="${g.name}"></span>
+                                <span class="badge bg-primary-subtle text-primary-emphasis border"
+                                      th:text="'если ' + ${g.formatThreshold()}"></span>
+                                <span class="badge text-bg-light border" th:text="${g.runWhen.title}"></span>
+                                <span class="badge bg-warning-subtle text-warning-emphasis border" th:if="${g.blockOnFail}"
+                                      title="При ошибке SSH/Prometheus планировщик встанет на паузу и не запустит следующий тест">
+                                    <i class="bi bi-pause-circle me-1"></i>пауза при ошибке
+                                </span>
+                                <!-- Статус последней проверки -->
+                                <th:block th:if="${g.lastStatus != null}">
+                                    <span class="badge"
+                                          th:classappend="${g.lastStatus.name() == 'OK'} ? 'text-bg-success' : (${g.lastStatus.name() == 'EXECUTED'} ? 'text-bg-info' : (${g.lastStatus.name() == 'SKIPPED_COOLDOWN'} ? 'text-bg-secondary' : 'text-bg-danger'))"
+                                          th:text="${g.lastStatus.title} + (${g.lastValue != null} ? ': ' + ${g.formatValue()} : '')"></span>
+                                </th:block>
+                                <span class="badge text-bg-light border text-muted" th:if="${g.lastStatus == null}">ещё не проверялась</span>
+                            </div>
+
+                            <div class="small text-muted mt-1 d-flex flex-wrap align-items-center gap-3">
+                                <span>
+                                    <i class="bi bi-terminal me-1"></i>SSH:
+                                    <code th:text="${g.hostSummary()}"></code>
+                                    · <span th:text="${sshCredNames.getOrDefault(g.sshCredentialId, '#' + g.sshCredentialId)}"></span>
+                                    <span class="badge text-bg-secondary ms-1" th:if="${g.useSudo}">sudo</span>
+                                </span>
+                                <span th:if="${g.lastCheckedAt != null}">
+                                    проверка: <time class="local-time" th:attr="datetime=${g.lastCheckedAt}" th:text="${fmt.dt(g.lastCheckedAt)}"></time>
+                                </span>
+                                <span th:if="${g.lastTriggeredAt != null}">
+                                    SSH выполнен: <time class="local-time" th:attr="datetime=${g.lastTriggeredAt}" th:text="${fmt.dt(g.lastTriggeredAt)}"></time>
+                                </span>
+                            </div>
+
+                            <div class="small mt-1 text-truncate" style="max-width:780px" th:title="${g.promql}">
+                                <span class="text-muted">PromQL:</span> <code th:text="${g.promql}"></code>
+                            </div>
+
+                            <details class="mt-1" th:if="${g.lastOutput != null and !g.lastOutput.isBlank()}">
+                                <summary class="small text-muted" style="cursor:pointer">Последний результат / вывод SSH</summary>
+                                <pre class="mb-0 mt-1 p-2 rounded border bg-dark text-light font-monospace" style="font-size:.74rem;max-height:180px;overflow:auto" th:text="${g.lastOutput}"></pre>
+                            </details>
+                        </div>
+
+                        <div class="d-flex flex-wrap align-items-center gap-1" sec:authorize="hasRole('ADMIN')">
+                            <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=false)}" method="post">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2" title="Запросить метрику из Prometheus сейчас (без запуска SSH)">
+                                    <i class="bi bi-activity me-1"></i>Метрика
+                                </button>
+                            </form>
+                            <form class="m-0" th:action="@{/schedule/guards/{id}/check(id=${g.id},runSsh=true)}" method="post">
+                                <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Проверить метрику и выполнить SSH-скрипт, если порог превышен">
+                                    <i class="bi bi-play-circle me-1"></i>Проверить
+                                </button>
+                            </form>
+                            <form class="m-0" th:action="@{/schedule/guards/{id}/run-ssh(id=${g.id})}" method="post"
+                                  data-confirm="Выполнить SSH-скрипт прямо сейчас независимо от значения метрики?">
+                                <button type="submit" class="btn btn-sm btn-outline-warning py-0 px-2" title="Принудительно выполнить SSH-скрипт сейчас (для отладки)">
+                                    <i class="bi bi-terminal me-1"></i>SSH
+                                </button>
+                            </form>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 sch-guard-edit-btn"
+                                    th:attr="data-guard-id=${g.id}" data-bs-toggle="modal" data-bs-target="#sch-guard-modal" title="Редактировать правило" aria-label="Редактировать">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <form class="m-0" th:action="@{/schedule/guards/{id}/delete(id=${g.id})}" method="post"
+                                  data-confirm="Удалить автопроверку?">
+                                <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Удалить правило" aria-label="Удалить">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </details>
+    </div>
+
     <!-- Модальное окно: Быстрое планирование теста прямо из планировщика -->
     <div class="modal fade" id="sch-quick-modal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
             <form class="modal-content" id="sch-quick-form" method="post"
                   th:attr="data-action-tpl=@{/scripts/__ID__/schedule},data-meta-base=@{/schedule/script-meta}">
                 <input type="hidden" th:if="${_csrf != null}" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
@@ -544,13 +549,14 @@
                             <input type="hidden" name="runAt" id="qm-iso">
                             <input type="hidden" name="queuePosition" id="qm-pos" value="">
                             <div class="sch-preset-chips">
-                                <button type="button" class="sch-preset-chip active" data-qm-time="front" title="Поставить первым сразу после текущего теста (остальные сдвинутся)">В начало (после текущего)</button>
+                                <button type="button" class="sch-preset-chip" data-qm-time="front" title="Поставить первым сразу после текущего теста (остальные сдвинутся)">В начало (после текущего)</button>
                                 <button type="button" class="sch-preset-chip" data-qm-time="back" title="Поставить в конец очереди после всех ожидающих тестов">В конец очереди</button>
-                                <button type="button" class="sch-preset-chip" data-qm-time="auto">Ближайшее авто</button>
+                                <button type="button" class="sch-preset-chip active" data-qm-time="auto">Ближайшее авто</button>
                                 <button type="button" class="sch-preset-chip" data-qm-time="+15m">+15 мин</button>
                                 <button type="button" class="sch-preset-chip" data-qm-time="+1h">+1 час</button>
                                 <button type="button" class="sch-preset-chip" data-qm-time="22:00">22:00</button>
                             </div>
+                            <div class="form-text text-primary fw-semibold mt-1" id="qm-pos-note">Ближайшее свободное окно подберётся автоматически.</div>
                         </div>
                         <div class="col-md-5">
                             <label class="form-label small fw-semibold mb-1" for="qm-count">Генераторов</label>
@@ -562,18 +568,21 @@
                         </div>
                     </div>
 
-                    <details class="mb-2" th:unless="${generators.isEmpty()}">
-                        <summary class="small fw-semibold text-muted"><i class="bi bi-pc-display me-1"></i>Выбрать конкретные генераторы (необязательно)</summary>
+                    <details class="mb-2 k6-disclosure" id="qm-det-hosts" th:unless="${generators.isEmpty()}">
+                        <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-pc-display"></i>Выбрать конкретные генераторы (необязательно)
+                            <span class="badge text-bg-primary d-none" id="qm-hosts-badge"></span></summary>
                         <div class="mt-2 sch-host-grid">
-                            <label class="sch-host-pill" th:each="g : ${generators}">
-                                <input class="form-check-input" type="checkbox" name="generatorId" th:value="${g.id}">
+                            <label class="sch-host-pill" th:each="g : ${generators}" th:classappend="${g.status.name() != 'ONLINE'} ? 'is-off'">
+                                <input class="form-check-input qm-host-pick" type="checkbox" name="generatorId" th:value="${g.id}">
+                                <span class="dot" th:classappend="${g.status.name() == 'ONLINE'} ? (${g.busy} ? 'dot-busy' : 'dot-ok') : 'dot-bad'"></span>
                                 <span th:text="${g.name}"></span>
                             </label>
                         </div>
                     </details>
 
-                    <details class="mb-2">
-                        <summary class="small fw-semibold text-muted"><i class="bi bi-sliders me-1"></i>Масштаб интенсивности по операциям (необязательно)</summary>
+                    <details class="mb-2 k6-disclosure" id="qm-det-ops">
+                        <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-sliders"></i>Масштаб интенсивности по операциям (необязательно)
+                            <span class="badge text-bg-warning d-none" id="qm-ops-badge"></span></summary>
                         <div class="mt-2">
                             <div class="sch-preset-chips mb-2">
                                 <button type="button" class="sch-preset-chip" data-qm-pct="50">50%</button>
@@ -586,8 +595,9 @@
                         </div>
                     </details>
 
-                    <details>
-                        <summary class="small fw-semibold text-muted"><i class="bi bi-braces me-1"></i>Переменные запуска (необязательно)</summary>
+                    <details class="k6-disclosure" id="qm-det-env">
+                        <summary class="small fw-semibold text-muted"><span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span><i class="bi bi-braces"></i>Переменные запуска (необязательно)
+                            <span class="badge text-bg-info d-none" id="qm-env-badge">свои</span></summary>
                         <div class="mt-2">
                             <div class="form-check"><input class="form-check-input" type="radio" name="envMode" id="qm-env-script" value="script" checked>
                                 <label class="form-check-label small" for="qm-env-script">Как в скрипте / выбранном профиле</label></div>
@@ -610,7 +620,7 @@
     <!-- Модальное окно: Импорт списка тестов (JSON) -->
     <div class="modal fade" id="sch-imp-tests-modal" tabindex="-1" aria-hidden="true"
          th:attr="data-auto-open=${importJson != null}">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
             <form class="modal-content" th:action="@{/schedule/import}" method="post" enctype="multipart/form-data">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-upload me-2 text-primary"></i>Импорт списка тестов (JSON)</h5>
@@ -684,7 +694,7 @@
     <!-- Модальное окно: Импорт профилей нагрузки (JSON) -->
     <div class="modal fade" id="sch-imp-prof-modal" tabindex="-1" aria-hidden="true"
          th:attr="data-auto-open=${importProfilesJson != null}">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
             <form class="modal-content" th:action="@{/schedule/import-profiles}" method="post" enctype="multipart/form-data">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-collection me-2 text-primary"></i>Импорт профилей нагрузки (JSON)</h5>
@@ -853,7 +863,7 @@
 
     <!-- Модалка: Добавить / редактировать автопроверку (Prometheus -> SSH) -->
     <div class="modal fade" id="sch-guard-modal" tabindex="-1" aria-hidden="true" sec:authorize="hasRole('ADMIN')">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
             <form class="modal-content" th:action="@{/schedule/guards}" method="post" id="sch-guard-form">
                 <input type="hidden" name="id" id="gd-id" value="">
                 <div class="modal-header">

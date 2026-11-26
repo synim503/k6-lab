@@ -4,7 +4,13 @@
 <!-- Общая шапка страниц скрипта: где я, что можно сделать, куда перейти. active: overview | load | versions | debug | run -->
 <th:block th:fragment="head(script, active)">
     <nav class="crumbs" aria-label="Навигация">
-        <a th:href="@{/scripts}">Скрипты</a><i class="bi bi-chevron-right"></i><span th:text="${script.name}"></span>
+        <a th:href="@{/scripts}">Скрипты</a><i class="bi bi-chevron-right"></i>
+        <a th:if="${active != 'overview'}" th:href="@{/scripts/{id}(id=${script.id})}" th:text="${script.name}"></a>
+        <span th:if="${active == 'overview'}" th:text="${script.name}"></span>
+        <th:block th:if="${active != 'overview'}">
+            <i class="bi bi-chevron-right"></i>
+            <span th:text="${active == 'load'} ? 'Нагрузка' : (${active == 'charts'} ? 'Графики отчёта' : (${active == 'versions'} ? 'Версии' : (${active == 'run'} ? 'Запуск' : 'Отладка')))"></span>
+        </th:block>
     </nav>
     <div class="script-head">
         <div class="title-row">
@@ -17,11 +23,12 @@
             </div>
         </div>
         <ul class="script-tabs" role="tablist">
-            <li><a class="nav-link" th:classappend="${active == 'overview'} ? 'active'" th:href="@{/scripts/{id}(id=${script.id})}"><i class="bi bi-grid"></i>Обзор</a></li>
+            <li><a class="nav-link" id="tab-link-overview" th:classappend="${active == 'overview'} ? 'active'" th:href="@{/scripts/{id}(id=${script.id})}"><i class="bi bi-grid"></i>Обзор</a></li>
             <li><a class="nav-link" th:classappend="${active == 'load'} ? 'active'" th:href="@{/scripts/{id}/load(id=${script.id})}"><i class="bi bi-speedometer2"></i>Нагрузка</a></li>
             <li><a class="nav-link" th:classappend="${active == 'charts'} ? 'active'" th:href="@{/scripts/{id}/charts(id=${script.id})}"><i class="bi bi-graph-up"></i>Графики отчёта</a></li>
             <li><a class="nav-link" id="tab-link-versions" th:classappend="${active == 'versions'} ? 'active'" th:href="@{/scripts/{id}(id=${script.id})} + '#versions'"><i class="bi bi-clock-history"></i>Версии</a></li>
             <li sec:authorize="hasRole('ADMIN')"><a class="nav-link" th:classappend="${active == 'debug'} ? 'active'" th:href="@{/scripts/sandbox(script=${script.id})}"><i class="bi bi-bug"></i>Отладка</a></li>
+            <li th:if="${active == 'run'}"><span class="nav-link active" aria-current="page"><i class="bi bi-play-circle"></i>Запуск</span></li>
         </ul>
     </div>
 </th:block>

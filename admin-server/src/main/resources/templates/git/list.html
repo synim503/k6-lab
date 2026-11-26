@@ -17,18 +17,29 @@
             <div class="mt-3" sec:authorize="hasRole('ADMIN')"><a class="btn btn-primary btn-sm" th:href="@{/git-repos/new}">Добавить репозиторий</a></div></div></td></tr>
         <tr th:each="r : ${repos}">
             <td class="fw-semibold" th:text="${r.name}"></td>
-            <td><code th:text="${r.url}"></code></td>
+            <td><div class="d-inline-flex align-items-center gap-1"><code th:text="${r.url}"></code>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 k6-copy-btn" th:attr="data-copy=${r.url}" title="Копировать URL" aria-label="Копировать URL"><i class="bi bi-clipboard"></i></button></div></td>
             <td><span class="badge text-bg-secondary" th:text="${r.authType.name() == 'NONE'} ? 'без аутентификации' : (${r.authType.name() == 'SSH'} ? 'SSH-ключ' : 'HTTPS-токен')"></span></td>
             <td class="text-muted" th:text="${r.subdir} ?: '/'"></td>
             <td class="text-end text-nowrap row-actions">
-                <button class="btn btn-sm btn-outline-secondary" hx-post="" th:attr="hx-post=@{/git-repos/{id}/refresh(id=${r.id})}"
-                        hx-target="#refs-box" hx-indicator="#refs-box" title="Подключиться к репозиторию и получить список веток и тегов"><i class="bi bi-plug me-1"></i>Проверить доступ</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" hx-post="" th:attr="hx-post=@{/git-repos/{id}/refresh(id=${r.id})}"
+                        hx-target="#refs-box" title="Подключиться к репозиторию и получить список веток и тегов">
+                    <span class="spinner-border spinner-border-sm k6-htmx-spin me-1" role="status" aria-hidden="true"></span><i class="bi bi-plug me-1"></i>Проверить доступ</button>
                 <a sec:authorize="hasRole('ADMIN')" class="btn btn-sm btn-outline-secondary btn-icon" th:href="@{/git-repos/{id}/edit(id=${r.id})}" title="Изменить" aria-label="Изменить"><i class="bi bi-pencil"></i></a>
                 <form sec:authorize="hasRole('ADMIN')" class="d-inline" th:action="@{/git-repos/{id}/delete(id=${r.id})}" method="post"
                       data-confirm="Удалить репозиторий? Уже загруженные версии скриптов останутся.">
                     <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form>
             </td></tr></tbody></table></div></div>
-    <div id="refs-box"></div>
+    <div id="refs-box" class="k6-htmx-target"></div>
+</th:block>
+<th:block layout:fragment="scripts">
+    <script th:inline="none">
+        document.body.addEventListener('htmx:afterSwap', function (ev) {
+            if (ev.detail && ev.detail.target && ev.detail.target.id === 'refs-box') {
+                ev.detail.target.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+            }
+        });
+    </script>
 </th:block>
 </body>
 </html>

@@ -67,6 +67,9 @@
     function setActiveFilter(mode) {
         activeFilter = mode;
         filterBtns.forEach(function (b) { b.classList.toggle('active', b.dataset.schFilter === mode); });
+        document.querySelectorAll('.sch-kpi[data-kpi-filter]').forEach(function (k) {
+            k.classList.toggle('is-active', k.dataset.kpiFilter === mode);
+        });
         applyFilter();
         syncBulkBar();
     }
@@ -75,16 +78,31 @@
             setActiveFilter(btn.dataset.schFilter);
         });
     });
+    function onKpiActivate(el, ev) {
+        if (ev.target.closest('a')) { return; }
+        ev.stopPropagation();
+        var target = el.dataset.kpiFilter;
+        setActiveFilter(activeFilter === target ? 'all' : target);
+        var card = document.getElementById('sch-table-card');
+        if (card) { card.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
+    }
     document.querySelectorAll('[data-kpi-filter]').forEach(function (el) {
-        el.addEventListener('click', function (ev) {
-            if (ev.target.closest('a')) { return; }
-            ev.stopPropagation();
-            var target = el.dataset.kpiFilter;
-            setActiveFilter(activeFilter === target ? 'all' : target);
-            var card = document.getElementById('sch-table-card');
-            if (card) { card.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
+        el.addEventListener('click', function (ev) { onKpiActivate(el, ev); });
+        el.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onKpiActivate(el, ev); }
         });
     });
+
+    // Сохранение раскрытого состояния блока автопроверок
+    var guardsDet = document.getElementById('sch-guards-details');
+    if (guardsDet) {
+        if (guardsDet.dataset.forceOpen !== 'true') {
+            try { guardsDet.open = localStorage.getItem('k6lab.sch.guardsOpen') === '1'; } catch (e) {}
+        }
+        guardsDet.addEventListener('toggle', function () {
+            try { localStorage.setItem('k6lab.sch.guardsOpen', guardsDet.open ? '1' : '0'); } catch (e) {}
+        });
+    }
 
     // ==================== Bulk Selection & Drag-and-Drop Queue Reorder ====================
     var selectAllCb = document.getElementById('sch-select-all');
@@ -119,9 +137,21 @@
     function syncBulkBar() {
         if (!tbody) { return; }
         var checked = allCheckedIds();
+        var pendingChecked = 0;
+        tbody.querySelectorAll('.sch-row-check:checked').forEach(function (cb) {
+            var tr = cb.closest('tr.sch-row');
+            if (tr && tr.dataset.pending === 'true') { pendingChecked++; }
+        });
         if (bulkBar && bulkCountEl) {
             bulkBar.classList.toggle('d-none', checked.length === 0);
             bulkCountEl.textContent = String(checked.length);
+        }
+        var bulkCancelBtn = document.getElementById('sch-bulk-cancel-btn');
+        if (bulkCancelBtn) {
+            bulkCancelBtn.disabled = pendingChecked === 0;
+            bulkCancelBtn.innerHTML = pendingChecked > 0
+                ? '<i class="bi bi-x-lg me-1"></i>Отменить ожидающие (' + pendingChecked + ')'
+                : '<i class="bi bi-x-lg me-1"></i>Отменить ожидающие';
         }
         document.querySelectorAll('.sch-bulk-form').forEach(function (form) {
             form.querySelectorAll('input[name="ids"]').forEach(function (n) { n.remove(); });
@@ -222,8 +252,12 @@
                 credentials: 'same-origin',
                 headers: headers,
                 body: JSON.stringify({ids: orderedIds})
-            }).then(function () {
+            }).then(function (r) {
+                if (!r.ok) { throw new Error('HTTP ' + r.status); }
                 location.reload();
+            }).catch(function () {
+                if (window.k6Toast) { window.k6Toast('Не удалось сохранить новый порядок очереди', 'err'); }
+                setTimeout(function () { location.reload(); }, 1200);
             });
         });
     }
@@ -329,28 +363,74 @@
 
     var pendingRepeatOverrides = null;
 
+    var qPosNote = document.getElementById('qm-pos-note');
+    var qDetHosts = document.getElementById('qm-det-hosts');
+    var qDetOps = document.getElementById('qm-det-ops');
+    var qDetEnv = document.getElementById('qm-det-env');
+    var qHostsBadge = document.getElementById('qm-hosts-badge');
+    var qOpsBadge = document.getElementById('qm-ops-badge');
+    var qEnvBadge = document.getElementById('qm-env-badge');
+
+    function syncQuickPosNote() {
+        if (!qPosNote) { return; }
+        var p = qPos ? qPos.value : '';
+        if (p === 'front') { qPosNote.textContent = 'Позиция: в начало очереди — сразу после текущего теста.'; qPosNote.classList.remove('d-none'); }
+        else if (p === 'back') { qPosNote.textContent = 'Позиция: в конец очереди — после всех ожидающих тестов.'; qPosNote.classList.remove('d-none'); }
+        else if (!qAt || !qAt.value) { qPosNote.textContent = 'Ближайшее свободное окно подберётся автоматически.'; qPosNote.classList.remove('d-none'); }
+        else { qPosNote.textContent = ''; qPosNote.classList.add('d-none'); }
+    }
+    function syncQuickHosts() {
+        if (!qModalEl || !qCount) { return; }
+        var n = qModalEl.querySelectorAll('.qm-host-pick:checked').length;
+        if (n > 0) { qCount.value = n; }
+        qCount.readOnly = n > 0;
+        if (qHostsBadge) { qHostsBadge.textContent = 'выбрано: ' + n; qHostsBadge.classList.toggle('d-none', n === 0); }
+    }
+    function syncQuickOpsBadge() {
+        if (!qOpsBadge || !qOpsBox) { return; }
+        var changed = 0;
+        qOpsBox.querySelectorAll('input[name^="pct_"]').forEach(function (i) {
+            if (parseFloat(i.value) !== 100) { changed++; }
+        });
+        qOpsBadge.textContent = changed > 0 ? ('изменено: ' + changed) : '';
+        qOpsBadge.classList.toggle('d-none', changed === 0);
+    }
+    function syncQuickEnvBadge() {
+        var customOn = !!(document.getElementById('qm-env-custom') && document.getElementById('qm-env-custom').checked);
+        if (qEnvBadge) { qEnvBadge.classList.toggle('d-none', !customOn); }
+    }
+
     function applyRepeatOverrides() {
         if (!pendingRepeatOverrides) { return; }
         var ov = pendingRepeatOverrides;
         pendingRepeatOverrides = null;
+        var hasPctOv = false;
         if (ov.pct && qOpsBox) {
             var inputs = Array.prototype.slice.call(qOpsBox.querySelectorAll('input[name^="pct_"]'));
             Object.keys(ov.pct).forEach(function (op) {
                 var targetName = 'pct_' + op;
                 var inp = inputs.find(function (el) { return el.name === targetName; });
-                if (inp) { inp.value = ov.pct[op]; }
+                if (inp) {
+                    inp.value = ov.pct[op];
+                    if (parseFloat(ov.pct[op]) !== 100) { hasPctOv = true; }
+                }
             });
         }
+        if (qDetOps) { qDetOps.open = hasPctOv; }
+        syncQuickOpsBadge();
         var envScriptRadio = document.getElementById('qm-env-script');
         var envCustomRadio = document.getElementById('qm-env-custom');
         if (ov.envCustom && envCustomRadio && qEnv) {
             envCustomRadio.checked = true;
             qEnv.disabled = false;
             qEnv.value = ov.envText || '';
+            if (qDetEnv) { qDetEnv.open = true; }
         } else if (envScriptRadio && qEnv) {
             envScriptRadio.checked = true;
             qEnv.disabled = true;
+            if (qDetEnv) { qDetEnv.open = false; }
         }
+        syncQuickEnvBadge();
     }
 
     var metaSeq = 0;
@@ -398,6 +478,7 @@
             if (qPos) { qPos.value = ''; }
             qModalEl.querySelectorAll('[data-qm-time]').forEach(function (b) { b.classList.remove('active'); });
             syncQuickIso();
+            syncQuickPosNote();
         });
 
         qModalEl.querySelectorAll('[data-qm-time]').forEach(function (btn) {
@@ -408,27 +489,37 @@
                     qAt.value = '';
                     qIso.value = '';
                     if (qPos) { qPos.value = p; }
+                    syncQuickPosNote();
                     return;
                 }
                 if (qPos) { qPos.value = ''; }
-                if (p === 'auto') { qAt.value = ''; qIso.value = ''; return; }
+                if (p === 'auto') { qAt.value = ''; qIso.value = ''; syncQuickPosNote(); return; }
                 if (p === '+15m') { d.setMinutes(d.getMinutes() + 15); }
                 else if (p === '+1h') { d.setHours(d.getHours() + 1); }
                 else if (p === '22:00') { d.setHours(22, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
                 else if (p === '02:00') { d.setHours(2, 0, 0, 0); if (d <= new Date()) { d.setDate(d.getDate() + 1); } }
                 qAt.value = toLocalVal(d);
                 syncQuickIso();
+                syncQuickPosNote();
             });
         });
 
         qModalEl.querySelectorAll('[data-qm-pct]').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 qOpsBox.querySelectorAll('input[name^="pct_"]').forEach(function (i) { i.value = btn.dataset.qmPct; });
+                syncQuickOpsBadge();
             });
+        });
+        if (qOpsBox) { qOpsBox.addEventListener('input', syncQuickOpsBadge); }
+        qModalEl.querySelectorAll('.qm-host-pick').forEach(function (cb) {
+            cb.addEventListener('change', syncQuickHosts);
         });
 
         qModalEl.querySelectorAll('input[name="envMode"]').forEach(function (r) {
-            r.addEventListener('change', function () { qEnv.disabled = !document.getElementById('qm-env-custom').checked; });
+            r.addEventListener('change', function () {
+                qEnv.disabled = !document.getElementById('qm-env-custom').checked;
+                syncQuickEnvBadge();
+            });
         });
 
         qModalEl.addEventListener('show.bs.modal', function (ev) {
@@ -454,16 +545,20 @@
             qModalEl.querySelectorAll('input[name="generatorId"]').forEach(function (cb) {
                 cb.checked = presetGens.indexOf(String(cb.value)) >= 0;
             });
+            if (qDetHosts) { qDetHosts.open = presetGens.length > 0; }
+            syncQuickHosts();
             var envScriptReset = document.getElementById('qm-env-script');
             if (envScriptReset && qEnv) {
                 envScriptReset.checked = true;
                 qEnv.disabled = true;
             }
+            syncQuickEnvBadge();
             if (presetScript) { qScript.value = presetScript; }
             qAt.value = '';
             qIso.value = '';
             if (qPos) { qPos.value = ''; }
             qModalEl.querySelectorAll('[data-qm-time]').forEach(function (b) { b.classList.toggle('active', b.dataset.qmTime === 'auto'); });
+            syncQuickPosNote();
             if (qScript.value) { loadScriptMeta(qScript.value, presetProf, presetCnt); }
         });
     }
@@ -501,12 +596,8 @@
     document.querySelectorAll('[data-copy-example]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var src = document.getElementById(btn.dataset.copyExample);
-            if (!src || !navigator.clipboard) { return; }
-            navigator.clipboard.writeText(src.textContent.trim()).then(function () {
-                var prev = btn.innerHTML;
-                btn.innerHTML = '<i class="bi bi-check2 me-1"></i>Скопировано';
-                setTimeout(function () { btn.innerHTML = prev; }, 1600);
-            });
+            if (!src) { return; }
+            if (window.k6Copy) { window.k6Copy(src.textContent.trim(), btn); }
         });
     });
 

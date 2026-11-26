@@ -43,69 +43,67 @@
                     </button>
                 </div>
             </div>
-            <div class="d-flex align-items-center gap-2 ms-auto">
-                <a class="btn btn-sm btn-outline-secondary" th:href="@{/scripts/{id}/load/profiles.json(id=${script.id})}"
-                   title="Скачать все профили в JSON"><i class="bi bi-download me-1"></i>Экспорт</a>
-                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ld-import-modal">
-                    <i class="bi bi-upload me-1"></i>Импорт / экспорт
+            <div class="d-flex align-items-center gap-2 ms-auto flex-wrap">
+                <div class="input-group input-group-sm" style="width:180px" title="Число генераторов по умолчанию для этого скрипта">
+                    <span class="input-group-text"><i class="bi bi-hdd-network me-1 text-primary"></i>Генераторов</span>
+                    <input class="form-control" type="number" min="1" max="200" th:field="*{generatorCount}" aria-label="Генераторов по умолчанию">
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ld-import-modal"
+                        title="Импорт или экспорт профилей в JSON">
+                    <i class="bi bi-arrow-down-up me-1"></i>Импорт / экспорт
                 </button>
             </div>
             <input type="hidden" name="profile" id="profile-id">
         </div>
 
-        <!-- Разовая ручная отправка параметров из базового профиля в остальные профили (без постоянной привязки) -->
+        <!-- Разовая ручная отправка параметров из базового профиля в остальные профили (сворачиваемая, чтобы не загораживать график) -->
         <div class="card mb-3 border-primary-subtle bg-light-subtle" id="ld-base-profile-box"
              th:if="${loadedProfileId == null and !profiles.isEmpty()}">
             <div class="card-body py-2 px-3">
                 <input type="hidden" name="baseConfigSubmitted" value="true">
-                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-                    <div class="d-flex flex-wrap align-items-center gap-2">
-                        <span class="badge text-bg-primary"><i class="bi bi-send me-1"></i>Отправка в остальные профили</span>
-                        <span class="small text-muted">Профили независимы. Можно разово отправить выбранные разделы из базового профиля во все профили (<b th:text="${profiles.size()}"></b>):</span>
-                    </div>
-                    <div class="d-flex flex-wrap align-items-center gap-2">
-                        <div class="input-group input-group-sm" style="width:185px" title="Число генераторов по умолчанию">
-                            <span class="input-group-text"><i class="bi bi-hdd-network me-1 text-primary"></i>Генераторов</span>
-                            <input class="form-control" type="number" min="1" max="200" th:field="*{generatorCount}">
-                        </div>
-                        <button type="submit" class="btn btn-sm btn-primary" id="ld-apply-base-btn"
+                <details class="k6-disclosure" id="ld-base-push-details">
+                    <summary class="d-flex flex-wrap align-items-center gap-2">
+                        <span class="k6-disc-caret"><i class="bi bi-chevron-right"></i></span>
+                        <span class="badge text-bg-primary"><i class="bi bi-send me-1"></i>Отправка в остальные профили (<span th:text="${profiles.size()}"></span>)</span>
+                        <span class="small text-muted">Профили независимы — раскройте, чтобы разово перенести выбранные разделы из базового профиля</span>
+                    </summary>
+                    <div class="d-flex flex-wrap align-items-center gap-3 mt-2 pt-2 border-top small">
+                        <span class="text-muted fw-semibold">Какие разделы отправить:</span>
+                        <label class="form-check form-check-inline m-0" title="Обновляются только переменные, заданные в базовом профиле; дополнительные переменные в остальных профилях сохраняются">
+                            <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideEnv}" data-label="Переменные и секреты (env — только ключи из базового, лишние сохраняются)">
+                            <span class="form-check-label"><i class="bi bi-braces text-primary me-1"></i>Переменные и секреты (env)</span>
+                        </label>
+                        <label class="form-check form-check-inline m-0">
+                            <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideStop}" data-label="Автостоп и метрики Prometheus">
+                            <span class="form-check-label"><i class="bi bi-shield-exclamation text-primary me-1"></i>Автостоп и метрики Prometheus</span>
+                        </label>
+                        <label class="form-check form-check-inline m-0">
+                            <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideSla}" data-label="SLA операций (p90/p95/p99, мс, % ошибок)">
+                            <span class="form-check-label"><i class="bi bi-award text-primary me-1"></i>SLA операций (p90/p95/p99, мс, % ошибок)</span>
+                        </label>
+                        <label class="form-check form-check-inline m-0">
+                            <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideWarmup}" data-label="Общий прогрев">
+                            <span class="form-check-label"><i class="bi bi-fire text-warning me-1"></i>Общий прогрев</span>
+                        </label>
+                        <label class="form-check form-check-inline m-0" th:if="${!form.dataFiles.isEmpty()}">
+                            <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideData}" data-label="Тестовые данные (CSV)">
+                            <span class="form-check-label"><i class="bi bi-file-earmark-spreadsheet text-primary me-1"></i>Тестовые данные (CSV)</span>
+                        </label>
+                        <label class="form-check form-check-inline m-0">
+                            <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideGenerators}" data-label="Генераторы по умолчанию">
+                            <span class="form-check-label"><i class="bi bi-hdd-network text-primary me-1"></i>Генераторы по умолчанию</span>
+                        </label>
+                        <button type="submit" class="btn btn-sm btn-primary ms-auto" id="ld-apply-base-btn"
                                 th:formaction="@{/scripts/{id}/load/apply-base(id=${script.id})}"
                                 th:attr="data-prof-count=${profiles.size()}"
                                 title="Сохранить базовую нагрузку и разово отправить выбранные разделы во все профили">
                             <i class="bi bi-send-check me-1"></i>Отправить в профили (<span th:text="${profiles.size()}"></span>)
                         </button>
                     </div>
-                </div>
-                <div class="d-flex flex-wrap align-items-center gap-3 mt-2 pt-2 border-top small">
-                    <span class="text-muted fw-semibold">Какие разделы отправить:</span>
-                    <label class="form-check form-check-inline m-0" title="Обновляются только переменные, заданные в базовом профиле; дополнительные переменные в остальных профилях сохраняются">
-                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideEnv}" data-label="Переменные и секреты (env — только ключи из базового, лишние сохраняются)">
-                        <span class="form-check-label"><i class="bi bi-braces text-primary me-1"></i>Переменные и секреты (env)</span>
-                    </label>
-                    <label class="form-check form-check-inline m-0">
-                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideStop}" data-label="Автостоп и метрики Prometheus">
-                        <span class="form-check-label"><i class="bi bi-shield-exclamation text-primary me-1"></i>Автостоп и метрики Prometheus</span>
-                    </label>
-                    <label class="form-check form-check-inline m-0">
-                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideSla}" data-label="SLA операций (p90/p95/p99, мс, % ошибок)">
-                        <span class="form-check-label"><i class="bi bi-award text-primary me-1"></i>SLA операций (p90/p95/p99, мс, % ошибок)</span>
-                    </label>
-                    <label class="form-check form-check-inline m-0">
-                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideWarmup}" data-label="Общий прогрев">
-                        <span class="form-check-label"><i class="bi bi-fire text-warning me-1"></i>Общий прогрев</span>
-                    </label>
-                    <label class="form-check form-check-inline m-0" th:if="${!form.dataFiles.isEmpty()}">
-                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideData}" data-label="Тестовые данные (CSV)">
-                        <span class="form-check-label"><i class="bi bi-file-earmark-spreadsheet text-primary me-1"></i>Тестовые данные (CSV)</span>
-                    </label>
-                    <label class="form-check form-check-inline m-0">
-                        <input class="form-check-input ld-push-opt" type="checkbox" th:field="*{baseOverrideGenerators}" data-label="Генераторы по умолчанию">
-                        <span class="form-check-label"><i class="bi bi-hdd-network text-primary me-1"></i>Генераторы по умолчанию</span>
-                    </label>
-                </div>
-                <div class="small text-muted mt-1" style="font-size:.77rem">
-                    <i class="bi bi-info-circle me-1"></i>Если в каком-то профиле список переменных (<code>env</code>) полнее, его дополнительные переменные не удаляются — обновляются только переменные из базового профиля.
-                </div>
+                    <div class="small text-muted mt-1" style="font-size:.77rem">
+                        <i class="bi bi-info-circle me-1"></i>Если в каком-то профиле список переменных (<code>env</code>) полнее, его дополнительные переменные не удаляются — обновляются только переменные из базового профиля.
+                    </div>
+                </details>
             </div>
         </div>
         <input type="hidden" id="ld-base-warmup-dur" name="baseWarmupDuration" th:value="${form.baseWarmupDuration}">
@@ -202,6 +200,10 @@
                 <span class="small text-muted ms-2">каждая функция скрипта — отдельная операция; можно добавить несколько сценариев на одну функцию</span>
             </div>
             <div class="ld-ops-tools" th:unless="${form.ops.isEmpty()}">
+                <div class="seg" id="ld-op-filter-seg" role="group" aria-label="Показать операции">
+                    <button type="button" class="btn btn-sm active" data-op-filter="all">Все</button>
+                    <button type="button" class="btn btn-sm" data-op-filter="on">Включённые</button>
+                </div>
                 <input class="form-control form-control-sm ld-op-search" type="search" id="ld-op-search" placeholder="Фильтр операций…" aria-label="Фильтр операций">
                 <button type="button" class="btn btn-sm btn-outline-secondary" id="ld-collapse-all">
                     <i class="bi bi-arrows-collapse me-1"></i>Свернуть все
@@ -466,45 +468,46 @@
                         Если запрос возвращает несколько серий (несколько серверов), проверяется наихудшая серия и её имя выводится в отчёте.
                     </div>
                     <div id="ld-cc-rows" class="d-flex flex-column gap-2">
-                        <div class="ld-cc-row p-2 rounded border bg-light-subtle" th:each="cc, st : *{stop.customChecks}">
+                        <div class="ld-cc-row ld-cc-card" th:each="cc, st : *{stop.customChecks}">
                             <div class="row g-2 align-items-center">
-                                <div class="col-md-3">
+                                <div class="col-md-5">
                                     <input class="form-control form-control-sm ld-cc-name" th:name="|stop.customChecks[${st.index}].name|"
-                                           th:value="${cc.name}" maxlength="120" placeholder="Название (например CPU серверов)">
+                                           th:value="${cc.name}" maxlength="120" placeholder="Название (например CPU серверов)" aria-label="Название метрики">
                                 </div>
                                 <div class="col-md-4">
-                                    <input class="form-control form-control-sm font-monospace ld-cc-promql" th:name="|stop.customChecks[${st.index}].promql|"
-                                           th:value="${cc.promql}" placeholder="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=&quot;idle&quot;}[{range}])) * 100)">
-                                </div>
-                                <div class="col-md-2">
                                     <div class="input-group input-group-sm">
-                                        <select class="form-select ld-cc-cmp" style="max-width:64px" th:name="|stop.customChecks[${st.index}].cmp|">
+                                        <span class="input-group-text text-muted">Порог</span>
+                                        <select class="form-select ld-cc-cmp" style="max-width:62px" th:name="|stop.customChecks[${st.index}].cmp|" aria-label="Условие">
                                             <option value="LTE" th:selected="${cc.cmp == 'LTE' or cc.cmp == null}">≤</option>
                                             <option value="LT" th:selected="${cc.cmp == 'LT'}">&lt;</option>
                                             <option value="GTE" th:selected="${cc.cmp == 'GTE'}">≥</option>
                                             <option value="GT" th:selected="${cc.cmp == 'GT'}">&gt;</option>
                                         </select>
                                         <input class="form-control ld-cc-thr" type="number" step="any" th:name="|stop.customChecks[${st.index}].threshold|"
-                                               th:value="${cc.threshold}" placeholder="80">
-                                        <input class="form-control ld-cc-unit" style="max-width:52px" th:name="|stop.customChecks[${st.index}].unit|"
-                                               th:value="${cc.unit}" maxlength="16" placeholder="%">
+                                               th:value="${cc.threshold}" placeholder="80" aria-label="Пороговое значение">
+                                        <input class="form-control ld-cc-unit" style="max-width:58px" th:name="|stop.customChecks[${st.index}].unit|"
+                                               th:value="${cc.unit}" maxlength="16" placeholder="%" aria-label="Единицы">
                                     </div>
                                 </div>
-                                <div class="col-md-3 d-flex align-items-center justify-content-end gap-2">
-                                    <div class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">
+                                <div class="col-md-3 d-flex align-items-center justify-content-md-end gap-2 flex-wrap">
+                                    <label class="form-check form-check-inline m-0" title="Влияет на успешность ступени в отчёте и поиск максимума">
                                         <input type="hidden" class="ld-cc-sla-h" th:name="|_stop.customChecks[${st.index}].stepSla|" value="on">
                                         <input class="form-check-input ld-cc-sla" type="checkbox" value="true"
                                                th:name="|stop.customChecks[${st.index}].stepSla|" th:checked="${cc.stepSla}">
-                                        <label class="form-check-label small">SLA отчёта</label>
-                                    </div>
-                                    <div class="form-check form-check-inline m-0" title="Останавливать тест при нарушении N проверок подряд">
+                                        <span class="form-check-label small">SLA</span>
+                                    </label>
+                                    <label class="form-check form-check-inline m-0" title="Останавливать тест при нарушении N проверок подряд">
                                         <input class="form-check-input ld-cc-stop" type="checkbox" value="true"
                                                th:name="|stop.customChecks[${st.index}].autoStop|" th:checked="${cc.autoStop}">
-                                        <label class="form-check-label small">Автостоп</label>
-                                    </div>
-                                    <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2 ld-cc-del" title="Удалить правило">
+                                        <span class="form-check-label small">Автостоп</span>
+                                    </label>
+                                    <button type="button" class="btn btn-sm btn-outline-danger btn-icon-sm ld-cc-del" title="Удалить правило" aria-label="Удалить правило">
                                         <i class="bi bi-x-lg"></i>
                                     </button>
+                                </div>
+                                <div class="col-12">
+                                    <input class="form-control form-control-sm font-monospace ld-cc-promql" th:name="|stop.customChecks[${st.index}].promql|"
+                                           th:value="${cc.promql}" placeholder="PromQL: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=&quot;idle&quot;}[{range}])) * 100)" aria-label="PromQL-запрос">
                                 </div>
                             </div>
                         </div>
@@ -853,8 +856,9 @@
                                  th:attr="data-config=${editedConfig != null ? editedConfig : plan.configJson},
                                           data-readonly=${planFromProfile},
                                           data-vs-base=@{/webjars/monaco-editor/min/vs}"></div>
-                            <div class="d-flex gap-2 mt-2 align-items-center">
+                            <div class="d-flex gap-2 mt-2 align-items-center flex-wrap">
                                 <button class="btn btn-primary btn-sm" th:unless="${planFromProfile}"><i class="bi bi-check-lg me-1"></i>Сохранить конфиг</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary k6-copy-btn" id="cfg-copy-btn"><i class="bi bi-clipboard me-1"></i>Копировать JSON</button>
                                 <a class="btn btn-sm btn-outline-secondary"
                                    th:href="${loadedProfileId != null} ? @{/scripts/{id}/config.json(id=${script.id},profile=${loadedProfileId})} : @{/scripts/{id}/config.json(id=${script.id})}">
                                     <i class="bi bi-download me-1"></i>Скачать
@@ -953,6 +957,13 @@
                 cfgForm.addEventListener('submit', function () {
                     if (ed) { cfgVal.value = ed.getValue(); }
                     else if (fallbackTa) { cfgVal.value = fallbackTa.value; }
+                });
+            }
+            var cfgCopyBtn = document.getElementById('cfg-copy-btn');
+            if (cfgCopyBtn) {
+                cfgCopyBtn.addEventListener('click', function () {
+                    var txt = ed ? ed.getValue() : (fallbackTa ? fallbackTa.value : (cfgVal ? cfgVal.value : ''));
+                    if (window.k6Copy) { window.k6Copy(txt, cfgCopyBtn); }
                 });
             }
 

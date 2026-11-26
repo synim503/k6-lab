@@ -7,6 +7,7 @@
     var scriptId = root.dataset.scriptId;
     var baseUrl = root.dataset.baseUrl; // e.g. /scripts/5/charts
     var promConfigured = root.dataset.promConfigured === 'true';
+    var isLightTheme = root.dataset.chartTheme === 'LIGHT';
     var csrfMeta = document.querySelector('meta[name="_csrf"]');
     var csrfToken = csrfMeta ? csrfMeta.content : '';
 
@@ -189,6 +190,10 @@
     }
 
     function toast(msg, kind) {
+        if (window.k6Toast) {
+            window.k6Toast(msg, kind || 'ok');
+            return;
+        }
         if (!elToastBox) { return; }
         var d = document.createElement('div');
         d.className = 'cb-toast ' + (kind || 'ok');
@@ -381,7 +386,7 @@
         elSummary.innerHTML = '<i class="bi bi-graph-up"></i> В отчёте: <b>' + active + '</b> из ' + total;
     }
 
-    function renderVariables() {
+    function renderMissingVarsOnly() {
         var missing = allMissingVars();
         elVarsBadge.textContent = String(variables.length);
         if (missing.length > 0) {
@@ -404,7 +409,11 @@
             elVarsMissing.classList.add('d-none');
             elVarsMissing.innerHTML = '';
         }
+        updateNameVarHint();
+    }
 
+    function renderVariables() {
+        renderMissingVarsOnly();
         if (variables.length === 0) {
             elVarsGrid.innerHTML = '<div class="text-muted small py-1">Переменных пока нет. Добавьте переменную ниже (например, <code>instance</code> = <code>app-1</code> или <code>testid</code> = <code>{run_id}</code>).</div>';
         } else {
@@ -417,7 +426,6 @@
                     '</div>';
             }).join('');
         }
-        updateNameVarHint();
     }
 
     function updateNameVarHint() {
@@ -592,7 +600,9 @@
 
             var expandedHtml = '';
             if (diag && diag.expandedPromql && diag.expandedPromql !== diag.rawPromql) {
-                expandedHtml = '<details class="cb-q-expanded"><summary class="text-muted">Итоговый PromQL после подстановки переменных</summary><pre>' + esc(diag.expandedPromql) + '</pre></details>';
+                expandedHtml = '<details class="cb-q-expanded"><summary class="text-muted">Итоговый PromQL после подстановки переменных</summary>' +
+                    '<div class="position-relative mt-1"><pre>' + esc(diag.expandedPromql) + '</pre>' +
+                    '<button type="button" class="btn btn-sm btn-outline-light py-0 px-2 position-absolute top-0 end-0 m-1 k6-copy-btn" data-copy="' + esc(diag.expandedPromql) + '" title="Копировать PromQL"><i class="bi bi-clipboard"></i></button></div></details>';
             }
 
             return '<div class="cb-q-card" data-q-idx="' + i + '">' +
@@ -647,10 +657,14 @@
         var scriptDefaults = varMap();
         var localCount = Object.keys(definedLocal).length;
         if (elCvCount) { elCvCount.textContent = String(localCount); }
+        var cvDetails = document.getElementById('cb-cv-details');
+        var refVars = draftReferencedVars().filter(function (v) { return !(v in definedLocal); });
+        if (cvDetails && (chartVarRows.length > 0 || refVars.length > 0)) {
+            cvDetails.open = true;
+        }
 
         // подсказки для переменных $var, используемых в запросах/имени этого графика, но ещё не переопределённых на графике
         if (elCvHints) {
-            var refVars = draftReferencedVars().filter(function (v) { return !(v in definedLocal); });
             if (refVars.length > 0) {
                 elCvHints.classList.remove('d-none');
                 elCvHints.innerHTML = '<span class="small text-muted me-1">Найдены в запросах:</span>' +
@@ -839,11 +853,14 @@
 
             if (p.dataUri) {
                 elPreviewStage.classList.add('has-img');
+                elPreviewStage.classList.toggle('is-light-chart', isLightTheme);
                 elPreviewStage.innerHTML = '<div class="cb-preview-loading"><span class="spinner-border spinner-border-sm"></span><span>Обновление…</span></div>' +
                     '<img src="' + p.dataUri + '" alt="' + esc(p.title) + '" title="Нажмите, чтобы увеличить">';
                 elPreviewStage.querySelector('img').addEventListener('click', function () {
                     elZoomImg.src = p.dataUri;
                     elZoomTitle.textContent = p.title || 'Предпросмотр графика';
+                    var zmBody = elZoomImg.parentElement;
+                    if (zmBody) { zmBody.style.background = isLightTheme ? '#ffffff' : '#111827'; }
                     bootstrap.Modal.getOrCreateInstance(document.getElementById('cb-zoom-modal')).show();
                 });
                 elPreviewMeta.innerHTML = '<span><i class="bi bi-clock me-1"></i>' + esc(p.windowLabel) + ' · <b>' + p.totalSeries + ' ' + pluralSeries(p.totalSeries) + '</b> · ' + p.elapsedMs + ' мс</span>' +
@@ -1298,14 +1315,18 @@
         persistOrder(copy);
     });
 
-    // Studio fields
-    elName.addEventListener('input', function () { syncDirty(); updateNameVarHint(); renderChartVars(); renderVariables(); });
+    // Studio fields (не перерисовываем #cb-vars-grid при наборе текста, чтобы не терять правки в панели общих переменных)
+    elName.addEventListener('input', function () { syncDirty(); updateNameVarHint(); renderChartVars(); renderMissingVarsOnly(); });
     elUnit.addEventListener('input', function () { renderUnitPills(); syncDirty(); });
     elEnabled.addEventListener('change', syncDirty);
 
     // Per-chart variables interactions
     if (elCvAddBtn) {
-        elCvAddBtn.addEventListener('click', function () {
+        elCvAddBtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var cvDetails = document.getElementById('cb-cv-details');
+            if (cvDetails) { cvDetails.open = true; }
             chartVarRows.push({ name: '', value: '' });
             renderChartVars();
             syncDirty();
@@ -1324,7 +1345,7 @@
             chartVarRows.push({ name: name, value: val });
             renderChartVars();
             renderQueries();
-            renderVariables();
+            renderMissingVarsOnly();
             syncDirty();
             var valInp = elCvRows.querySelector('input[data-cv-val="' + (chartVarRows.length - 1) + '"]');
             if (valInp) { valInp.focus(); valInp.select(); }
@@ -1336,12 +1357,12 @@
                 chartVarRows[+e.target.dataset.cvName].name = e.target.value;
                 syncDirty();
                 updateNameVarHint();
-                renderVariables();
+                renderMissingVarsOnly();
             } else if (e.target.dataset.cvVal != null) {
                 chartVarRows[+e.target.dataset.cvVal].value = e.target.value;
                 syncDirty();
                 updateNameVarHint();
-                renderVariables();
+                renderMissingVarsOnly();
             }
         });
         elCvRows.addEventListener('change', function (e) {
@@ -1356,7 +1377,7 @@
                 chartVarRows.splice(+del.dataset.cvDel, 1);
                 renderChartVars();
                 renderQueries();
-                renderVariables();
+                renderMissingVarsOnly();
                 syncDirty();
                 return;
             }
@@ -1365,7 +1386,7 @@
                 var idx = +preset.dataset.cvPreset;
                 chartVarRows[idx].value = preset.dataset.cvPval;
                 renderChartVars();
-                renderVariables();
+                renderMissingVarsOnly();
                 syncDirty();
             }
         });
@@ -1402,7 +1423,7 @@
             updateAc(e.target, idx);
             syncDirty();
             renderChartVars();
-            renderVariables();
+            renderMissingVarsOnly();
         } else if (e.target.dataset.qLegend != null) {
             queryRows[+e.target.dataset.qLegend].legend = e.target.value;
             syncDirty();
@@ -1545,9 +1566,11 @@
         });
     }
 
-    // Keyboard shortcuts (Ctrl+Enter = preview, Ctrl+S = save)
-    elStudio.addEventListener('keydown', function (e) {
+    // Keyboard shortcuts (Ctrl+Enter = preview, Ctrl+S = save) — работают со всей страницы
+    document.addEventListener('keydown', function (e) {
+        if (document.querySelector('.modal.show')) { return; }
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            if (!promConfigured) { return; }
             e.preventDefault();
             runPreview();
         } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {

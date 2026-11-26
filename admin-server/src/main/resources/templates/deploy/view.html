@@ -25,36 +25,60 @@
                     <ul class="list-group list-group-flush">
                         <li class="list-group-item text-muted" th:if="${d.steps.isEmpty()}">Шаги ещё не начались…</li>
                         <li class="list-group-item" th:each="s : ${d.steps}">
-                            <span th:class="'step-' + ${s.status}">
-                                <span th:switch="${s.status}">
-                                    <span th:case="'OK'">✔</span><span th:case="'FAILED'">✖</span>
-                                    <span th:case="'SKIPPED'">–</span><span th:case="*">…</span>
+                            <span class="d-inline-flex align-items-center gap-2" th:classappend="'step-' + ${s.status}">
+                                <span th:switch="${s.status}" class="flex-shrink-0">
+                                    <i th:case="'OK'" class="bi bi-check-circle-fill"></i>
+                                    <i th:case="'FAILED'" class="bi bi-x-circle-fill"></i>
+                                    <i th:case="'SKIPPED'" class="bi bi-dash-circle"></i>
+                                    <span th:case="'RUNNING'" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                    <i th:case="*" class="bi bi-circle"></i>
                                 </span>
                                 <span th:text="${s.n} + '. ' + ${s.name}"></span>
                             </span>
-                            <div class="small text-muted" th:if="${s.message}" th:text="${s.message}"></div>
+                            <div class="small text-muted ms-4" th:if="${s.message}" th:text="${s.message}"></div>
                         </li>
                     </ul>
                 </div>
 
                 <div class="card border-warning" th:if="${d.status.name() == 'WAITING_HOST_KEY'}">
-                    <div class="card-header bg-warning-subtle">Подтвердите ключ хоста</div>
+                    <div class="card-header bg-warning-subtle"><i class="bi bi-shield-exclamation me-1"></i>Подтвердите ключ хоста</div>
                     <div class="card-body">
-                        <p>Хост <strong th:text="${d.hostKeyHost} + ':' + ${d.hostKeyPort}"></strong> подключается впервые.
-                            Сверьте fingerprint с тем, что показывает сам хост (<code>ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub</code>).</p>
-                        <dl class="mb-3">
+                        <p class="small">Хост <strong th:text="${d.hostKeyHost} + ':' + ${d.hostKeyPort}"></strong> подключается впервые.
+                            Сверьте fingerprint с тем, что показывает сам хост:</p>
+                        <div class="d-flex align-items-center gap-2 mb-3">
+                            <code class="flex-grow-1 small">ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub</code>
+                            <button type="button" class="btn btn-sm btn-outline-secondary k6-copy-btn"
+                                    data-copy="ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub" title="Копировать команду" aria-label="Копировать команду"><i class="bi bi-clipboard"></i></button>
+                        </div>
+                        <dl class="mb-3 small">
                             <dt>Тип ключа</dt><dd th:text="${d.hostKeyType}"></dd>
-                            <dt>Fingerprint (SHA256)</dt><dd><code th:text="${d.hostKeyFingerprint}"></code></dd>
+                            <dt>Fingerprint (SHA256)</dt>
+                            <dd class="d-flex align-items-center gap-2 flex-wrap">
+                                <code class="text-break" th:text="${d.hostKeyFingerprint}"></code>
+                                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 k6-copy-btn"
+                                        th:attr="data-copy=${d.hostKeyFingerprint}" title="Копировать fingerprint" aria-label="Копировать fingerprint"><i class="bi bi-clipboard"></i></button>
+                            </dd>
                         </dl>
                         <form sec:authorize="hasRole('ADMIN')" th:action="@{/deployments/{id}/confirm-host-key(id=${d.id})}" method="post">
-                            <button class="btn btn-warning">Доверять и продолжить</button>
+                            <button class="btn btn-warning"><i class="bi bi-shield-check me-1"></i>Доверять и продолжить</button>
                         </form>
                     </div>
                 </div>
             </div>
         </div>
         <div class="col-lg-8">
-            <pre id="deploy-log" class="log-view" th:attr="data-stream=@{/deployments/{id}/stream(id=${d.id})}"></pre>
+            <div class="card">
+                <div class="card-header py-2 d-flex align-items-center gap-2 flex-wrap">
+                    <span class="small fw-semibold"><i class="bi bi-terminal me-1 text-primary"></i>Журнал операции</span>
+                    <span id="deploy-sse-badge" class="badge text-bg-primary"
+                          th:if="${d.status.name() == 'RUNNING' or d.status.name() == 'WAITING_HOST_KEY'}">в реальном времени</span>
+                    <div class="ms-auto d-flex gap-1">
+                        <button type="button" id="deploy-log-down" class="btn btn-sm btn-outline-primary d-none"><i class="bi bi-arrow-down me-1"></i>Вниз</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary k6-copy-btn" data-copy-target="#deploy-log"><i class="bi bi-clipboard me-1"></i>Копировать</button>
+                    </div>
+                </div>
+                <pre id="deploy-log" class="log-view mb-0" style="border-radius:0 0 13px 13px;border:0" th:attr="data-stream=@{/deployments/{id}/stream(id=${d.id})}"></pre>
+            </div>
         </div>
     </div>
 </th:block>

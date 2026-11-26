@@ -4,13 +4,17 @@
 <div th:fragment="results" id="results-panel">
     <div class="alert alert-secondary" th:if="${!terminal}">Итоги по ступеням рассчитываются после завершения run.</div>
     <div th:if="${terminal}">
-        <div class="d-flex flex-wrap gap-2 mb-3">
-            <form th:action="@{/runs/{id}/results/recompute(id=${run.id})}" method="post"><button class="btn btn-sm btn-outline-secondary">Пересчитать итоги</button></form>
-            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.html(id=${run.id})}" target="_blank">HTML-отчёт</a>
-            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.html(id=${run.id},download=true)}">Скачать HTML</a>
-            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.pdf(id=${run.id})}">PDF</a>
-            <a class="btn btn-sm btn-outline-primary rep-link" th:href="@{/runs/{id}/report.docx(id=${run.id})}">Word (docx)</a>
-            <select class="form-select form-select-sm" style="width:auto" id="rep-time" title="Ось времени на графиках отчёта" aria-label="Ось времени на графиках"
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <form th:action="@{/runs/{id}/results/recompute(id=${run.id})}" method="post" class="m-0">
+                <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise me-1"></i>Пересчитать итоги</button>
+            </form>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Отчёты">
+                <a class="btn btn-outline-primary rep-link" th:href="@{/runs/{id}/report.html(id=${run.id})}" target="_blank" rel="noopener"><i class="bi bi-filetype-html me-1"></i>HTML-отчёт</a>
+                <a class="btn btn-outline-primary rep-link" th:href="@{/runs/{id}/report.html(id=${run.id},download=true)}"><i class="bi bi-download me-1"></i>Скачать HTML</a>
+                <a class="btn btn-outline-primary rep-link" th:href="@{/runs/{id}/report.pdf(id=${run.id})}"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</a>
+                <a class="btn btn-outline-primary rep-link" th:href="@{/runs/{id}/report.docx(id=${run.id})}"><i class="bi bi-file-earmark-word me-1"></i>Word (docx)</a>
+            </div>
+            <select class="form-select form-select-sm ms-sm-auto" style="width:auto" id="rep-time" title="Ось времени на графиках отчёта" aria-label="Ось времени на графиках"
                     onchange="document.querySelectorAll('.rep-link').forEach(function (a) { var u = new URL(a.getAttribute('data-base') || a.getAttribute('href'), location.origin); a.setAttribute('data-base', a.getAttribute('data-base') || a.getAttribute('href')); if (this.value) { u.searchParams.set('time', this.value); } a.setAttribute('href', u.pathname + u.search); }, this)">
                 <option value="">Время: по настройкам</option>
                 <option value="rel">Время: от начала теста</option>
@@ -22,16 +26,20 @@
             <div class="alert alert-danger" th:if="${!data.prometheusOk}" th:text="${data.error}"></div>
 
             <div class="card mb-3"><div class="card-body">
-                <h5 class="card-title">Вывод инженера</h5>
+                <h5 class="card-title mt-0 mb-2">Вывод инженера</h5>
                 <form th:action="@{/runs/{id}/conclusion(id=${run.id})}" method="post" class="row g-2">
-                    <div class="col-md-4"><select class="form-select" name="conclusion">
-                        <option value="" th:selected="${run.conclusion == null}">— не указан —</option>
-                        <option th:each="o : ${conclusions}"
-                                th:value="${o}" th:text="${o}" th:selected="${o == run.conclusion}"></option>
-                        <option th:if="${run.conclusion != null and !conclusions.contains(run.conclusion)}"
-                                th:value="${run.conclusion}" th:text="${run.conclusion}" selected></option></select></div>
-                    <div class="col-md-8"><textarea class="form-control" name="comment" rows="2" placeholder="Комментарий" th:text="${run.conclusionComment}"></textarea></div>
-                    <div class="col-12"><button class="btn btn-primary btn-sm">Сохранить</button></div>
+                    <div class="col-md-4">
+                        <label class="form-label small mb-1" for="res-conclusion">Итоговая оценка</label>
+                        <select class="form-select form-select-sm" id="res-conclusion" name="conclusion">
+                            <option value="" th:selected="${run.conclusion == null}">— не указан —</option>
+                            <option th:each="o : ${conclusions}"
+                                    th:value="${o}" th:text="${o}" th:selected="${o == run.conclusion}"></option>
+                            <option th:if="${run.conclusion != null and !conclusions.contains(run.conclusion)}"
+                                    th:value="${run.conclusion}" th:text="${run.conclusion}" selected></option></select></div>
+                    <div class="col-md-8">
+                        <label class="form-label small mb-1" for="res-comment">Комментарий</label>
+                        <textarea class="form-control form-control-sm" id="res-comment" name="comment" rows="2" placeholder="Наблюдения, узкие места, ссылка на задачу…" th:text="${run.conclusionComment}"></textarea></div>
+                    <div class="col-12"><button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Сохранить</button></div>
                 </form>
             </div></div>
 
@@ -40,12 +48,12 @@
             <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
 
             <h5 class="mt-4">Генераторы (справочно)</h5>
-            <div class="small text-muted mb-1">Накопленные за весь тест значения k6; для оценки SLA не используются.</div>
-            <table class="table table-sm">
-                <thead><tr><th>Генератор</th><th>Статус</th><th>Код k6</th><th>CPU макс., %</th><th>Итераций</th><th>Dropped</th><th>HTTP-запросов</th></tr></thead>
-                <tbody><tr th:each="g : ${data.generators}"><td th:text="${g.generator}"></td><td th:text="${g.status}"></td><td th:text="${g.exitCode} ?: '—'"></td>
-                    <td th:text="${fmt.n(g.cpuMax, 0)}"></td><td th:text="${fmt.n(g.iterations, 0)}"></td><td th:text="${fmt.n(g.dropped, 0)}"></td><td th:text="${fmt.n(g.httpReqs, 0)}"></td></tr></tbody>
-            </table>
+            <div class="small text-muted mb-2">Накопленные за весь тест значения k6; для оценки SLA не используются.</div>
+            <div class="card"><div class="table-responsive"><table class="table table-sm mb-0">
+                <thead><tr><th>Генератор</th><th>Статус</th><th>Код k6</th><th class="text-end">CPU макс., %</th><th class="text-end">Итераций</th><th class="text-end">Dropped</th><th class="text-end">HTTP-запросов</th></tr></thead>
+                <tbody><tr th:each="g : ${data.generators}"><td class="fw-semibold" th:text="${g.generator}"></td><td th:text="${g.status}"></td><td th:text="${g.exitCode} ?: '—'"></td>
+                    <td class="num" th:text="${fmt.n(g.cpuMax, 0)}"></td><td class="num" th:text="${fmt.n(g.iterations, 0)}"></td><td class="num" th:text="${fmt.n(g.dropped, 0)}"></td><td class="num" th:text="${fmt.n(g.httpReqs, 0)}"></td></tr></tbody>
+            </table></div></div>
         </div>
     </div>
 </div>

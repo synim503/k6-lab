@@ -4,26 +4,36 @@
 <div id="run-status" th:fragment="status" th:attr="data-run-status=${run.status}">
     <div class="run-summary">
         <div class="d-flex flex-wrap align-items-center gap-2">
+            <span class="dot dot-busy" th:if="${v.live}"></span>
             <span class="badge fs-6" th:text="${fmt.runStatus(run.status.name())}" th:classappend="${fmt.runBadge(run.status.name(), run.thresholdsFailed)}"></span>
             <span class="badge text-bg-warning fs-6" th:if="${run.degraded}" title="Во время теста пропадала связь с генератором">Были потери связи</span>
             <span class="badge text-bg-warning fs-6" th:if="${run.thresholdsFailed}" title="k6 завершился кодом 99: пороги не выполнены. Это не авария, нагрузка отработала.">Пороги k6 не выполнены</span>
-            <span class="text-muted ms-1" th:if="${v.live}" th:text="${v.initializing} ? 'Инициализация скрипта' : (${v.currentStep != null} ? 'Идёт нагрузка' : 'Подготовка к старту')"></span>
+            <span class="text-muted ms-1" th:if="${v.live}" th:text="${v.initializing} ? 'Инициализация скрипта' : (${v.currentStep != null} ? ${v.currentPhase} : 'Подготовка к старту')"></span>
         </div>
         <div class="run-clock" th:if="${(v.live or run.status.name() == 'FINISHED') and !v.initializing}">
             <span class="fw-semibold" th:text="${#numbers.formatInteger(v.elapsedSec / 60, 1)} + ':' + ${#numbers.formatInteger(v.elapsedSec % 60, 2)}"></span>
-            <span class="text-muted" th:if="${v.live and v.totalSec > 0}" th:text="' из ' + ${#numbers.formatInteger(v.totalSec / 60, 1)} + ':' + ${#numbers.formatInteger(v.totalSec % 60, 2)}"></span>
+            <span class="text-muted" th:if="${v.live and v.totalSec > 0}" th:text="' из ' + ${#numbers.formatInteger(v.totalSec / 60, 1)} + ':' + ${#numbers.formatInteger(v.totalSec % 60, 2)} + ' (' + ${v.progressPct} + '%)'"></span>
         </div>
         <div class="d-flex gap-2 ms-auto flex-wrap" th:if="${v.canStop}" sec:authorize="isAuthenticated()">
             <form th:action="@{/runs/{id}/stop(id=${run.id})}" method="post"
-                  data-confirm="Остановить запуск? k6 корректно завершит текущие итерации.">
+                  data-confirm="Остановить запуск? k6 корректно завершит текущие итерации."
+                  data-confirm-title="Остановить запуск?"
+                  data-confirm-ok="Остановить"
+                  data-confirm-variant="warning">
                 <button class="btn btn-warning" th:disabled="${run.status.name() == 'STOPPING'}" title="Мягкая остановка: текущие итерации дорабатывают"><i class="bi bi-stop-fill me-1"></i>Остановить</button></form>
             <form th:action="@{/runs/{id}/abort(id=${run.id})}" method="post"
-                  data-confirm="Принудительное прерывание убьёт k6 на всех генераторах, метрики последних секунд могут потеряться. Продолжить?">
+                  data-confirm="Принудительное прерывание убьёт k6 на всех генераторах, метрики последних секунд могут потеряться. Продолжить?"
+                  data-confirm-title="Принудительно прервать запуск?"
+                  data-confirm-ok="Прервать"
+                  data-confirm-variant="danger">
                 <button class="btn btn-outline-danger" title="Немедленно убить k6 на всех генераторах"><i class="bi bi-x-octagon me-1"></i>Прервать принудительно</button></form>
         </div>
     </div>
     <div class="progress mb-3" style="height: 8px" th:if="${run.status.name() == 'RUNNING' or run.status.name() == 'STOPPING' or run.status.name() == 'FINISHED'}">
-        <div class="progress-bar" role="progressbar" th:style="'width:' + ${v.progressPct} + '%'"></div></div>
+        <div class="progress-bar" role="progressbar"
+             th:classappend="${run.status.name() == 'RUNNING' or run.status.name() == 'STOPPING'} ? 'progress-bar-striped progress-bar-animated'"
+             th:attr="aria-valuenow=${v.progressPct}" aria-valuemin="0" aria-valuemax="100"
+             th:style="'width:' + ${v.progressPct} + '%'"></div></div>
     <div class="small text-muted mb-2" th:if="${!v.initializing and run.initSec != null and run.initSec >= 15}"
          th:text="'Инициализация скрипта заняла ' + ${run.initSec} + ' с: шкала запуска, прогрев и окна итогов отсчитываются от реального начала нагрузки.'"></div>
     <div class="alert alert-danger" th:if="${run.error}" th:text="${run.error}"></div>

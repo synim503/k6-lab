@@ -12,9 +12,19 @@
         </div>
     </div>
 
-    <div class="d-flex align-items-center gap-3 mb-3 flex-wrap" th:if="${!scripts.isEmpty()}">
-        <input class="form-control list-filter" id="script-filter" type="search" placeholder="Найти скрипт" aria-label="Найти скрипт">
-        <span class="text-muted small" id="script-count" th:text="${scripts.size()} + ' ' + (${scripts.size() == 1} ? 'скрипт' : 'скриптов')"></span>
+    <div class="gen-toolbar" th:if="${!scripts.isEmpty()}">
+        <div class="status-chips" id="script-chips" role="group" aria-label="Фильтр по состоянию">
+            <button type="button" class="chip-btn on" data-sc-chip="">Все <b th:text="${scripts.size()}"></b></button>
+            <button type="button" class="chip-btn" data-sc-chip="running"><span class="badge text-bg-primary">Выполняется</span></button>
+            <button type="button" class="chip-btn" data-sc-chip="ready"><span class="badge text-bg-success">Готов</span></button>
+            <button type="button" class="chip-btn" data-sc-chip="needs-load"><span class="badge text-bg-warning">Без нагрузки</span></button>
+        </div>
+        <div class="d-flex align-items-center gap-2 ms-auto flex-wrap">
+            <input class="form-control form-control-sm" id="script-filter" type="search" placeholder="Найти скрипт по имени или описанию" aria-label="Найти скрипт" style="min-width:220px;max-width:320px">
+            <span class="text-muted small" id="script-count"
+                  th:with="n=${scripts.size()},m10=${n % 10},m100=${n % 100}"
+                  th:text="${n} + ' ' + (${m10 == 1 and m100 != 11} ? 'скрипт' : (${m10 >= 2 and m10 <= 4 and (m100 < 12 or m100 > 14)} ? 'скрипта' : 'скриптов'))"></span>
+        </div>
     </div>
 
     <div class="card">
@@ -26,9 +36,13 @@
         <div class="table-responsive" th:unless="${scripts.isEmpty()}"><table class="table table-hover align-middle mb-0" id="scripts-table">
             <thead><tr><th>Скрипт</th><th>Версия</th><th class="text-end">Операций</th><th>Состояние</th><th>Обновлён</th><th></th></tr></thead>
             <tbody>
-            <tr th:each="s : ${scripts}" th:with="v=${latest.get(s.id)},pCnt=${profileCounts.getOrDefault(s.id, 0)},ready=${loadDefined.get(s.id) or pCnt > 0}" class="run-row" th:attr="data-href=@{/scripts/{id}(id=${s.id})}" th:data-name="${#strings.toLowerCase(s.name)}">
+            <tr id="scripts-no-match" class="d-none"><td colspan="6"><div class="empty-state py-4"><i class="bi bi-search"></i>По фильтру скрипты не найдены</div></td></tr>
+            <tr th:each="s : ${scripts}"
+                th:with="v=${latest.get(s.id)},pCnt=${profileCounts.getOrDefault(s.id, 0)},ready=${loadDefined.get(s.id) or pCnt > 0},stKey=${runningIds.contains(s.id) ? 'running' : (ready ? 'ready' : 'needs-load')}"
+                class="run-row"
+                th:attr="data-href=@{/scripts/{id}(id=${s.id})},data-search=${#strings.toLowerCase(s.name + ' ' + (s.description ?: ''))},data-state=${stKey}">
                 <td><a class="fw-semibold" th:href="@{/scripts/{id}(id=${s.id})}" th:text="${s.name}"></a>
-                    <div class="small text-muted text-truncate" style="max-width:420px" th:if="${s.description != null and !s.description.isBlank()}" th:text="${s.description}"></div></td>
+                    <div class="small text-muted text-truncate" style="max-width:420px" th:if="${s.description != null and !s.description.isBlank()}" th:text="${s.description}" th:title="${s.description}"></div></td>
                 <td class="text-nowrap"><span th:text="${v != '' ? 'v' + v.number : '—'}"></span>
                     <span class="text-muted small ms-1" th:if="${v != ''}" th:text="${v.sourceLabel()}"></span></td>
                 <td class="num" th:text="${v != '' ? v.operations.size() : '—'}"></td>
@@ -53,16 +67,32 @@
 <th:block layout:fragment="scripts">
     <script th:inline="none">
         (function () {
-            var rows = [].slice.call(document.querySelectorAll('#scripts-table tbody tr'));
-            rows.forEach(function (r) {
-                r.addEventListener('click', function (e) { if (!e.target.closest('a,button,form')) location.href = r.dataset.href; });
-            });
-            var f = document.getElementById('script-filter'), cnt = document.getElementById('script-count');
-            if (!f) return;
-            f.addEventListener('input', function () {
+            var rows = [].slice.call(document.querySelectorAll('#scripts-table tbody tr[data-state]'));
+            var f = document.getElementById('script-filter'), cnt = document.getElementById('script-count'),
+                noMatch = document.getElementById('scripts-no-match');
+            if (!f || !rows.length) { return; }
+            var state = '';
+            function plural(n) {
+                var m10 = n % 10, m100 = n % 100;
+                return (m10 === 1 && m100 !== 11) ? 'скрипт' : (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'скрипта' : 'скриптов');
+            }
+            function apply() {
                 var q = f.value.trim().toLowerCase(), shown = 0;
-                rows.forEach(function (r) { var ok = !q || r.dataset.name.indexOf(q) >= 0; r.classList.toggle('d-none', !ok); if (ok) shown++; });
-                cnt.textContent = q ? 'Найдено: ' + shown : rows.length + ' ' + (rows.length === 1 ? 'скрипт' : 'скриптов');
+                rows.forEach(function (r) {
+                    var ok = (!state || r.dataset.state === state) && (!q || (r.dataset.search || '').indexOf(q) >= 0);
+                    r.classList.toggle('d-none', !ok);
+                    if (ok) { shown++; }
+                });
+                if (noMatch) { noMatch.classList.toggle('d-none', shown > 0); }
+                cnt.textContent = (q || state) ? ('Показано ' + shown + ' из ' + rows.length) : (rows.length + ' ' + plural(rows.length));
+            }
+            f.addEventListener('input', apply);
+            document.querySelectorAll('#script-chips [data-sc-chip]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    state = btn.dataset.scChip || '';
+                    document.querySelectorAll('#script-chips [data-sc-chip]').forEach(function (b) { b.classList.toggle('on', b === btn); });
+                    apply();
+                });
             });
         })();
     </script>

@@ -15,7 +15,7 @@
         <form class="row g-3 align-items-end" th:action="@{/users}" method="post" autocomplete="off">
             <div class="col-md-3"><label class="form-label" for="u-login">Логин</label><input class="form-control" id="u-login" name="username" required></div>
             <div class="col-md-3"><label class="form-label" for="u-pass">Пароль</label>
-                <input class="form-control" id="u-pass" type="password" name="password" placeholder="от 8 символов" required autocomplete="new-password"></div>
+                <input class="form-control" id="u-pass" type="password" name="password" minlength="8" placeholder="от 8 символов" required autocomplete="new-password"></div>
             <div class="col-md-3"><label class="form-label" for="u-role">Роль</label>
                 <select class="form-select" id="u-role" name="role"><option th:each="r : ${roles}" th:value="${r}" th:text="${r.name() == 'ADMIN'} ? 'Администратор' : 'Пользователь'"></option></select></div>
             <div class="col-md-3"><button class="btn btn-primary w-100"><i class="bi bi-person-plus me-1"></i>Создать</button></div>
@@ -25,8 +25,10 @@
     <div class="card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
         <thead><tr><th>Логин</th><th>Роль и доступ</th><th>Новый пароль</th><th></th></tr></thead>
         <tbody>
-        <tr th:each="u : ${users}">
-            <td class="fw-semibold" th:text="${u.username}"></td>
+        <tr th:each="u : ${users}" th:classappend="${!u.enabled} ? 'opacity-75'">
+            <td class="fw-semibold"><span th:text="${u.username}"></span>
+                <span class="badge text-bg-primary ms-1" th:if="${#authentication != null and #authentication.name == u.username}">вы</span>
+                <span class="badge text-bg-secondary ms-1" th:if="${!u.enabled}">отключён</span></td>
             <td>
                 <form class="d-flex gap-3 align-items-center flex-wrap" th:action="@{/users/{id}(id=${u.id})}" method="post">
                     <select class="form-select form-select-sm w-auto" name="role" aria-label="Роль">
@@ -36,7 +38,7 @@
                     <button class="btn btn-sm btn-outline-primary">Сохранить</button>
                 </form></td>
             <td><form class="d-flex gap-2" th:action="@{/users/{id}/password(id=${u.id})}" method="post" autocomplete="off">
-                <input class="form-control form-control-sm" style="max-width:200px" type="password" name="password" placeholder="новый пароль" aria-label="Новый пароль" autocomplete="new-password">
+                <input class="form-control form-control-sm" style="max-width:200px" type="password" name="password" minlength="8" required placeholder="от 8 символов" aria-label="Новый пароль" autocomplete="new-password">
                 <button class="btn btn-sm btn-outline-secondary">Сменить</button></form></td>
             <td class="text-end"><form th:action="@{/users/{id}/delete(id=${u.id})}" method="post" data-confirm="Удалить пользователя?">
                 <button class="btn btn-sm btn-outline-danger btn-icon" title="Удалить" aria-label="Удалить"><i class="bi bi-trash"></i></button></form></td>

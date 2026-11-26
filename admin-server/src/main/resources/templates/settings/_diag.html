@@ -6,7 +6,7 @@
     <div th:if="${diagRunning}">
         <div class="spinner-border spinner-border-sm me-2"></div>Выполняется…
         <ul class="list-unstyled mt-2 mb-0 small">
-            <li th:each="s : ${diagProgress}"><span th:class="${s.ok} ? 'text-success' : 'text-danger'" th:text="${s.ok} ? '✔' : '✘'"></span>
+            <li th:each="s : ${diagProgress}" class="mb-1"><i class="bi me-1" th:classappend="${s.ok} ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger'"></i>
                 <b th:text="${s.name}"></b> — <span th:text="${s.detail}"></span></li>
         </ul>
     </div>
@@ -18,7 +18,7 @@
             <span class="small text-muted" th:text="'(' + ${#temporals.format(diagLast.at, 'dd.MM.yyyy HH:mm:ss')} + ', генератор ' + ${diagLast.generator} + ')'"></span>
         </div>
         <ul class="list-unstyled mb-0 small">
-            <li th:each="s : ${diagLast.steps}"><span th:class="${s.ok} ? 'text-success' : 'text-danger'" th:text="${s.ok} ? '✔' : '✘'"></span>
+            <li th:each="s : ${diagLast.steps}" class="mb-1"><i class="bi me-1" th:classappend="${s.ok} ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger'"></i>
                 <b th:text="${s.name}"></b> — <span th:text="${s.detail}"></span></li>
         </ul>
     </div>

@@ -68,6 +68,15 @@
                     <td class="num" th:text="${o.ratePerSec > 0} ? ${#numbers.formatDecimal(o.ratePerSec, 1, 2)} : '—'"></td>
                     <td class="text-nowrap" th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaThresholdMs, 1, 0)} + ' мс'"></td>
                     <td class="num" th:text="${#numbers.formatDecimal(o.maxErrorPct, 1, 2)}"></td></tr></tbody></table></div>
+            <div class="card-footer bg-transparent py-2" th:if="${loadDefined and !profiles.isEmpty()}">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <span class="small text-muted fw-semibold">Сохранённые профили:</span>
+                    <div class="d-inline-flex align-items-center gap-1 border rounded-pill px-2 py-1 bg-white" th:each="p : ${profiles}">
+                        <a class="fw-semibold small" th:href="@{/scripts/{id}/load(id=${script.id},profile=${p.id})}" th:text="${p.name}"></a>
+                        <a class="btn btn-sm btn-outline-success py-0 px-1 ms-1" th:href="@{/scripts/{id}/run(id=${script.id},profile=${p.id})}" title="Запустить с этим профилем" aria-label="Запустить профиль"><i class="bi bi-play-fill"></i></a>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="sect-title flex-wrap gap-2" id="runs">
@@ -107,16 +116,18 @@
                     </td>
                     <td class="text-nowrap"><span class="badge" th:classappend="${r.status.name() == 'FINISHED'} ? 'text-bg-success' : (${r.status.name() == 'FAILED' or r.status.name() == 'ABORTED'} ? 'text-bg-danger' : 'text-bg-primary')" th:text="${fmt.runStatus(r.status.name())}"></span></td>
                     <td class="text-muted small text-nowrap" th:text="${#temporals.format(r.queuedAt, 'dd.MM.yyyy HH:mm')}"></td>
-                    <td class="text-nowrap small" th:text="${r.startedAt != null and r.finishedAt != null} ? ${T(java.time.Duration).between(r.startedAt, r.finishedAt).toMinutes()} + ' мин' : '—'"></td>
+                    <td class="text-nowrap small"
+                        th:with="durSec=${r.startedAt != null and r.finishedAt != null ? T(java.time.Duration).between(r.startedAt, r.finishedAt).getSeconds() : -1}"
+                        th:text="${durSec < 0} ? '—' : (${durSec < 60} ? ${durSec} + ' с' : (${durSec / 60} + ' мин' + (${durSec % 60 > 0} ? ' ' + ${durSec % 60} + ' с' : '')))"></td>
                     <td class="small" th:text="${r.conclusion} ?: '—'"></td>
                     <td class="text-end text-nowrap">
                         <div class="btn-group btn-group-sm">
                             <form th:action="@{/runs/{id}/requeue(id=${r.id},position='back')}" method="post" class="d-inline m-0">
-                                <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Добавить прогон в конец очереди">
+                                <button type="submit" class="btn btn-sm btn-outline-primary py-0 px-2" title="Добавить прогон в конец очереди" aria-label="Добавить в конец очереди">
                                     <i class="bi bi-arrow-repeat"></i>
                                 </button>
                             </form>
-                            <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split py-0 px-1" data-bs-toggle="dropdown" aria-expanded="false" title="Позиция в очереди">
+                            <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split py-0 px-1" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="Позиция в очереди">
                                 <span class="visually-hidden">Позиция</span>
                             </button>
                             <ul class="dropdown-menu dropdown-menu-end">
@@ -174,7 +185,7 @@
         <div class="row g-3">
             <div class="col-lg-8">
                 <div class="card"><div class="table-responsive"><table class="table table-sm table-hover mb-0">
-                    <thead><tr><th>Версия</th><th>Источник</th><th>Комментарий</th><th class="text-end">Операций</th><th>Создана</th></tr></thead>
+                    <thead><tr><th>Версия</th><th>Источник</th><th>Комментарий</th><th class="text-end">Операций</th><th>Создана</th><th></th></tr></thead>
                     <tbody>
                     <tr th:each="v, st : ${versions}">
                         <td class="text-nowrap"><a class="fw-semibold" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}" th:text="'v' + ${v.number}"></a>
@@ -185,6 +196,10 @@
                         <td class="small" th:text="${v.comment}"></td>
                         <td class="num" th:text="${v.operations.size()}"></td>
                         <td class="small text-muted text-nowrap" th:text="${#temporals.format(v.createdAt, 'dd.MM.yyyy HH:mm')} + ' · ' + ${v.createdBy}"></td>
+                        <td class="text-end text-nowrap">
+                            <a class="btn btn-sm btn-outline-secondary btn-icon" th:if="${!missingFiles.contains(v.id)}"
+                               th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" title="Открыть в редакторе" aria-label="Открыть в редакторе"><i class="bi bi-pencil-square"></i></a>
+                        </td>
                     </tr></tbody></table></div></div>
                 <p class="text-muted small mt-2 mb-0">Старую версию можно вернуть кнопкой «Откатить к этой» на её странице: из неё создаётся новая версия, история не теряется.</p>
             </div>
@@ -215,8 +230,9 @@
                         <div th:if="${gitRepo != null}" class="small mb-2">Репозиторий: <strong th:text="${gitRepo.name}"></strong>,
                             ветка: <strong th:text="${script.gitBranch} ?: '—'"></strong>, файл: <code th:text="${script.gitEntrypoint}"></code></div>
                         <div th:if="${script.gitBranch != null}" class="mb-3 d-flex gap-2 flex-wrap">
-                            <button class="btn btn-sm btn-outline-secondary" hx-get="" th:attr="hx-get=@{/scripts/{id}/git-check(id=${script.id})}"
-                                    hx-target="#git-check" hx-indicator="#git-check">Проверить обновления</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" hx-get="" th:attr="hx-get=@{/scripts/{id}/git-check(id=${script.id})}"
+                                    hx-target="#git-check">
+                                <span class="spinner-border spinner-border-sm k6-htmx-spin me-1" role="status" aria-hidden="true"></span>Проверить обновления</button>
                             <form th:action="@{/scripts/{id}/git-latest(id=${script.id})}" method="post">
                                 <button class="btn btn-sm btn-outline-primary">Взять последнюю</button></form>
                         </div>
@@ -262,7 +278,7 @@
         (function () {
             // вкладки «Обзор» / «Версии» без перезагрузки; адрес #versions открывает вторую вкладку
             var panes = {overview: document.getElementById('pane-overview'), versions: document.getElementById('pane-versions')};
-            var links = {overview: document.querySelector('.script-tabs a[href$="/scripts/' + location.pathname.split('/')[2] + '"]'),
+            var links = {overview: document.getElementById('tab-link-overview'),
                 versions: document.getElementById('tab-link-versions')};
             function show(name) {
                 Object.keys(panes).forEach(function (k) {
@@ -294,11 +310,6 @@
                 ['dragleave', 'drop'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove('drag'); }); });
                 dz.addEventListener('drop', function (e) { if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; input.dispatchEvent(new Event('change')); } });
             }
-
-            // строка запуска открывается целиком
-            document.querySelectorAll('tr.run-row').forEach(function (r) {
-                r.addEventListener('click', function (e) { if (!e.target.closest('a,button')) location.href = r.dataset.href; });
-            });
         })();
     </script>
 </th:block>

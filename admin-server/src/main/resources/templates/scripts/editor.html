@@ -8,22 +8,28 @@
 
     <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
         <h5 class="mb-0">Редактор: <code th:text="${path}"></code> <span class="text-muted fw-normal small">версия <span th:text="${v.number}"></span></span></h5>
-        <a class="btn btn-outline-secondary btn-sm" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}"><i class="bi bi-arrow-left me-1"></i>К версии</a>
+        <a class="btn btn-outline-secondary btn-sm edit-nav-guard" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}"><i class="bi bi-arrow-left me-1"></i>К версии</a>
     </div>
     <div class="mb-2 small text-muted">Файлы версии:
-        <a class="me-2" th:each="f : ${scriptFiles}" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
+        <a class="me-2 edit-nav-guard" th:each="f : ${scriptFiles}" th:href="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id},file=${f.path})}"
            th:text="${f.path}" th:classappend="${f.path == path} ? 'fw-bold'"></a></div>
     <div class="alert alert-info py-2 small">Сохранение создаёт <strong>новую версию</strong>: старая остаётся неизменной. Сценарии, пороги и теги из <code>options</code> при сохранении вырезаются, их задаёт админка.</div>
     <form id="edit-form" th:action="@{/scripts/{id}/versions/{vid}/edit(id=${script.id},vid=${v.id})}" method="post">
         <input type="hidden" name="file" th:value="${path}">
         <input type="hidden" name="content" id="content">
         <div class="alert alert-danger py-2 small d-none" id="edit-err"></div>
-        <div id="editor" style="height: 62vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden"
-             th:attr="data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${path})}"></div>
+        <div id="editor" class="position-relative" style="height: 62vh; border: 1px solid var(--k6-border); border-radius: 12px; overflow: hidden; background: #1e1e1e"
+             th:attr="data-file-url=@{/scripts/{id}/versions/{vid}/file(id=${script.id},vid=${v.id},path=${path})}">
+            <div id="edit-loading" class="d-flex align-items-center justify-content-center h-100 text-light gap-2 small">
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>Загрузка редактора…
+            </div>
+        </div>
         <div class="sticky-actions">
             <input class="form-control" style="max-width:420px" name="comment" placeholder="Что изменилось (необязательно)" aria-label="Комментарий к версии">
-            <button class="btn btn-primary" id="edit-save" type="submit" disabled><i class="bi bi-check-lg me-1"></i>Сохранить как новую версию</button>
-            <a class="btn btn-link" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}">Отмена</a>
+            <button class="btn btn-primary" id="edit-save" type="submit" disabled title="Ctrl+S"><i class="bi bi-check-lg me-1"></i>Сохранить как новую версию</button>
+            <a class="btn btn-outline-secondary edit-nav-guard" th:href="@{/scripts/{id}/versions/{vid}(id=${script.id},vid=${v.id})}">Отмена</a>
+            <span class="dirty-flag"><i class="bi bi-circle-fill" style="font-size:.5rem"></i>Есть несохранённые изменения</span>
+            <span class="cb-kbd-hint d-none d-md-inline"><kbd>Ctrl+S</kbd> сохранить</span>
         </div>
     </form>
 </th:block>
@@ -31,9 +37,54 @@
     <script th:src="@{/webjars/monaco-editor/min/vs/loader.js}"></script>
     <script>
         (function () {
+            var form = document.getElementById('edit-form');
             var box = document.getElementById('editor');
+            var loadingEl = document.getElementById('edit-loading');
             var saveBtn = document.getElementById('edit-save');
             var errBox = document.getElementById('edit-err');
+            var dirty = false;
+            var submitting = false;
+            var editor = null;
+            var initialText = '';
+
+            function setDirty(v) {
+                dirty = !!v;
+                if (form) { form.classList.toggle('is-dirty', dirty); }
+            }
+
+            function triggerSave() {
+                if (!editor || !saveBtn || saveBtn.disabled) { return; }
+                submitting = true;
+                document.getElementById('content').value = editor.getValue();
+                if (form.requestSubmit) { form.requestSubmit(saveBtn); } else { form.submit(); }
+            }
+
+            window.addEventListener('beforeunload', function (e) {
+                if (dirty && !submitting) { e.preventDefault(); e.returnValue = ''; }
+            });
+
+            document.querySelectorAll('a.edit-nav-guard').forEach(function (a) {
+                a.addEventListener('click', function (e) {
+                    if (!dirty || submitting) { return; }
+                    e.preventDefault();
+                    window.k6Confirm({
+                        title: 'Несохранённые изменения',
+                        message: 'В файле есть несохранённые правки. Перейти без сохранения?',
+                        confirmText: 'Перейти',
+                        variant: 'warning'
+                    }).then(function (ok) {
+                        if (ok) { submitting = true; location.href = a.href; }
+                    });
+                });
+            });
+
+            document.addEventListener('keydown', function (e) {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault();
+                    triggerSave();
+                }
+            });
+
             var base = location.origin + '/webjars/monaco-editor/min/vs';
             require.config({paths: {vs: base}});
             window.MonacoEnvironment = {
@@ -53,8 +104,14 @@
                     if (!r.ok) { throw new Error('HTTP ' + r.status); }
                     return r.json();
                 }).then(function (data) {
-                    var editor = monaco.editor.create(box, {value: data.content || '', language: lang, automaticLayout: true,
+                    if (loadingEl) { loadingEl.remove(); }
+                    initialText = data.content || '';
+                    editor = monaco.editor.create(box, {value: initialText, language: lang, automaticLayout: true,
                         minimap: {enabled: false}, theme: 'vs-dark', tabSize: 2});
+                    editor.onDidChangeModelContent(function () {
+                        setDirty(editor.getValue() !== initialText);
+                    });
+                    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, triggerSave);
                     var ts = monaco.languages.typescript;
                     ts.javascriptDefaults.setCompilerOptions({allowJs: true, checkJs: false, allowNonTsExtensions: true,
                         target: ts.ScriptTarget.ES2020, moduleResolution: ts.ModuleResolutionKind.NodeJs,
@@ -64,11 +121,13 @@
                             .then(function (t) { if (t) { ts.javascriptDefaults.addExtraLib(t, 'file:///node_modules/@types/k6/' + f); } })
                             .catch(function () { /* редактор работает и без подсказок k6 */ });
                     });
-                    document.getElementById('edit-form').addEventListener('submit', function () {
+                    form.addEventListener('submit', function () {
+                        submitting = true;
                         document.getElementById('content').value = editor.getValue();
                     });
                     if (saveBtn) { saveBtn.disabled = false; }
                 }).catch(function (e) {
+                    if (loadingEl) { loadingEl.remove(); }
                     if (errBox) {
                         errBox.textContent = 'Не удалось загрузить файл в редактор: ' + (e && e.message ? e.message : e);
                         errBox.classList.remove('d-none');

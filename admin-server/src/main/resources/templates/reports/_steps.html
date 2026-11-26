@@ -32,7 +32,7 @@
             <tbody>
             <tr th:each="s : ${data.steps}" th:classappend="${s.status == 'FAILED' or s.status == 'UNRELIABLE'} ? 'row-bad' : (${max.confirmedStep != null and max.confirmedStep.stepNo == s.stepNo} ? 'row-max' : '')">
                 <td>
-                    <span th:text="'Ступень ' + ${s.stepNo}"></span>
+                    <a th:href="'#step-' + ${s.stepNo}" th:text="'Ступень ' + ${s.stepNo}"></a>
                     <span class="pill ok" th:if="${max.confirmedStep != null and max.confirmedStep.stepNo == s.stepNo}">макс.</span>
                 </td>
                 <td class="num" th:text="${#numbers.formatDecimal(s.levelPct, 1, 1)} + '%'"></td>
@@ -49,7 +49,7 @@
     </div>
     </th:block>
 
-    <div th:each="s : ${data.steps}" class="step-block">
+    <div th:each="s : ${data.steps}" class="step-block" th:id="'step-' + ${s.stepNo}">
         <h4 class="step-h">
             Ступень <span th:text="${s.stepNo}"></span> — <span th:text="${#numbers.formatDecimal(s.levelPct, 1, 1)}"></span>% от модели
             <span class="pill" th:classappend="${fmt.css(s.status)}" th:text="${fmt.status(s.status)}"></span>
@@ -68,9 +68,9 @@
                 <td class="num" th:text="${fmt.n(o.actualRate, 2)}"></td>
                 <td class="num" th:text="${fmt.n(o.deviationPct, 1)}"></td>
                 <td class="num" th:text="${fmt.n(o.p50, 0)}"></td>
-                <td class="num" th:text="${fmt.n(o.p90, 0)}"></td>
-                <td class="num" th:text="${fmt.n(o.p95, 0)}"></td>
-                <td class="num" th:text="${fmt.n(o.p99, 0)}"></td>
+                <td class="num" th:classappend="${o.slaPercentile == 90} ? 'col-sla'" th:text="${fmt.n(o.p90, 0)}"></td>
+                <td class="num" th:classappend="${o.slaPercentile == 95} ? 'col-sla'" th:text="${fmt.n(o.p95, 0)}"></td>
+                <td class="num" th:classappend="${o.slaPercentile == 99} ? 'col-sla'" th:text="${fmt.n(o.p99, 0)}"></td>
                 <td class="num" th:text="'p' + ${o.slaPercentile} + ' ≤ ' + ${#numbers.formatDecimal(o.slaMs, 1, 0)}"></td>
                 <td class="num" th:text="${fmt.n(o.errorPct, 2)} + ' / ' + ${#numbers.formatDecimal(o.maxErrorPct, 1, 2)}"></td>
                 <td class="num" th:text="${fmt.n(o.dropped, 0)}"></td>
