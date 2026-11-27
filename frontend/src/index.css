@@ -1,11 +1,211 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
+  html.dark {
+    color-scheme: dark;
+  }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
   }
   code, pre, .font-mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+  html.dark input[type="checkbox"],
+  html.dark input[type="radio"] {
+    accent-color: #6366f1;
+  }
+  html.dark select option,
+  html.dark select optgroup {
+    background-color: #0f172a;
+    color: #f1f5f9;
+  }
+}
+
+@layer utilities {
+  /* Автоматическая адаптация светлых поверхностей, таблиц, карточек и плашек в тёмной теме */
+  :where(html.dark) .bg-white:not(.switch-thumb):not([class*="dark:bg-"]),
+  :where(html.dark) .bg-white\/90:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-white\/95:not([class*="dark:bg-"]) {
+    background-color: #111827;
+  }
+
+  :where(html.dark) .bg-slate-50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-slate-50\/50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-slate-50\/70:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-slate-50\/80:not([class*="dark:bg-"]) {
+    background-color: rgba(30, 41, 59, 0.58);
+  }
+
+  :where(html.dark) .bg-slate-100:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-slate-100\/70:not([class*="dark:bg-"]) {
+    background-color: #1e293b;
+  }
+
+  :where(html.dark) .bg-slate-200:not([class*="dark:bg-"]) {
+    background-color: #334155;
+  }
+
+  :where(html.dark) .hover\:bg-slate-50:hover:not([class*="dark:hover:bg-"]),
+  :where(html.dark) .hover\:bg-slate-50\/70:hover:not([class*="dark:hover:bg-"]) {
+    background-color: rgba(30, 41, 59, 0.72);
+  }
+
+  :where(html.dark) .hover\:bg-slate-100:hover:not([class*="dark:hover:bg-"]) {
+    background-color: #334155;
+  }
+
+  /* Градиентные шапки панелей */
+  :where(html.dark) .from-slate-50:not([class*="dark:from-"]) {
+    --tw-gradient-from: #0f172a;
+  }
+  :where(html.dark) .via-white:not([class*="dark:via-"]) {
+    --tw-gradient-via: #111827;
+  }
+  :where(html.dark) .to-indigo-50\/40:not([class*="dark:to-"]) {
+    --tw-gradient-to: rgba(79, 70, 229, 0.14);
+  }
+
+  /* Типографика */
+  :where(html.dark) .text-slate-950:not([class*="dark:text-"]),
+  :where(html.dark) .text-slate-900:not([class*="dark:text-"]) {
+    color: #f1f5f9;
+  }
+  :where(html.dark) .text-slate-800:not([class*="dark:text-"]) {
+    color: #e2e8f0;
+  }
+  :where(html.dark) .text-slate-700:not([class*="dark:text-"]) {
+    color: #cbd5e1;
+  }
+  :where(html.dark) .text-slate-600:not([class*="dark:text-"]),
+  :where(html.dark) .text-slate-500:not([class*="dark:text-"]) {
+    color: #94a3b8;
+  }
+  :where(html.dark) .hover\:text-slate-900:hover:not([class*="dark:hover:text-"]),
+  :where(html.dark) .hover\:text-slate-800:hover:not([class*="dark:hover:text-"]),
+  :where(html.dark) .hover\:text-slate-700:hover:not([class*="dark:hover:text-"]) {
+    color: #f8fafc;
+  }
+
+  /* Рамки и разделители таблиц */
+  :where(html.dark) .border-slate-100:not([class*="dark:border-"]),
+  :where(html.dark) .border-slate-200:not([class*="dark:border-"]),
+  :where(html.dark) .border-slate-200\/80:not([class*="dark:border-"]),
+  :where(html.dark) .border-slate-200\/90:not([class*="dark:border-"]) {
+    border-color: #1f2937;
+  }
+  :where(html.dark) .border-slate-300:not([class*="dark:border-"]) {
+    border-color: #334155;
+  }
+  :where(html.dark) .divide-slate-50 > :not(:last-child),
+  :where(html.dark) .divide-slate-100 > :not(:last-child),
+  :where(html.dark) .divide-slate-200 > :not(:last-child) {
+    border-color: #1f2937;
+  }
+
+  /* Цветовые статусные и акцентные блоки (indigo / emerald / amber / rose / sky / purple) */
+  :where(html.dark) .bg-indigo-50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-indigo-50\/40:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-indigo-50\/50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-indigo-50\/70:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-indigo-50\/80:not([class*="dark:bg-"]) {
+    background-color: rgba(79, 70, 229, 0.16);
+  }
+  :where(html.dark) .hover\:bg-indigo-50:hover:not([class*="dark:hover:bg-"]),
+  :where(html.dark) .hover\:bg-indigo-50\/50:hover:not([class*="dark:hover:bg-"]),
+  :where(html.dark) .hover\:bg-indigo-100:hover:not([class*="dark:hover:bg-"]),
+  :where(html.dark) .hover\:bg-indigo-100\/70:hover:not([class*="dark:hover:bg-"]) {
+    background-color: rgba(99, 102, 241, 0.24);
+  }
+  :where(html.dark) .text-indigo-600:not([class*="dark:text-"]) {
+    color: #818cf8;
+  }
+  :where(html.dark) .text-indigo-700:not([class*="dark:text-"]),
+  :where(html.dark) .text-indigo-800:not([class*="dark:text-"]),
+  :where(html.dark) .text-indigo-900:not([class*="dark:text-"]),
+  :where(html.dark) .text-indigo-950:not([class*="dark:text-"]) {
+    color: #c7d2fe;
+  }
+  :where(html.dark) .border-indigo-100:not([class*="dark:border-"]),
+  :where(html.dark) .border-indigo-200:not([class*="dark:border-"]),
+  :where(html.dark) .border-indigo-200\/60:not([class*="dark:border-"]),
+  :where(html.dark) .border-indigo-200\/80:not([class*="dark:border-"]),
+  :where(html.dark) .border-indigo-300:not([class*="dark:border-"]) {
+    border-color: rgba(99, 102, 241, 0.38);
+  }
+
+  :where(html.dark) .bg-emerald-50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-emerald-50\/50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-emerald-50\/70:not([class*="dark:bg-"]) {
+    background-color: rgba(16, 185, 129, 0.14);
+  }
+  :where(html.dark) .hover\:bg-emerald-100:hover:not([class*="dark:hover:bg-"]) {
+    background-color: rgba(16, 185, 129, 0.24);
+  }
+  :where(html.dark) .text-emerald-700:not([class*="dark:text-"]),
+  :where(html.dark) .text-emerald-800:not([class*="dark:text-"]),
+  :where(html.dark) .text-emerald-900:not([class*="dark:text-"]) {
+    color: #6ee7b7;
+  }
+  :where(html.dark) .border-emerald-200:not([class*="dark:border-"]),
+  :where(html.dark) .border-emerald-300:not([class*="dark:border-"]) {
+    border-color: rgba(16, 185, 129, 0.36);
+  }
+
+  :where(html.dark) .bg-amber-50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-amber-50\/70:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-amber-50\/90:not([class*="dark:bg-"]) {
+    background-color: rgba(245, 158, 11, 0.14);
+  }
+  :where(html.dark) .text-amber-700:not([class*="dark:text-"]),
+  :where(html.dark) .text-amber-800:not([class*="dark:text-"]),
+  :where(html.dark) .text-amber-900:not([class*="dark:text-"]),
+  :where(html.dark) .text-amber-950:not([class*="dark:text-"]) {
+    color: #fcd34d;
+  }
+  :where(html.dark) .border-amber-200:not([class*="dark:border-"]),
+  :where(html.dark) .border-amber-300:not([class*="dark:border-"]),
+  :where(html.dark) .border-amber-300\/90:not([class*="dark:border-"]) {
+    border-color: rgba(245, 158, 11, 0.38);
+  }
+
+  :where(html.dark) .bg-rose-50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-rose-50\/50:not([class*="dark:bg-"]),
+  :where(html.dark) .bg-rose-50\/70:not([class*="dark:bg-"]) {
+    background-color: rgba(244, 63, 94, 0.14);
+  }
+  :where(html.dark) .hover\:bg-rose-50:hover:not([class*="dark:hover:bg-"]) {
+    background-color: rgba(244, 63, 94, 0.22);
+  }
+  :where(html.dark) .text-rose-700:not([class*="dark:text-"]),
+  :where(html.dark) .text-rose-800:not([class*="dark:text-"]),
+  :where(html.dark) .text-rose-900:not([class*="dark:text-"]) {
+    color: #fda4af;
+  }
+  :where(html.dark) .border-rose-200:not([class*="dark:border-"]),
+  :where(html.dark) .border-rose-300:not([class*="dark:border-"]) {
+    border-color: rgba(244, 63, 94, 0.38);
+  }
+
+  :where(html.dark) .bg-sky-50:not([class*="dark:bg-"]) {
+    background-color: rgba(14, 165, 233, 0.14);
+  }
+  :where(html.dark) .text-sky-800:not([class*="dark:text-"]),
+  :where(html.dark) .text-sky-900:not([class*="dark:text-"]),
+  :where(html.dark) .text-sky-950:not([class*="dark:text-"]) {
+    color: #7dd3fc;
+  }
+  :where(html.dark) .border-sky-200:not([class*="dark:border-"]) {
+    border-color: rgba(14, 165, 233, 0.36);
+  }
+
+  :where(html.dark) .bg-purple-50:not([class*="dark:bg-"]) {
+    background-color: rgba(168, 85, 247, 0.15);
+  }
+  :where(html.dark) .text-purple-700:not([class*="dark:text-"]),
+  :where(html.dark) .text-purple-800:not([class*="dark:text-"]) {
+    color: #d8b4fe;
   }
 }
 
@@ -22,4 +222,10 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }

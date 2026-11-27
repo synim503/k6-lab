@@ -4,8 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>k6-lab</title>
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem('k6lab.theme') || 'system';
+          var d = m === 'dark' || (m === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (d) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.colorScheme = 'dark';
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
-  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-indigo-100 selection:text-indigo-900">
+  <body class="bg-slate-50 dark:bg-[#0b1120] text-slate-900 dark:text-slate-100 antialiased selection:bg-indigo-100 selection:text-indigo-900 dark:selection:bg-indigo-500/30 dark:selection:text-indigo-100">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

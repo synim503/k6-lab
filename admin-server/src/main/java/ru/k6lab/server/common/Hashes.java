@@ -22,8 +22,12 @@ public final class Hashes {
         }
     }
 
+    public static String sha256(byte[] bytes) {
+        return HexFormat.of().formatHex(sha256Digest().digest(bytes));
+    }
+
     public static String sha256Hex(String text) {
-        return HexFormat.of().formatHex(sha256Digest().digest(text.getBytes(StandardCharsets.UTF_8)));
+        return sha256(text.getBytes(StandardCharsets.UTF_8));
     }
 
     /** Случайный токен (256 бит, base64url без паддинга). */

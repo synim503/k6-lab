@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { Badge, Button, Card, EmptyState, Input, Spinner } from '@/components/ui/primitives';
@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   BarChart3,
   Bug,
+  CloudUpload,
   Download,
   FileCode2,
   GitBranch,
@@ -24,6 +25,7 @@ import { toast } from 'sonner';
 
 export function ScriptsListPage() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const confirm = useConfirm();
   const qc = useQueryClient();
   const [q, setQ] = useState('');
@@ -32,6 +34,27 @@ export function ScriptsListPage() {
     queryKey: ['scripts'],
     queryFn: () => apiFetch('/api/v1/scripts'),
     refetchInterval: 8000,
+  });
+
+  const { data: bkData } = useQuery({
+    queryKey: ['git-backup'],
+    queryFn: () => apiFetch('/api/v1/git-backup'),
+  });
+
+  const pushBackupMut = useMutation({
+    mutationFn: () => apiFetch('/api/v1/git-backup/push-all', { method: 'POST', body: {} }),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['git-backup'] });
+      toast.success(res?.outcome?.message || 'Скрипты синхронизированы в Git');
+    },
+    onError: (err: any) => {
+      if (err?.data?.hostKeyRequired) {
+        toast.warning('Подтвердите SSH-ключ хоста на странице Git-репозиториев');
+        navigate('/git-repos#backup');
+      } else {
+        toast.error(err.message);
+      }
+    },
   });
 
   const stopMutation = useMutation({
@@ -65,6 +88,27 @@ export function ScriptsListPage() {
           <p className="text-xs text-slate-500">Управление сценариями k6, версиями, профилями нагрузки и графиками</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            loading={pushBackupMut.isPending}
+            onClick={() => {
+              if (!bkData?.config?.repoId) {
+                navigate('/git-repos#backup');
+                toast.info('Выберите Git-репозиторий для бэкапа скриптов');
+                return;
+              }
+              pushBackupMut.mutate();
+            }}
+            title={
+              bkData?.config?.repoId
+                ? `Синхронизировать все скрипты в Git (ветка ${bkData.config.branch || 'main'})`
+                : 'Настроить хранилище бэкапа скриптов в Git'
+            }
+          >
+            <CloudUpload className="h-3.5 w-3.5 text-indigo-600" />
+            {bkData?.config?.repoId ? 'Бэкап в Git' : 'Настроить Git-бэкап'}
+          </Button>
           <a href="/scripts/admin-helper" download="admin.js">
             <Button variant="outline" size="sm" title="Скачать вспомогательный модуль __admin/admin.js">
               <Download className="h-3.5 w-3.5" />

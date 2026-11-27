@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTheme } from '@/context/ThemeContext';
 import { Button, Card, Input } from '@/components/ui/primitives';
-import { Zap } from 'lucide-react';
+import { Monitor, Moon, Sun, Zap } from 'lucide-react';
 
 export function LoginPage() {
   const { login, buildLabel } = useAuth();
+  const { mode: themeMode, setMode: setThemeMode } = useTheme();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +26,28 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 p-4">
+    <div className="relative min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 p-4">
+      <div className="absolute top-4 right-4 inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 p-0.5">
+        {(
+          [
+            ['light', 'Светлая тема', Sun],
+            ['dark', 'Тёмная тема', Moon],
+            ['system', 'Как в системе', Monitor],
+          ] as const
+        ).map(([mKey, mTitle, Icon]) => (
+          <button
+            key={mKey}
+            type="button"
+            onClick={() => setThemeMode(mKey)}
+            title={mTitle}
+            className={`rounded-md p-1.5 transition-colors cursor-pointer ${
+              themeMode === mKey ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-100'
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </button>
+        ))}
+      </div>
       <Card className="w-full max-w-sm p-6 shadow-2xl border-slate-800/20">
         <div className="flex flex-col items-center text-center mb-6">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-md mb-3">

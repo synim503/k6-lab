@@ -1,11 +1,35 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
-import { Badge, Button, Card, EmptyState, Input, Modal, Select, Spinner } from '@/components/ui/primitives';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  Input,
+  Modal,
+  Select,
+  Spinner,
+  Switch,
+} from '@/components/ui/primitives';
 import { useConfirm } from '@/components/ui/ConfirmContext';
 import { useAuth } from '@/context/AuthContext';
 import { fmtShortDate } from '@/lib/utils';
-import { GitBranch, Pencil, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
+import {
+  ArchiveRestore,
+  CheckCircle2,
+  CloudUpload,
+  FolderGit2,
+  GitBranch,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
+  ShieldAlert,
+  Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 export function GitReposPage() {
@@ -19,10 +43,44 @@ export function GitReposPage() {
   const [confirmingKey, setConfirmingKey] = useState(false);
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
 
+  // Git Backup config state
+  const [bkRepoId, setBkRepoId] = useState<string>('');
+  const [bkBranch, setBkBranch] = useState<string>('main');
+  const [bkSubdir, setBkSubdir] = useState<string>('');
+  const [bkAutoSync, setBkAutoSync] = useState<boolean>(false);
+  const [bkPruneDeleted, setBkPruneDeleted] = useState<boolean>(false);
+  const bkHydratedRef = useRef(false);
+
+  // Restore modal state
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [remoteScripts, setRemoteScripts] = useState<any[]>([]);
+  const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(new Set());
+  const [overwriteExisting, setOverwriteExisting] = useState<boolean>(true);
+  const [inspectingRemote, setInspectingRemote] = useState<boolean>(false);
+  const [pushingAll, setPushingAll] = useState<boolean>(false);
+  const [restoring, setRestoring] = useState<boolean>(false);
+
   const { data, isLoading } = useQuery({
     queryKey: ['git-repos'],
     queryFn: () => apiFetch('/api/v1/git-repos'),
   });
+
+  const { data: bkData } = useQuery({
+    queryKey: ['git-backup'],
+    queryFn: () => apiFetch('/api/v1/git-backup'),
+    refetchInterval: 30000,
+  });
+
+  useEffect(() => {
+    if (!bkData?.config || bkHydratedRef.current) return;
+    bkHydratedRef.current = true;
+    const c = bkData.config;
+    setBkRepoId(c.repoId != null ? String(c.repoId) : '');
+    setBkBranch(c.branch || 'main');
+    setBkSubdir(c.subdir || '');
+    setBkAutoSync(!!c.autoSync);
+    setBkPruneDeleted(!!c.pruneDeleted);
+  }, [bkData]);
 
   const handleRefresh = async (repo: any, silentSuccessModal = false) => {
     setRefreshingId(repo.id);
@@ -50,6 +108,7 @@ export function GitReposPage() {
     onSuccess: (res) => {
       setEditModal(null);
       qc.invalidateQueries({ queryKey: ['git-repos'] });
+      qc.invalidateQueries({ queryKey: ['git-backup'] });
       toast.success('Репозиторий сохранён — проверяем подключение…');
       if (res?.repo) {
         void handleRefresh(res.repo, true);
@@ -62,22 +121,151 @@ export function GitReposPage() {
     mutationFn: (id: number) => apiFetch(`/api/v1/git-repos/${id}/delete`, { method: 'POST' }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['git-repos'] });
+      qc.invalidateQueries({ queryKey: ['git-backup'] });
       toast.success('Репозиторий удалён');
     },
     onError: (err: any) => toast.error(err.message),
   });
 
+  const saveBackupCfgMut = useMutation({
+    mutationFn: () =>
+      apiFetch('/api/v1/git-backup/config', {
+        method: 'POST',
+        body: {
+          repoId: bkRepoId ? Number(bkRepoId) : null,
+          branch: bkBranch.trim() || 'main',
+          subdir: bkSubdir.trim(),
+          autoSync: bkAutoSync,
+          pruneDeleted: bkPruneDeleted,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['git-backup'] });
+      toast.success('Настройки Git-бэкапа сохранены');
+    },
+    onError: (err: any) => toast.error(err.message),
+  });
+
+  const handlePushAllBackup = async () => {
+    if (!bkRepoId) {
+      toast.error('Сначала выберите Git-репозиторий для хранения бэкапов');
+      return;
+    }
+    setPushingAll(true);
+    try {
+      if (isAdmin) {
+        await apiFetch('/api/v1/git-backup/config', {
+          method: 'POST',
+          body: {
+            repoId: Number(bkRepoId),
+            branch: bkBranch.trim() || 'main',
+            subdir: bkSubdir.trim(),
+            autoSync: bkAutoSync,
+            pruneDeleted: bkPruneDeleted,
+          },
+        });
+      }
+      const res = await apiFetch('/api/v1/git-backup/push-all', {
+        method: 'POST',
+        body: {
+          repoId: Number(bkRepoId),
+          branch: bkBranch.trim() || 'main',
+          subdir: bkSubdir.trim(),
+          pruneDeleted: bkPruneDeleted,
+        },
+      });
+      qc.invalidateQueries({ queryKey: ['git-backup'] });
+      qc.invalidateQueries({ queryKey: ['git-repos'] });
+      toast.success(res.outcome?.message || 'Бэкап скриптов в Git завершён');
+    } catch (err: any) {
+      if (err?.data?.hostKeyRequired) {
+        setHostKeyPrompt(err.data);
+      } else {
+        toast.error(err.message);
+      }
+    } finally {
+      setPushingAll(false);
+    }
+  };
+
+  const handleOpenRestore = async () => {
+    if (!bkRepoId) {
+      toast.error('Выберите Git-репозиторий с резервной копией');
+      return;
+    }
+    setInspectingRemote(true);
+    try {
+      const res = await apiFetch('/api/v1/git-backup/inspect', {
+        method: 'POST',
+        body: {
+          repoId: Number(bkRepoId),
+          branch: bkBranch.trim() || 'main',
+          subdir: bkSubdir.trim(),
+        },
+      });
+      const list = res.scripts || [];
+      setRemoteScripts(list);
+      setSelectedSlugs(new Set(list.map((s: any) => s.slug)));
+      setRestoreOpen(true);
+    } catch (err: any) {
+      if (err?.data?.hostKeyRequired) {
+        setHostKeyPrompt(err.data);
+      } else {
+        toast.error(err.message);
+      }
+    } finally {
+      setInspectingRemote(false);
+    }
+  };
+
+  const handleExecuteRestore = async () => {
+    if (selectedSlugs.size === 0) {
+      toast.error('Отметьте хотя бы один скрипт для восстановления');
+      return;
+    }
+    setRestoring(true);
+    try {
+      const res = await apiFetch('/api/v1/git-backup/restore', {
+        method: 'POST',
+        body: {
+          repoId: Number(bkRepoId),
+          branch: bkBranch.trim() || 'main',
+          subdir: bkSubdir.trim(),
+          slugs: Array.from(selectedSlugs),
+          overwriteExisting,
+        },
+      });
+      const o = res.outcome || {};
+      setRestoreOpen(false);
+      qc.invalidateQueries({ queryKey: ['scripts'] });
+      toast.success(
+        `Восстановлено: создано ${o.created || 0}, обновлено ${o.updated || 0}, профилей ${o.profilesRestored || 0}, графиков ${o.chartsRestored || 0}`
+      );
+    } catch (err: any) {
+      if (err?.data?.hostKeyRequired) {
+        setHostKeyPrompt(err.data);
+      } else {
+        toast.error(err.message);
+      }
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   if (isLoading) return <Spinner label="Загрузка Git-репозиториев…" />;
 
   const items: any[] = data?.items || [];
   const sshCreds: any[] = data?.sshCredentials || [];
+  const bkCfg = bkData?.config || {};
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Git-репозитории</h1>
-          <p className="text-xs text-slate-500">Подключённые репозитории со сценариями k6 (HTTPS и SSH)</p>
+          <h1 className="text-xl font-bold text-slate-900">Git-репозитории и бэкап скриптов</h1>
+          <p className="text-xs text-slate-500">
+            Подключение репозиториев со сценариями k6 (HTTPS и SSH) и централизованная резервная копия всех скриптов в Git
+          </p>
         </div>
         {isAdmin && (
           <Button
@@ -101,12 +289,155 @@ export function GitReposPage() {
         )}
       </div>
 
+      {/* Блок резервного копирования и синхронизации скриптов в Git */}
+      <Card id="backup" className="overflow-hidden border-indigo-200/80">
+        <CardHeader className="bg-slate-50/70 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <FolderGit2 className="h-4 w-4 text-indigo-600" />
+            <span className="font-semibold text-sm text-slate-900">
+              Хранилище бэкапа скриптов в Git
+            </span>
+            {bkCfg.lastStatus === 'OK' && <Badge variant="success">синхронизировано</Badge>}
+            {bkCfg.lastStatus === 'UP_TO_DATE' && <Badge variant="info">актуально</Badge>}
+            {bkCfg.lastStatus === 'ERROR' && <Badge variant="danger">ошибка синхронизации</Badge>}
+            {bkCfg.autoSync && <Badge variant="purple">автобэкап включён</Badge>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!bkRepoId}
+              loading={inspectingRemote}
+              onClick={handleOpenRestore}
+              title="Просмотреть скрипты в ветке Git и восстановить выбранные в k6-lab"
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              Восстановить из Git…
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!bkRepoId}
+              loading={pushingAll}
+              onClick={handlePushAllBackup}
+              title="Выгрузить все скрипты, профили нагрузки и графики отчёта коммитом в выбранную ветку"
+            >
+              <CloudUpload className="h-3.5 w-3.5" />
+              Синхронизировать все скрипты ({bkData?.localScriptCount ?? 0})
+            </Button>
+          </div>
+        </CardHeader>
+        <CardBody className="space-y-3.5">
+          <p className="text-xs text-slate-600">
+            Сохраняет в выбранный Git-репозиторий полный снимок каждого скрипта в человекочитаемом виде: распакованный код{' '}
+            <code className="px-1 py-0.5 rounded bg-slate-100">src/</code>, базовую нагрузку, все профили с папками и
+            шаблоны графиков отчёта. При повторной выгрузке коммит создаётся только если содержимое действительно изменилось.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-5">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Репозиторий для бэкапа</label>
+              <Select
+                disabled={!isAdmin}
+                value={bkRepoId}
+                onChange={(e) => setBkRepoId(e.target.value)}
+              >
+                <option value="">— не выбран —</option>
+                {items.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.url})
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="md:col-span-3">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Ветка</label>
+              <Input
+                disabled={!isAdmin}
+                value={bkBranch}
+                onChange={(e) => setBkBranch(e.target.value)}
+                placeholder="main или k6-backup"
+                className="font-mono text-xs"
+              />
+            </div>
+            <div className="md:col-span-4">
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Подкаталог в репозитории (необязательно)
+              </label>
+              <Input
+                disabled={!isAdmin}
+                value={bkSubdir}
+                onChange={(e) => setBkSubdir(e.target.value)}
+                placeholder="Корень репозитория или backups/k6-lab"
+                className="font-mono text-xs"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div className="flex flex-wrap items-center gap-5">
+              <Switch
+                disabled={!isAdmin || !bkRepoId}
+                checked={bkAutoSync}
+                onChange={setBkAutoSync}
+                label={
+                  <span className="text-xs">
+                    Автоматически синхронизировать изменения в фоне
+                  </span>
+                }
+              />
+              <Switch
+                disabled={!isAdmin || !bkRepoId}
+                checked={bkPruneDeleted}
+                onChange={setBkPruneDeleted}
+                label={
+                  <span className="text-xs text-slate-600">
+                    Удалять из ветки каталоги удалённых в админке скриптов
+                  </span>
+                }
+              />
+            </div>
+
+            {isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                loading={saveBackupCfgMut.isPending}
+                onClick={() => saveBackupCfgMut.mutate()}
+              >
+                <Save className="h-3.5 w-3.5" />
+                Сохранить настройки бэкапа
+              </Button>
+            )}
+          </div>
+
+          {(bkCfg.lastSyncAt || bkCfg.lastMessage) && (
+            <div
+              className={`rounded-lg border px-3 py-2 text-xs flex flex-wrap items-center justify-between gap-2 ${
+                bkCfg.lastStatus === 'ERROR'
+                  ? 'border-rose-200 bg-rose-50 text-rose-800'
+                  : 'border-slate-200 bg-slate-50 text-slate-700'
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                {bkCfg.lastStatus !== 'ERROR' && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />}
+                <span className="break-words">{bkCfg.lastMessage || 'Готово'}</span>
+              </div>
+              <div className="text-slate-500 font-mono text-[11px] shrink-0">
+                {bkCfg.lastCommit && <span className="mr-2">commit {String(bkCfg.lastCommit).slice(0, 8)}</span>}
+                {bkCfg.lastSyncAt && <span>{fmtShortDate(bkCfg.lastSyncAt)}</span>}
+              </div>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
       <Card className="overflow-hidden">
         {items.length === 0 ? (
           <EmptyState
             icon={<GitBranch className="h-6 w-6" />}
             title="Git-репозитории не добавлены"
-            description="Добавьте репозиторий, чтобы импортировать и обновлять скрипты из веток и тегов"
+            description="Добавьте репозиторий, чтобы импортировать сценарии и настроить резервное копирование скриптов в Git"
           />
         ) : (
           <div className="overflow-x-auto">
@@ -123,7 +454,12 @@ export function GitReposPage() {
               <tbody className="divide-y divide-slate-100">
                 {items.map((r) => (
                   <tr key={r.id} className="hover:bg-slate-50/70">
-                    <td className="px-4 py-3 font-semibold text-slate-900">{r.name}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-900">
+                      <div className="flex items-center gap-2">
+                        <span>{r.name}</span>
+                        {bkCfg.repoId === r.id && <Badge variant="info">хранилище бэкапа</Badge>}
+                      </div>
+                    </td>
                     <td className="px-3 py-3">
                       <code className="text-xs text-slate-700 break-all">{r.url}</code>
                       {r.subdir && <div className="text-xs text-slate-400">subdir: {r.subdir}</div>}
@@ -189,6 +525,117 @@ export function GitReposPage() {
           </div>
         )}
       </Card>
+
+      {/* Модалка восстановления скриптов из Git-бэкапа */}
+      <Modal
+        open={restoreOpen}
+        onClose={() => setRestoreOpen(false)}
+        title={`Восстановление скриптов из Git (${bkBranch || 'main'})`}
+        maxWidth="max-w-3xl"
+      >
+        <div className="space-y-3 text-xs">
+          {remoteScripts.length === 0 ? (
+            <div className="py-8 text-center text-slate-500">
+              В выбранной ветке пока нет резервных копий скриптов в формате <code className="font-mono">scripts/*/k6lab-script.json</code>.
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-slate-600">
+                  Найдено скриптов в Git: <b>{remoteScripts.length}</b> (выбрано: <b>{selectedSlugs.size}</b>)
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setSelectedSlugs(new Set(remoteScripts.map((s) => s.slug)))}
+                  >
+                    Выбрать все
+                  </Button>
+                  <Button variant="ghost" size="xs" onClick={() => setSelectedSlugs(new Set())}>
+                    Снять все
+                  </Button>
+                </div>
+              </div>
+
+              <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+                {remoteScripts.map((rs) => {
+                  const checked = selectedSlugs.has(rs.slug);
+                  return (
+                    <label
+                      key={rs.slug}
+                      className="flex items-center justify-between gap-3 px-3.5 py-2.5 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const next = new Set(selectedSlugs);
+                            if (e.target.checked) next.add(rs.slug);
+                            else next.delete(rs.slug);
+                            setSelectedSlugs(next);
+                          }}
+                        />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-900 flex items-center gap-2 flex-wrap">
+                            <span>{rs.name}</span>
+                            {!rs.existsLocally ? (
+                              <Badge variant="success">новый</Badge>
+                            ) : rs.filesMissingLocally ? (
+                              <Badge variant="danger">нет файлов на диске</Badge>
+                            ) : rs.codeDiffers ? (
+                              <Badge variant="warning">код отличается</Badge>
+                            ) : (
+                              <Badge variant="default">уже есть</Badge>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate">
+                            <code>{rs.entrypoint || 'auto'}</code> · файлов: {rs.fileCount} · профилей: {rs.profileCount} ·
+                            графиков: {rs.chartCount}
+                          </div>
+                        </div>
+                      </div>
+                      <code className="text-[11px] text-slate-400 shrink-0">scripts/{rs.slug}</code>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <Switch
+                  checked={overwriteExisting}
+                  onChange={setOverwriteExisting}
+                  label={
+                    <span className="text-xs">
+                      Обновлять уже существующие в k6-lab скрипты (добавить новую версию при отличии кода и синхронизировать профили/графики)
+                    </span>
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <Button variant="outline" size="sm" onClick={() => setRestoreOpen(false)}>
+                  Отмена
+                </Button>
+                {isAdmin ? (
+                  <Button
+                    size="sm"
+                    loading={restoring}
+                    disabled={selectedSlugs.size === 0}
+                    onClick={handleExecuteRestore}
+                  >
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                    Восстановить выбранные ({selectedSlugs.size})
+                  </Button>
+                ) : (
+                  <span className="text-amber-700">Восстановление доступно администратору</span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
 
       {/* Модалка добавления/редактирования */}
       <Modal

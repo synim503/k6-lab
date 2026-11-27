@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 import { ConfirmProvider } from '@/components/ui/ConfirmContext';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Spinner } from '@/components/ui/primitives';
@@ -54,7 +55,7 @@ function AuthenticatedRoutes() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0b1120]">
         <Spinner label="Проверка сессии…" />
       </div>
     );
@@ -158,17 +159,24 @@ function AuthenticatedRoutes() {
   );
 }
 
+function ThemedToaster() {
+  const { resolvedTheme } = useTheme();
+  return <Toaster theme={resolvedTheme} position="bottom-right" richColors closeButton />;
+}
+
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ConfirmProvider>
-          <BrowserRouter basename="/app">
-            <AuthenticatedRoutes />
-          </BrowserRouter>
-          <Toaster position="bottom-right" richColors closeButton />
-        </ConfirmProvider>
-      </AuthProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <ConfirmProvider>
+            <BrowserRouter basename="/app">
+              <AuthenticatedRoutes />
+            </BrowserRouter>
+            <ThemedToaster />
+          </ConfirmProvider>
+        </AuthProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }

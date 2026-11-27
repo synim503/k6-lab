@@ -11,10 +11,11 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'primary', size = 'md', loading, disabled, children, type = 'button', ...props }, ref) => {
     const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
-      primary: 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-xs',
-      secondary: 'bg-slate-100 text-slate-800 hover:bg-slate-200',
-      outline: 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900',
-      ghost: 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+      primary: 'bg-indigo-600 text-white hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 shadow-xs',
+      secondary: 'bg-slate-100 text-slate-800 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700',
+      outline:
+        'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-white',
+      ghost: 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white',
       danger: 'bg-rose-600 text-white hover:bg-rose-700 shadow-xs',
       success: 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs',
       warning: 'bg-amber-500 text-white hover:bg-amber-600 shadow-xs',
@@ -49,7 +50,13 @@ Button.displayName = 'Button';
 
 export function Card({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('rounded-xl border border-slate-200/90 bg-white shadow-2xs', className)} {...props}>
+    <div
+      className={cn(
+        'rounded-xl border border-slate-200/90 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-2xs',
+        className
+      )}
+      {...props}
+    >
       {children}
     </div>
   );
@@ -57,7 +64,13 @@ export function Card({ className, children, ...props }: React.HTMLAttributes<HTM
 
 export function CardHeader({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3', className)} {...props}>
+    <div
+      className={cn(
+        'flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 px-4 py-3',
+        className
+      )}
+      {...props}
+    >
       {children}
     </div>
   );
@@ -80,13 +93,13 @@ export function Badge({
   variant?: BadgeVariant;
 }) {
   const styles: Record<BadgeVariant, string> = {
-    default: 'bg-slate-100 text-slate-700 ring-slate-200',
-    neutral: 'bg-slate-100 text-slate-700 ring-slate-200',
-    success: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-    warning: 'bg-amber-50 text-amber-800 ring-amber-200',
-    danger: 'bg-rose-50 text-rose-700 ring-rose-200',
-    info: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-    purple: 'bg-purple-50 text-purple-700 ring-purple-200',
+    default: 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700',
+    neutral: 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700',
+    success: 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/35',
+    warning: 'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/35',
+    danger: 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-300 dark:ring-rose-500/35',
+    info: 'bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/35',
+    purple: 'bg-purple-50 text-purple-700 ring-purple-200 dark:bg-purple-500/15 dark:text-purple-300 dark:ring-purple-500/35',
   };
   return (
     <span
@@ -107,7 +120,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60',
+        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900',
         className
       )}
       {...props}
@@ -121,7 +134,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
     <textarea
       ref={ref}
       className={cn(
-        'flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60',
+        'flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900',
         className
       )}
       {...props}
@@ -135,7 +148,7 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
     <select
       ref={ref}
       className={cn(
-        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60',
+        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-100 dark:disabled:bg-slate-900',
         className
       )}
       {...props}
@@ -169,17 +182,17 @@ export function Switch({
         onClick={() => !disabled && onChange(!checked)}
         className={cn(
           'relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40',
-          checked ? 'bg-indigo-600' : 'bg-slate-300'
+          checked ? 'bg-indigo-600 dark:bg-indigo-500' : 'bg-slate-300 dark:bg-slate-700'
         )}
       >
         <span
           className={cn(
-            'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform mt-0.5',
+            'switch-thumb pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs transition-transform mt-0.5',
             checked ? 'translate-x-4.5' : 'translate-x-0.5'
           )}
         />
       </button>
-      {label && <span className="text-sm text-slate-700">{label}</span>}
+      {label && <span className="text-sm text-slate-700 dark:text-slate-300">{label}</span>}
     </label>
   );
 }
@@ -210,24 +223,31 @@ export function Modal({
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[1px]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-black/70 backdrop-blur-[1px]" onMouseDown={onClose}>
       <div
-        className={cn('w-full rounded-2xl bg-white shadow-xl border border-slate-200 flex flex-col max-h-[90vh]', maxWidth)}
+        className={cn(
+          'w-full rounded-2xl bg-white dark:bg-slate-900 shadow-xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[90vh]',
+          maxWidth
+        )}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5 shrink-0">
-          <div className="font-semibold text-slate-900 flex items-center gap-2">{title}</div>
+        <div className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 px-5 py-3.5 shrink-0">
+          <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">{title}</div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer"
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
             aria-label="Закрыть"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="p-5 overflow-y-auto flex-1">{children}</div>
-        {footer && <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-3 shrink-0">{footer}</div>}
+        <div className="p-5 overflow-y-auto flex-1 text-slate-800 dark:text-slate-200">{children}</div>
+        {footer && (
+          <div className="flex items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800 px-5 py-3 shrink-0">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -235,8 +255,8 @@ export function Modal({
 
 export function Spinner({ label }: { label?: string }) {
   return (
-    <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500">
-      <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+    <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500 dark:text-slate-400">
+      <Loader2 className="h-5 w-5 animate-spin text-indigo-600 dark:text-indigo-400" />
       <span>{label || 'Загрузка…'}</span>
     </div>
   );
@@ -255,9 +275,9 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-      {icon && <div className="mb-3 rounded-full bg-slate-100 p-3 text-slate-400">{icon}</div>}
-      <div className="text-sm font-medium text-slate-900">{title}</div>
-      {description && <div className="mt-1 max-w-md text-xs text-slate-500">{description}</div>}
+      {icon && <div className="mb-3 rounded-full bg-slate-100 dark:bg-slate-800 p-3 text-slate-400">{icon}</div>}
+      <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{title}</div>
+      {description && <div className="mt-1 max-w-md text-xs text-slate-500 dark:text-slate-400">{description}</div>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   );

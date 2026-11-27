@@ -64,6 +64,9 @@ public class GitClient {
     public record CommitInfo(String hash, String author, Instant time, String message) {
     }
 
+    public record PushResult(String commit, boolean changed, String branch) {
+    }
+
     /** Параметры доступа: токен либо SSH-учётка (уже расшифрованные, живут только на время операции). */
     public record Auth(String token, ResolvedCredential ssh) {
         public static Auth none() {
@@ -104,19 +107,15 @@ public class GitClient {
             try {
                 if (!exists) {
                     Files.createDirectories(dir);
-                    var clone = Git.cloneRepository().setURI(effectiveUrl).setBare(true).setDirectory(dir.toFile())
+                    Git.init().setBare(true).setDirectory(dir.toFile()).call().close();
+                }
+                try (Git git = Git.open(dir.toFile())) {
+                    var fetch = git.fetch().setRemote(effectiveUrl)
+                            .setRefSpecs("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+                            .setRemoveDeletedRefs(true)
                             .setTimeout(TRANSPORT_TIMEOUT_SEC);
-                    sshHandle = configure(clone, auth, logicalHost);
-                    clone.call().close();
-                } else {
-                    try (Git git = Git.open(dir.toFile())) {
-                        var fetch = git.fetch().setRemote(effectiveUrl)
-                                .setRefSpecs("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
-                                .setRemoveDeletedRefs(true)
-                                .setTimeout(TRANSPORT_TIMEOUT_SEC);
-                        sshHandle = configure(fetch, auth, logicalHost);
-                        fetch.call();
-                    }
+                    sshHandle = configure(fetch, auth, logicalHost);
+                    fetch.call();
                 }
             } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
                 if (!exists) {
@@ -279,7 +278,270 @@ public class GitClient {
         return new org.eclipse.jgit.storage.file.FileRepositoryBuilder().setGitDir(dir.toFile()).setBare().build();
     }
 
-    static String normalizeSubdir(String subdir) {
+    /**
+     * Читает все файлы ветки под указанным префиксом (пути в карте возвращаются относительно корня репозитория).
+     * Если ветка ещё не существует в репозитории, возвращает пустую карту.
+     */
+    public Map<String, byte[]> readBranchFiles(Long repoId, String branch, String prefix) throws IOException {
+        var lock = rwLock(repoId).readLock();
+        lock.lock();
+        try (Repository r = open(repoId); RevWalk walk = new RevWalk(r)) {
+            String cleanBranch = normalizeBranchName(branch);
+            ObjectId commitOid = r.resolve("refs/heads/" + cleanBranch + "^{commit}");
+            if (commitOid == null) {
+                return Map.of();
+            }
+            RevCommit c = walk.parseCommit(commitOid);
+            String sub = normalizeSubdir(prefix);
+            Map<String, byte[]> files = new LinkedHashMap<>();
+            try (TreeWalk tw = new TreeWalk(r)) {
+                tw.addTree(c.getTree());
+                tw.setRecursive(true);
+                if (!sub.isEmpty()) {
+                    tw.setFilter(PathFilter.create(sub));
+                }
+                while (tw.next()) {
+                    if (tw.getFileMode().getObjectType() != org.eclipse.jgit.lib.Constants.OBJ_BLOB
+                            || tw.getFileMode(0).equals(org.eclipse.jgit.lib.FileMode.SYMLINK)) {
+                        continue;
+                    }
+                    String path = tw.getPathString();
+                    if (!sub.isEmpty() && !path.equals(sub) && !path.startsWith(sub + "/")) {
+                        continue;
+                    }
+                    ObjectLoader l = r.open(tw.getObjectId(0));
+                    if (l.getSize() > MAX_BLOB) {
+                        continue;
+                    }
+                    files.put(path, l.getBytes());
+                }
+            }
+            return files;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Формирует коммит в bare-кеше поверх удалённой ветки и отправляет (push) в удалённый Git-репозиторий.
+     *
+     * @param replacePrefix  если не null: все файлы родительского коммита внутри этого каталога ("" = весь репозиторий,
+     *                       "sub/path" = только внутри "sub/path/...") заменяются переданной картой {@code files};
+     *                       файлы вне {@code replacePrefix} сохраняются нетронутыми.
+     * @param files          полные пути файлов относительно корня репозитория -> содержимое
+     * @param deletePrefixes дополнительные префиксы путей для удаления из дерева
+     */
+    public PushResult commitAndPush(Long repoId, String url, Auth auth, String branch,
+                                    String replacePrefix, Map<String, byte[]> files,
+                                    java.util.Set<String> deletePrefixes,
+                                    String authorName, String message) throws IOException {
+        String cleanBranch = normalizeBranchName(branch);
+        String normReplace = replacePrefix == null ? null : normalizeSubdir(replacePrefix);
+        List<String> delList = new ArrayList<>();
+        if (deletePrefixes != null) {
+            for (String dp : deletePrefixes) {
+                String n = normalizeSubdir(dp);
+                if (!n.isEmpty()) {
+                    delList.add(n);
+                }
+            }
+        }
+
+        var lock = rwLock(repoId).writeLock();
+        lock.lock();
+        SshHandle sshFetch = null;
+        SshHandle sshPush = null;
+        try {
+            Path dir = cacheDir(repoId);
+            String effectiveUrl = applyDefaultSshUser(url, auth);
+            String logicalHost = extractLogicalHost(effectiveUrl);
+
+            if (!Files.isDirectory(dir.resolve("objects"))) {
+                Files.createDirectories(dir);
+                try {
+                    Git.init().setBare(true).setDirectory(dir.toFile()).call().close();
+                } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+                    deleteQuietly(dir);
+                    throw unwrap(e);
+                }
+            }
+
+            try (Git git = Git.open(dir.toFile())) {
+                // 1. Синхронизируем актуальные ветки с удалённого сервера (пустой удалённый репозиторий допустим)
+                try {
+                    var fetch = git.fetch().setRemote(effectiveUrl)
+                            .setRefSpecs("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+                            .setRemoveDeletedRefs(true)
+                            .setTimeout(TRANSPORT_TIMEOUT_SEC);
+                    sshFetch = configure(fetch, auth, logicalHost);
+                    fetch.call();
+                } catch (org.eclipse.jgit.api.errors.TransportException te) {
+                    if (sshFetch != null && sshFetch.problem().get() != null) {
+                        throw sshFetch.problem().get();
+                    }
+                    String msg = te.getMessage() == null ? "" : te.getMessage();
+                    // Пустой репозиторий без единой ветки у некоторых серверов отдаёт remote does not have refs
+                    if (!msg.contains("no refs") && !msg.contains("Remote does not have")) {
+                        throw unwrap(te);
+                    }
+                } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+                    if (sshFetch != null && sshFetch.problem().get() != null) {
+                        throw sshFetch.problem().get();
+                    }
+                    throw unwrap(e);
+                }
+
+                Repository r = git.getRepository();
+                RevCommit parent = null;
+                ObjectId parentOid = r.resolve("refs/heads/" + cleanBranch + "^{commit}");
+                if (parentOid != null) {
+                    try (RevWalk rw = new RevWalk(r)) {
+                        parent = rw.parseCommit(parentOid);
+                    }
+                }
+
+                // 2. Собираем дерево коммита в памяти через DirCache
+                var dc = org.eclipse.jgit.dircache.DirCache.newInCore();
+                var builder = dc.builder();
+                java.util.Set<String> newPaths = new java.util.HashSet<>();
+                for (String p : files.keySet()) {
+                    String cleanPath = normalizeSubdir(p);
+                    if (!cleanPath.isEmpty()) {
+                        newPaths.add(cleanPath);
+                    }
+                }
+
+                try (var inserter = r.newObjectInserter()) {
+                    if (parent != null) {
+                        try (TreeWalk tw = new TreeWalk(r)) {
+                            tw.addTree(parent.getTree());
+                            tw.setRecursive(true);
+                            while (tw.next()) {
+                                String path = tw.getPathString();
+                                if (newPaths.contains(path)) {
+                                    continue;
+                                }
+                                if (normReplace != null) {
+                                    if (normReplace.isEmpty() || path.equals(normReplace) || path.startsWith(normReplace + "/")) {
+                                        continue;
+                                    }
+                                }
+                                boolean deleted = false;
+                                for (String dp : delList) {
+                                    if (path.equals(dp) || path.startsWith(dp + "/")) {
+                                        deleted = true;
+                                        break;
+                                    }
+                                }
+                                if (deleted) {
+                                    continue;
+                                }
+                                var entry = new org.eclipse.jgit.dircache.DirCacheEntry(path);
+                                entry.setFileMode(tw.getFileMode(0));
+                                entry.setObjectId(tw.getObjectId(0));
+                                builder.add(entry);
+                            }
+                        }
+                    }
+
+                    for (var e : files.entrySet()) {
+                        String cleanPath = normalizeSubdir(e.getKey());
+                        if (cleanPath.isEmpty()) {
+                            continue;
+                        }
+                        byte[] bytes = e.getValue() != null ? e.getValue() : new byte[0];
+                        ObjectId blobId = inserter.insert(org.eclipse.jgit.lib.Constants.OBJ_BLOB, bytes);
+                        var entry = new org.eclipse.jgit.dircache.DirCacheEntry(cleanPath);
+                        entry.setFileMode(org.eclipse.jgit.lib.FileMode.REGULAR_FILE);
+                        entry.setLength(bytes.length);
+                        entry.setObjectId(blobId);
+                        builder.add(entry);
+                    }
+                    builder.finish();
+
+                    ObjectId treeId = dc.writeTree(inserter);
+                    if (parent != null && parent.getTree().getId().equals(treeId)) {
+                        return new PushResult(parent.getName(), false, cleanBranch);
+                    }
+
+                    String actor = (authorName == null || authorName.isBlank()) ? "k6-lab" : authorName.strip();
+                    var ident = new org.eclipse.jgit.lib.PersonIdent(actor, actor.replaceAll("[^A-Za-z0-9._-]", "_") + "@k6-lab.local");
+                    var cb = new org.eclipse.jgit.lib.CommitBuilder();
+                    cb.setTreeId(treeId);
+                    if (parent != null) {
+                        cb.setParentId(parent.getId());
+                    }
+                    cb.setAuthor(ident);
+                    cb.setCommitter(ident);
+                    cb.setMessage(message == null || message.isBlank() ? "chore(backup): sync k6-lab scripts" : message);
+
+                    ObjectId commitId = inserter.insert(cb);
+                    inserter.flush();
+
+                    var refUpdate = r.updateRef("refs/heads/" + cleanBranch);
+                    refUpdate.setNewObjectId(commitId);
+                    refUpdate.setForceUpdate(true);
+                    refUpdate.update();
+
+                    // 3. Отправляем коммит в удалённый репозиторий
+                    var push = git.push()
+                            .setRemote(effectiveUrl)
+                            .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(commitId.name() + ":refs/heads/" + cleanBranch))
+                            .setTimeout(TRANSPORT_TIMEOUT_SEC);
+                    sshPush = configure(push, auth, logicalHost);
+                    var pushResults = push.call();
+                    for (var pr : pushResults) {
+                        for (var rru : pr.getRemoteUpdates()) {
+                            var st = rru.getStatus();
+                            if (st != org.eclipse.jgit.transport.RemoteRefUpdate.Status.OK
+                                    && st != org.eclipse.jgit.transport.RemoteRefUpdate.Status.UP_TO_DATE) {
+                                String reason = rru.getMessage() != null ? rru.getMessage() : st.name();
+                                throw new IOException("Удалённый Git отклонил запись в ветку «" + cleanBranch + "»: " + reason);
+                            }
+                        }
+                    }
+                    return new PushResult(commitId.name(), true, cleanBranch);
+                } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+                    if (sshPush != null && sshPush.problem().get() != null) {
+                        throw sshPush.problem().get();
+                    }
+                    throw unwrap(e);
+                }
+            } catch (RuntimeException e) {
+                if (sshFetch != null && sshFetch.problem().get() != null) {
+                    throw sshFetch.problem().get();
+                }
+                if (sshPush != null && sshPush.problem().get() != null) {
+                    throw sshPush.problem().get();
+                }
+                throw e;
+            }
+        } finally {
+            if (sshFetch != null) {
+                sshFetch.close();
+            }
+            if (sshPush != null) {
+                sshPush.close();
+            }
+            lock.unlock();
+        }
+    }
+
+    public static String normalizeBranchName(String branch) {
+        String b = branch == null ? "" : branch.strip();
+        if (b.startsWith("refs/heads/")) {
+            b = b.substring("refs/heads/".length());
+        }
+        if (b.isEmpty()) {
+            return "main";
+        }
+        if (b.contains("..") || b.contains(" ") || b.contains("\\") || b.startsWith("/") || b.endsWith("/")) {
+            throw new IllegalArgumentException("Недопустимое имя ветки Git: «" + branch + "»");
+        }
+        return b;
+    }
+
+    public static String normalizeSubdir(String subdir) {
         if (subdir == null) {
             return "";
         }

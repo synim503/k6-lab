@@ -978,6 +978,20 @@ export function RunDetailPage() {
     });
   }, [allLogLines, logLevel, logSearch]);
 
+  const allReportCharts: any[] = useMemo(() => resData?.charts || [], [resData?.charts]);
+  const excludedSet = useMemo(() => new Set(repExcludedCharts), [repExcludedCharts]);
+  const filteredReportCharts = useMemo(
+    () =>
+      chartCatFilter === 'all'
+        ? allReportCharts
+        : allReportCharts.filter((c) => (c.category || 'custom') === chartCatFilter),
+    [allReportCharts, chartCatFilter]
+  );
+  const includedChartsCount = useMemo(
+    () => allReportCharts.filter((c) => !excludedSet.has(c.title)).length,
+    [allReportCharts, excludedSet]
+  );
+
   if (isLoading || !detail) return <Spinner label="Загрузка запуска…" />;
 
   const {
@@ -1015,20 +1029,6 @@ export function RunDetailPage() {
     const s = qs.toString();
     return s ? `${base}?${s}` : base;
   };
-
-  const allReportCharts: any[] = useMemo(() => resData?.charts || [], [resData?.charts]);
-  const excludedSet = useMemo(() => new Set(repExcludedCharts), [repExcludedCharts]);
-  const filteredReportCharts = useMemo(
-    () =>
-      chartCatFilter === 'all'
-        ? allReportCharts
-        : allReportCharts.filter((c) => (c.category || 'custom') === chartCatFilter),
-    [allReportCharts, chartCatFilter]
-  );
-  const includedChartsCount = useMemo(
-    () => allReportCharts.filter((c) => !excludedSet.has(c.title)).length,
-    [allReportCharts, excludedSet]
-  );
 
   const downloadDataUriPng = (dataUri: string, chartTitle: string) => {
     const safe = (chartTitle || 'chart').replace(/[\\/:*?"<>|\r\n]+/g, '_');

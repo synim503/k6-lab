@@ -4,13 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>k6-lab</title>
-    <script type="module" crossorigin src="/app/assets/index-BMZAavtj.js"></script>
-    <link rel="modulepreload" crossorigin href="/app/assets/vendor-V7cSaBaG.js">
-    <link rel="modulepreload" crossorigin href="/app/assets/icons-vJXGtFgS.js">
-    <link rel="modulepreload" crossorigin href="/app/assets/charts-DwgeqOp2.js">
-    <link rel="stylesheet" crossorigin href="/app/assets/index-C4OEjC0t.css">
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem('k6lab.theme') || 'system';
+          var d = m === 'dark' || (m === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (d) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.colorScheme = 'dark';
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/app/assets/index-k3kiSHMk.js"></script>
+    <link rel="modulepreload" crossorigin href="/app/assets/vendor-ZfCS-QfO.js">
+    <link rel="modulepreload" crossorigin href="/app/assets/charts-Bgcwhw48.js">
+    <link rel="modulepreload" crossorigin href="/app/assets/icons-CnL5Gcnl.js">
+    <link rel="stylesheet" crossorigin href="/app/assets/index-BNFBcwni.css">
   </head>
-  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-indigo-100 selection:text-indigo-900">
+  <body class="bg-slate-50 dark:bg-[#0b1120] text-slate-900 dark:text-slate-100 antialiased selection:bg-indigo-100 selection:text-indigo-900 dark:selection:bg-indigo-500/30 dark:selection:text-indigo-100">
     <div id="root"></div>
   </body>
 </html>
