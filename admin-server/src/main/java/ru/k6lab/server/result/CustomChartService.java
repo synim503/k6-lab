@@ -47,6 +47,10 @@ public class CustomChartService {
     }
 
     /** Подстановка в запрос: переменные скрипта ($имя, ${имя}), затем {run_id} (идентификатор запуска) и {range}/{range_s}/{range_ms}. */
+    public static String expandQuery(String promql, long runId, long rangeSec, Map<String, String> vars) {
+        return expand(promql, runId, rangeSec, vars);
+    }
+
     static String expand(String promql, long runId, long rangeSec, Map<String, String> vars) {
         String s = GrafanaDashboardImport.substitute(promql, vars == null ? Map.of() : vars);
         return s.replace("{run_id}", String.valueOf(runId))

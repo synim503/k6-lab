@@ -30,6 +30,7 @@ export function ScriptNewPage() {
   const [refs, setRefs] = useState<any[]>([]);
   const [loadingRefs, setLoadingRefs] = useState(false);
   const [hostKeyPrompt, setHostKeyPrompt] = useState<any | null>(null);
+  const [confirmingKey, setConfirmingKey] = useState(false);
 
   const { data: reposData } = useQuery({
     queryKey: ['git-repos'],
@@ -368,7 +369,7 @@ export function ScriptNewPage() {
         title={
           <span className="flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-amber-500" />
-            Подтвердите SSH-ключ Git-сервера
+            {hostKeyPrompt?.mismatch ? 'Ключ SSH-хоста изменился' : 'Подтвердите SSH-ключ Git-сервера'}
           </span>
         }
         footer={
@@ -376,35 +377,58 @@ export function ScriptNewPage() {
             <Button variant="outline" size="sm" onClick={() => setHostKeyPrompt(null)}>
               Отмена
             </Button>
-            <Button
-              size="sm"
-              onClick={async () => {
-                try {
-                  const res = await apiFetch('/api/v1/git-repos/confirm-host-key', {
-                    method: 'POST',
-                    body: hostKeyPrompt,
-                  });
-                  if (res.refs) setRefs(res.refs);
-                  setHostKeyPrompt(null);
-                  toast.success('Ключ хоста сохранён');
-                } catch (err: any) {
-                  toast.error(err.message);
-                }
-              }}
-            >
-              Доверять ключу
-            </Button>
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant={hostKeyPrompt?.mismatch ? 'danger' : 'primary'}
+                loading={confirmingKey}
+                onClick={async () => {
+                  setConfirmingKey(true);
+                  try {
+                    const res = await apiFetch('/api/v1/git-repos/confirm-host-key', {
+                      method: 'POST',
+                      body: { ...hostKeyPrompt, replace: !!hostKeyPrompt.mismatch },
+                    });
+                    if (res.refs) setRefs(res.refs);
+                    setHostKeyPrompt(null);
+                    if (res.refreshError) {
+                      toast.warning(`Ключ подтверждён, но не удалось загрузить ветки: ${res.refreshError}`);
+                    } else {
+                      toast.success('Ключ хоста подтверждён — можно нажимать «Импортировать»');
+                    }
+                  } catch (err: any) {
+                    if (err?.data?.hostKeyRequired) setHostKeyPrompt(err.data);
+                    else toast.error(err.message);
+                  } finally {
+                    setConfirmingKey(false);
+                  }
+                }}
+              >
+                {hostKeyPrompt?.mismatch ? 'Заменить ключ и доверять' : 'Доверять ключу'}
+              </Button>
+            )}
           </>
         }
       >
         {hostKeyPrompt && (
           <div className="space-y-2 text-xs text-slate-700">
             <div>
-              Хост: <code className="font-semibold">{hostKeyPrompt.host}:{hostKeyPrompt.port}</code> ({hostKeyPrompt.keyType})
+              Хост: <code className="font-semibold">{hostKeyPrompt.host}:{hostKeyPrompt.port}</code>{' '}
+              {hostKeyPrompt.keyType && `(${hostKeyPrompt.keyType})`}
             </div>
+            {hostKeyPrompt.mismatch && hostKeyPrompt.expectedFingerprint && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                Прежний SHA-256: <code className="break-all">{hostKeyPrompt.expectedFingerprint}</code>
+              </div>
+            )}
             <div>
               Отпечаток SHA-256: <code className="break-all bg-slate-100 px-1.5 py-0.5 rounded">{hostKeyPrompt.fingerprint}</code>
             </div>
+            {!isAdmin && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                Подтвердить SSH-ключ нового Git-хоста может администратор в разделе «Git-репозитории».
+              </div>
+            )}
           </div>
         )}
       </Modal>

@@ -15,6 +15,7 @@ import {
   Spinner,
 } from '@/components/ui/primitives';
 import { useConfirm } from '@/components/ui/ConfirmContext';
+import { useAuth } from '@/context/AuthContext';
 import { ScriptHead } from './ScriptHead';
 import { fmtBytes, fmtDurationSec, fmtShortDate, runStatusMeta } from '@/lib/utils';
 import {
@@ -31,6 +32,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  ShieldAlert,
   Square,
   Trash2,
   Upload,
@@ -39,6 +41,7 @@ import { toast } from 'sonner';
 
 export function ScriptDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const confirm = useConfirm();
   const qc = useQueryClient();
@@ -64,6 +67,8 @@ export function ScriptDetailPage() {
   const [gitRefs, setGitRefs] = useState<any[]>([]);
   const [loadingGitRefs, setLoadingGitRefs] = useState(false);
   const [gitCommits, setGitCommits] = useState<any[] | null>(null);
+  const [hostKeyPrompt, setHostKeyPrompt] = useState<any | null>(null);
+  const [confirmingKey, setConfirmingKey] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['script', id, page, size, statusFilter],
@@ -82,7 +87,10 @@ export function ScriptDetailPage() {
       setGitCommits(null);
       qc.invalidateQueries({ queryKey: ['script', id] });
     },
-    onError: (err: any) => toast.error(err.message),
+    onError: (err: any) => {
+      if (err?.data?.hostKeyRequired) setHostKeyPrompt(err.data);
+      else toast.error(err.message);
+    },
   });
 
   const gitCheckMut = useMutation({
@@ -91,7 +99,10 @@ export function ScriptDetailPage() {
       setGitCommits(res.commits || []);
       if (!res.commits?.length) toast.info('Новых коммитов в ветке нет');
     },
-    onError: (err: any) => toast.error(err.message),
+    onError: (err: any) => {
+      if (err?.data?.hostKeyRequired) setHostKeyPrompt(err.data);
+      else toast.error(err.message);
+    },
   });
 
   const stopActiveMut = useMutation({
@@ -129,7 +140,12 @@ export function ScriptDetailPage() {
     try {
       const res = await apiFetch(`/api/v1/git-repos/${ridStr}/refresh`, { method: 'POST' });
       setGitRefs(res.refs || []);
-    } catch {
+    } catch (err: any) {
+      if (err?.data?.hostKeyRequired) {
+        setHostKeyPrompt(err.data);
+      } else {
+        toast.error(err.message || 'Не удалось обновить ветки');
+      }
       const repo = (data?.gitRepos || []).find((r: any) => String(r.id) === ridStr);
       setGitRefs(repo?.cachedRefs || []);
     } finally {
@@ -146,6 +162,7 @@ export function ScriptDetailPage() {
     missingFiles = [],
     loadDefined,
     profiles = [],
+    recentProfiles = [],
     activeOperations = [],
     activeRuns = [],
     runs,
@@ -299,28 +316,45 @@ export function ScriptDetailPage() {
         </CardHeader>
         <CardBody className="space-y-3 text-xs">
           {profiles.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-slate-500 font-medium">Профили ({profiles.length}):</span>
-              {profiles.map((p: any) => (
-                <div
-                  key={p.id}
-                  className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
-                >
-                  <Link
-                    to={`/scripts/${script.id}/load?profile=${p.id}`}
-                    className="px-2.5 py-1 font-medium text-slate-800 hover:bg-slate-100 hover:text-indigo-600"
-                  >
-                    {p.name}
-                  </Link>
-                  <Link
-                    to={`/scripts/${script.id}/run?profile=${p.id}`}
-                    title={`Запустить профиль «${p.name}»`}
-                    className="border-l border-slate-200 px-2 py-1 text-emerald-600 hover:bg-emerald-50"
-                  >
-                    <Play className="h-3 w-3 fill-current" />
-                  </Link>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {recentProfiles.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-slate-500 font-medium">Последние запущенные:</span>
+                  {recentProfiles.map((p: any) => (
+                    <div
+                      key={p.id}
+                      className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden shadow-2xs"
+                    >
+                      <Link
+                        to={`/scripts/${script.id}/load?profile=${p.id}`}
+                        className="px-2.5 py-1 font-medium text-slate-800 hover:bg-slate-100 hover:text-indigo-600"
+                        title={p.lastRunAt ? `Последний запуск: ${fmtShortDate(p.lastRunAt)}` : undefined}
+                      >
+                        {p.folder ? `${p.folder} / ${p.name}` : p.name}
+                      </Link>
+                      <Link
+                        to={`/scripts/${script.id}/run?profile=${p.id}`}
+                        title={`Запустить профиль «${p.name}»`}
+                        className="border-l border-slate-200 px-2 py-1 text-emerald-600 hover:bg-emerald-50"
+                      >
+                        <Play className="h-3 w-3 fill-current" />
+                      </Link>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <span className="text-slate-500">
+                  Сохранено профилей нагрузки: <b className="text-slate-800">{profiles.length}</b> (запусков по ним ещё не было)
+                </span>
+              )}
+              {profiles.length > recentProfiles.length && (
+                <Link
+                  to={`/scripts/${script.id}/load`}
+                  className="text-indigo-600 hover:text-indigo-700 hover:underline font-medium shrink-0"
+                >
+                  Все профили ({profiles.length}) →
+                </Link>
+              )}
             </div>
           )}
 
@@ -711,7 +745,8 @@ export function ScriptDetailPage() {
               setGitOpen(false);
               qc.invalidateQueries({ queryKey: ['script', id] });
             } catch (err: any) {
-              toast.error(err.message);
+              if (err?.data?.hostKeyRequired) setHostKeyPrompt(err.data);
+              else toast.error(err.message);
             } finally {
               setUploading(false);
             }
@@ -783,6 +818,77 @@ export function ScriptDetailPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={!!hostKeyPrompt}
+        onClose={() => setHostKeyPrompt(null)}
+        title={
+          <span className="flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-amber-500" />
+            {hostKeyPrompt?.mismatch ? 'Ключ SSH-хоста изменился' : 'Подтвердите SSH-ключ Git-сервера'}
+          </span>
+        }
+        footer={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setHostKeyPrompt(null)}>
+              Отмена
+            </Button>
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant={hostKeyPrompt?.mismatch ? 'danger' : 'primary'}
+                loading={confirmingKey}
+                onClick={async () => {
+                  setConfirmingKey(true);
+                  try {
+                    const res = await apiFetch('/api/v1/git-repos/confirm-host-key', {
+                      method: 'POST',
+                      body: { ...hostKeyPrompt, replace: !!hostKeyPrompt.mismatch },
+                    });
+                    if (res.refs) setGitRefs(res.refs);
+                    setHostKeyPrompt(null);
+                    qc.invalidateQueries({ queryKey: ['script', id] });
+                    if (res.refreshError) {
+                      toast.warning(`Ключ подтверждён, но не удалось загрузить ветки: ${res.refreshError}`);
+                    } else {
+                      toast.success('Ключ SSH-хоста подтверждён');
+                    }
+                  } catch (err: any) {
+                    if (err?.data?.hostKeyRequired) setHostKeyPrompt(err.data);
+                    else toast.error(err.message);
+                  } finally {
+                    setConfirmingKey(false);
+                  }
+                }}
+              >
+                {hostKeyPrompt?.mismatch ? 'Заменить ключ и доверять' : 'Доверять ключу'}
+              </Button>
+            )}
+          </>
+        }
+      >
+        {hostKeyPrompt && (
+          <div className="space-y-2 text-xs text-slate-700">
+            <div>
+              Хост: <code className="font-semibold">{hostKeyPrompt.host}:{hostKeyPrompt.port}</code>{' '}
+              {hostKeyPrompt.keyType && `(${hostKeyPrompt.keyType})`}
+            </div>
+            {hostKeyPrompt.mismatch && hostKeyPrompt.expectedFingerprint && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                Прежний отпечаток: <code className="break-all">{hostKeyPrompt.expectedFingerprint}</code>
+              </div>
+            )}
+            <div>
+              Новый SHA-256: <code className="break-all bg-slate-100 px-1.5 py-0.5 rounded">{hostKeyPrompt.fingerprint}</code>
+            </div>
+            {!isAdmin && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                Подтвердить SSH-ключ нового Git-хоста может администратор в разделе «Git-репозитории».
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

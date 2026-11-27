@@ -16,6 +16,8 @@ import {
   Textarea,
 } from '@/components/ui/primitives';
 import { useConfirm } from '@/components/ui/ConfirmContext';
+import { useAuth } from '@/context/AuthContext';
+import { PromqlEditor } from '@/components/ui/PromqlEditor';
 import { ScriptHead } from './ScriptHead';
 import {
   AlertTriangle,
@@ -27,11 +29,13 @@ import {
   ChevronRight,
   Copy,
   Database,
+  Download,
   Eye,
   FileCode2,
   GripVertical,
   HelpCircle,
   Maximize2,
+  Palette,
   Plus,
   RotateCcw,
   Save,
@@ -247,6 +251,7 @@ interface QueryDiag {
 export function ChartsStudioPage() {
   const { id } = useParams<{ id: string }>();
   const confirm = useConfirm();
+  const { isAdmin } = useAuth();
   const qc = useQueryClient();
 
   const [templates, setTemplates] = useState<any[]>([]);
@@ -269,10 +274,6 @@ export function ChartsStudioPage() {
   const [saving, setSaving] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
 
-  // Metric autocomplete
-  const [metricNames, setMetricNames] = useState<string[] | null>(null);
-  const [activeQueryIdx, setActiveQueryIdx] = useState<number | null>(null);
-  const [cursorWord, setCursorWord] = useState<{ word: string; start: number; end: number } | null>(null);
   const queryTaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
 
   // Preview state
@@ -312,6 +313,21 @@ export function ChartsStudioPage() {
   const [copyVarsFlag, setCopyVarsFlag] = useState(true);
   const [copyOverwriteFlag, setCopyOverwriteFlag] = useState(false);
   const [copyingCharts, setCopyingCharts] = useState(false);
+
+  // Inline report chart styling modal
+  const [styleOpen, setStyleOpen] = useState(false);
+  const [stTheme, setStTheme] = useState('DARK');
+  const [stWidth, setStWidth] = useState(1100);
+  const [stHeight, setStHeight] = useState(320);
+  const [stLegend, setStLegend] = useState('BOTTOM');
+  const [stStats, setStStats] = useState(true);
+  const [stMaxLegend, setStMaxLegend] = useState(20);
+  const [stAutoWidth, setStAutoWidth] = useState(true);
+  const [stSortBy, setStSortBy] = useState('NONE');
+  const [stSortDir, setStSortDir] = useState('DESC');
+  const [stAbsTime, setStAbsTime] = useState(false);
+  const [stSkipWarmup, setStSkipWarmup] = useState(false);
+  const [savingStyle, setSavingStyle] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['script-charts', id],
@@ -509,16 +525,6 @@ export function ChartsStudioPage() {
     }
   }, [data]);
 
-  const ensureMetricsLoaded = async () => {
-    if (metricNames !== null || !data?.prometheusConfigured) return;
-    try {
-      const res = await apiFetch(`/api/v1/scripts/${id}/charts/metrics`);
-      setMetricNames(res.metrics || []);
-    } catch {
-      setMetricNames([]);
-    }
-  };
-
   const handleSaveChart = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!name.trim()) {
@@ -654,24 +660,6 @@ export function ChartsStudioPage() {
     reorderTemplates(ids);
   };
 
-  const insertTokenIntoQuery = (qIdx: number, token: string) => {
-    const ta = queryTaRefs.current[qIdx];
-    setQueries((prev) =>
-      prev.map((item, i) => {
-        if (i !== qIdx) return item;
-        if (!ta) return { ...item, promql: item.promql + token };
-        const start = ta.selectionStart ?? item.promql.length;
-        const end = ta.selectionEnd ?? item.promql.length;
-        const nextPromql = item.promql.slice(0, start) + token + item.promql.slice(end);
-        setTimeout(() => {
-          ta.focus();
-          ta.setSelectionRange(start + token.length, start + token.length);
-        }, 0);
-        return { ...item, promql: nextPromql };
-      })
-    );
-  };
-
   const wrapQueryWithSnippet = (qIdx: number, wrapFn: (s: string) => string) => {
     const ta = queryTaRefs.current[qIdx];
     setQueries((prev) =>
@@ -689,28 +677,6 @@ export function ChartsStudioPage() {
       })
     );
   };
-
-  const updateAutocompleteWord = (ta: HTMLTextAreaElement, qIdx: number) => {
-    const pos = ta.selectionStart || 0;
-    const text = ta.value;
-    let start = pos;
-    while (start > 0 && /[A-Za-z0-9_:]/.test(text[start - 1])) start--;
-    let end = pos;
-    while (end < text.length && /[A-Za-z0-9_:]/.test(text[end])) end++;
-    const word = text.slice(start, pos);
-    setActiveQueryIdx(qIdx);
-    if (word.length >= 2 && (start === 0 || text[start - 1] !== '$')) {
-      setCursorWord({ word, start, end });
-    } else {
-      setCursorWord(null);
-    }
-  };
-
-  const metricSuggestions = useMemo(() => {
-    if (!metricNames || !cursorWord || cursorWord.word.length < 2) return [];
-    const lw = cursorWord.word.toLowerCase();
-    return metricNames.filter((m) => m.toLowerCase().includes(lw)).slice(0, 12);
-  }, [metricNames, cursorWord]);
 
   if (isLoading || !data) return <Spinner label="Загрузка студии графиков отчёта…" />;
 
@@ -779,6 +745,64 @@ export function ChartsStudioPage() {
             <Upload className="h-3.5 w-3.5" />
             Импорт Grafana JSON
           </Button>
+
+          {templates.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              title="Экспортировать графики и переменные в JSON дашборда Grafana (совместим с импортом в Grafana и k6-lab)"
+              onClick={() => {
+                const srcList = checkedIds.size > 0 ? templates.filter((t) => checkedIds.has(t.id)) : templates;
+                const varMap = new Map<string, string>();
+                variables.forEach((v: any) => {
+                  if (v.name) varMap.set(v.name, v.value || '');
+                });
+                srcList.forEach((t: any) => {
+                  if (t.variables && typeof t.variables === 'object') {
+                    Object.entries(t.variables).forEach(([k, val]) => {
+                      if (!varMap.has(k)) varMap.set(k, String(val ?? ''));
+                    });
+                  }
+                });
+                const payload = {
+                  dashboard: {
+                    title: `${data.script?.name || 'script'} — графики отчёта`,
+                    templating: {
+                      list: Array.from(varMap.entries()).map(([vName, vVal]) => ({
+                        name: vName,
+                        type: 'custom',
+                        current: { value: vVal, text: vVal },
+                      })),
+                    },
+                    panels: srcList.map((t: any, pIdx: number) => ({
+                      id: pIdx + 1,
+                      type: 'timeseries',
+                      title: t.name,
+                      fieldConfig: { defaults: { unit: t.unit || '' } },
+                      targets: (t.queries || []).map((q: any, qIdx: number) => ({
+                        refId: String.fromCharCode(65 + (qIdx % 26)),
+                        datasource: { type: 'prometheus' },
+                        expr: q.promql || '',
+                        legendFormat: q.legend || '',
+                      })),
+                    })),
+                  },
+                };
+                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const safeName = (data.script?.name || `script-${id}`).replace(/[\\/:*?"<>|\r\n]+/g, '_');
+                a.href = url;
+                a.download = `charts-${safeName}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                toast.success(`Экспортировано графиков: ${srcList.length}`);
+              }}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Экспорт JSON{checkedIds.size > 0 ? ` (${checkedIds.size})` : ''}
+            </Button>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -787,14 +811,28 @@ export function ChartsStudioPage() {
             {data.prometheusConfigured ? 'Prometheus подключён' : 'Prometheus не настроен'}
           </Badge>
           {chartStyle.width && (
-            <Link
-              to="/settings"
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-600 hover:bg-slate-100"
-              title="Настроить тему и размер графиков отчёта"
+            <button
+              type="button"
+              onClick={() => {
+                setStTheme(chartStyle.theme || 'DARK');
+                setStWidth(chartStyle.width || 1100);
+                setStHeight(chartStyle.height || 320);
+                setStLegend(chartStyle.legend || 'BOTTOM');
+                setStStats(chartStyle.stats !== false);
+                setStMaxLegend(chartStyle.maxLegend || 20);
+                setStAutoWidth(chartStyle.autoWidth !== false);
+                setStSortBy(chartStyle.sortBy || 'NONE');
+                setStSortDir(chartStyle.sortDir || 'DESC');
+                setStAbsTime(!!chartStyle.absoluteTime);
+                setStSkipWarmup(!!chartStyle.skipWarmup);
+                setStyleOpen(true);
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 cursor-pointer transition-colors"
+              title="Настроить тему, размер и легенду графиков отчёта прямо здесь"
             >
-              <Settings className="h-3.5 w-3.5 text-slate-400" />
+              <Palette className="h-3.5 w-3.5 text-indigo-500" />
               {chartStyle.theme === 'LIGHT' ? 'Светлая' : 'Тёмная'} · {chartStyle.width}×{chartStyle.height}
-            </Link>
+            </button>
           )}
           {templates.length > 0 && (
             <Button
@@ -1355,7 +1393,6 @@ export function ChartsStudioPage() {
                   const letter = String.fromCharCode(65 + (qIdx % 26));
                   const diag = queryDiags[qIdx];
                   const dynamicLabels = diag?.labelKeys?.length ? diag.labelKeys : DEFAULT_LEGEND_LABELS;
-                  const showAc = activeQueryIdx === qIdx && metricSuggestions.length > 0;
 
                   return (
                     <div key={qIdx} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
@@ -1466,90 +1503,26 @@ export function ChartsStudioPage() {
                         </div>
                       </div>
 
-                      {/* Поле PromQL с автодополнением метрик */}
-                      <div className="relative">
-                        <Textarea
-                          ref={(el) => {
-                            queryTaRefs.current[qIdx] = el;
-                          }}
-                          rows={2}
-                          value={qItem.promql}
-                          onFocus={(e) => {
-                            ensureMetricsLoaded();
-                            updateAutocompleteWord(e.currentTarget, qIdx);
-                          }}
-                          onBlur={() => {
-                            setTimeout(() => {
-                              setActiveQueryIdx((cur) => (cur === qIdx ? null : cur));
-                            }, 160);
-                          }}
-                          onKeyUp={(e) => updateAutocompleteWord(e.currentTarget, qIdx)}
-                          onClick={(e) => updateAutocompleteWord(e.currentTarget, qIdx)}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setQueries((prev) =>
-                              prev.map((it, i) => (i === qIdx ? { ...it, promql: val } : it))
-                            );
-                            updateAutocompleteWord(e.target, qIdx);
-                          }}
-                          placeholder="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode='idle'}[{range}])) * 100)"
-                          className="font-mono text-xs bg-white"
-                        />
-
-                        {showAc && cursorWord && (
-                          <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg divide-y divide-slate-100">
-                            {metricSuggestions.map((mName) => (
-                              <button
-                                key={mName}
-                                type="button"
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  setQueries((prev) =>
-                                    prev.map((it, i) => {
-                                      if (i !== qIdx) return it;
-                                      const nextPromql =
-                                        it.promql.slice(0, cursorWord.start) +
-                                        mName +
-                                        it.promql.slice(cursorWord.end);
-                                      return { ...it, promql: nextPromql };
-                                    })
-                                  );
-                                  setCursorWord(null);
-                                }}
-                                className="block w-full px-3 py-1.5 text-left font-mono text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer"
-                              >
-                                {mName}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Быстрая вставка токенов {run_id}, {range}, $var */}
-                      <div className="flex flex-wrap items-center gap-1 text-[11px]">
-                        <span className="text-slate-400">Вставить:</span>
-                        {['{run_id}', '{range}'].map((tok) => (
-                          <button
-                            key={tok}
-                            type="button"
-                            onClick={() => insertTokenIntoQuery(qIdx, tok)}
-                            className="rounded border border-slate-200 bg-white px-1.5 py-0 font-mono text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 cursor-pointer"
-                          >
-                            {tok}
-                          </button>
-                        ))}
-                        {Object.keys(effectiveVarsMap).map((vn) => (
-                          <button
-                            key={vn}
-                            type="button"
-                            onClick={() => insertTokenIntoQuery(qIdx, `$${vn}`)}
-                            className="rounded border border-indigo-200 bg-indigo-50/60 px-1.5 py-0 font-mono text-indigo-700 hover:bg-indigo-100 cursor-pointer"
-                            title={`${vn} = ${effectiveVarsMap[vn]}`}
-                          >
-                            ${vn}
-                          </button>
-                        ))}
-                      </div>
+                      {/* Редактор PromQL с автодополнением метрик, функций, меток и переменных */}
+                      <PromqlEditor
+                        textareaRef={(el) => {
+                          queryTaRefs.current[qIdx] = el;
+                        }}
+                        rows={2}
+                        value={qItem.promql}
+                        onChange={(val) =>
+                          setQueries((prev) =>
+                            prev.map((it, i) => (i === qIdx ? { ...it, promql: val } : it))
+                          )
+                        }
+                        scriptId={id}
+                        variables={Object.keys(effectiveVarsMap)}
+                        varValues={effectiveVarsMap}
+                        allowMacros={true}
+                        showToolbar={true}
+                        showTestButton={true}
+                        placeholder="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode='idle'}[{range}])) * 100)"
+                      />
 
                       {/* Легенда + кликабельные {{label}} */}
                       <div className="flex flex-wrap items-center gap-2">
@@ -1669,14 +1642,30 @@ export function ChartsStudioPage() {
                   <b>{previewMeta.elapsedMs} мс</b>
                 </span>
                 {previewImg && (
-                  <button
-                    type="button"
-                    onClick={() => setZoomOpen(true)}
-                    className="inline-flex items-center gap-1 text-indigo-600 hover:underline cursor-pointer"
-                  >
-                    <Maximize2 className="h-3 w-3" />
-                    Увеличить
-                  </button>
+                  <div className="inline-flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const safe = (name || previewMeta.title || 'chart').replace(/[\\/:*?"<>|\r\n]+/g, '_');
+                        const a = document.createElement('a');
+                        a.href = previewImg;
+                        a.download = `${safe}.png`;
+                        a.click();
+                      }}
+                      className="inline-flex items-center gap-1 text-slate-600 hover:text-indigo-600 hover:underline cursor-pointer"
+                    >
+                      <Download className="h-3 w-3" />
+                      Скачать PNG
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setZoomOpen(true)}
+                      className="inline-flex items-center gap-1 text-indigo-600 hover:underline cursor-pointer"
+                    >
+                      <Maximize2 className="h-3 w-3" />
+                      Увеличить
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -1704,11 +1693,27 @@ export function ChartsStudioPage() {
         {previewImg && (
           <div className="space-y-2">
             <img src={previewImg} alt="Zoom" className="w-full h-auto rounded-lg border border-slate-200" />
-            {previewMeta && (
-              <div className="text-xs text-slate-500 text-right">
-                {previewMeta.windowLabel} · {previewMeta.seriesCount} рядов · {previewMeta.elapsedMs} мс
-              </div>
-            )}
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  const safe = (name || previewMeta?.title || 'chart').replace(/[\\/:*?"<>|\r\n]+/g, '_');
+                  const a = document.createElement('a');
+                  a.href = previewImg;
+                  a.download = `${safe}.png`;
+                  a.click();
+                }}
+              >
+                <Download className="h-3.5 w-3.5" />
+                Скачать PNG
+              </Button>
+              {previewMeta && (
+                <span>
+                  {previewMeta.windowLabel} · {previewMeta.seriesCount} рядов · {previewMeta.elapsedMs} мс
+                </span>
+              )}
+            </div>
           </div>
         )}
       </Modal>
@@ -2088,6 +2093,161 @@ export function ChartsStudioPage() {
             </div>
           </form>
         )}
+      </Modal>
+
+      {/* Инлайн-настройка глобального оформления графиков отчёта */}
+      <Modal
+        open={styleOpen}
+        onClose={() => setStyleOpen(false)}
+        title="Оформление графиков в отчётах (HTML / PDF / Word)"
+        maxWidth="max-w-5xl"
+      >
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 text-xs">
+          <div className="lg:col-span-5 space-y-3">
+            {!isAdmin && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                Предпросмотр доступен всем, а сохранение глобального стиля отчётов требует роли администратора.
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Тема</label>
+                <Select value={stTheme} onChange={(e) => setStTheme(e.target.value)}>
+                  <option value="DARK">Grafana Dark (Тёмная)</option>
+                  <option value="LIGHT">Светлая (Light)</option>
+                </Select>
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Положение легенды</label>
+                <Select value={stLegend} onChange={(e) => setStLegend(e.target.value)}>
+                  <option value="BOTTOM">Снизу</option>
+                  <option value="RIGHT">Справа</option>
+                  <option value="LEFT">Слева</option>
+                  <option value="NONE">Скрыть</option>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Ширина (px)</label>
+                <Input type="number" value={stWidth} onChange={(e) => setStWidth(Number(e.target.value))} />
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Высота (px)</label>
+                <Input type="number" value={stHeight} onChange={(e) => setStHeight(Number(e.target.value))} />
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Макс. рядов</label>
+                <Input type="number" value={stMaxLegend} onChange={(e) => setStMaxLegend(Number(e.target.value))} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Сортировка легенды</label>
+                <Select value={stSortBy} onChange={(e) => setStSortBy(e.target.value)}>
+                  <option value="NONE">Как в запросе</option>
+                  <option value="MAX">По Max</option>
+                  <option value="MEAN">По Mean</option>
+                  <option value="LAST">По Last</option>
+                </Select>
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Направление</label>
+                <Select value={stSortDir} onChange={(e) => setStSortDir(e.target.value)}>
+                  <option value="DESC">↓ По убыванию</option>
+                  <option value="ASC">↑ По возрастанию</option>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <Switch
+                checked={stStats}
+                onChange={setStStats}
+                label="Таблица Min / Mean / Max / Last в легенде"
+              />
+              <Switch
+                checked={stAutoWidth}
+                onChange={setStAutoWidth}
+                label="Авторасширение при длинных подписях серий"
+              />
+              <Switch
+                checked={stAbsTime}
+                onChange={setStAbsTime}
+                label="Абсолютное время ЧЧ:ММ по умолчанию"
+              />
+              <Switch
+                checked={stSkipWarmup}
+                onChange={setStSkipWarmup}
+                label="Скрывать прогрев (warmup) по умолчанию"
+              />
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+              <Link to="/settings" className="text-indigo-600 hover:underline inline-flex items-center gap-1">
+                <Settings className="h-3.5 w-3.5" />Все системные настройки
+              </Link>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => setStyleOpen(false)}>
+                  Закрыть
+                </Button>
+                {isAdmin && (
+                  <Button
+                    size="sm"
+                    loading={savingStyle}
+                    onClick={async () => {
+                      setSavingStyle(true);
+                      try {
+                        await apiFetch('/api/v1/settings/report-charts', {
+                          method: 'POST',
+                          body: {
+                            theme: stTheme,
+                            width: stWidth,
+                            height: stHeight,
+                            legend: stLegend,
+                            stats: stStats,
+                            maxLegend: stMaxLegend,
+                            absoluteTime: stAbsTime,
+                            autoWidth: stAutoWidth,
+                            sortBy: stSortBy,
+                            sortDir: stSortDir,
+                            skipWarmup: stSkipWarmup,
+                          },
+                        });
+                        await qc.invalidateQueries({ queryKey: ['script-charts', id] });
+                        setStyleOpen(false);
+                        toast.success('Стиль графиков отчёта обновлён');
+                        if (queries.some((q) => q.promql.trim())) {
+                          triggerPreview();
+                        }
+                      } catch (err: any) {
+                        toast.error(err.message);
+                      } finally {
+                        setSavingStyle(false);
+                      }
+                    }}
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    Применить ко всем отчётам
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-7 space-y-2">
+            <div className="font-medium text-slate-700">Живой макет PNG-графика в отчёте:</div>
+            <div className="rounded-xl border border-slate-200 bg-slate-100/70 p-2.5 flex items-center justify-center min-h-[260px]">
+              <img
+                src={`/settings/report-charts/preview.png?theme=${stTheme}&width=${stWidth}&height=${stHeight}&legend=${stLegend}&stats=${stStats}&maxLegend=${stMaxLegend}&autoWidth=${stAutoWidth}&sortBy=${stSortBy}&sortDir=${stSortDir}&timeAxis=${stAbsTime ? 'abs' : 'rel'}&skipWarmup=${stSkipWarmup}&seriesCount=6`}
+                alt="Предпросмотр стиля графиков"
+                className="max-w-full h-auto rounded-lg shadow-xs"
+              />
+            </div>
+          </div>
+        </div>
       </Modal>
     </div>
   );

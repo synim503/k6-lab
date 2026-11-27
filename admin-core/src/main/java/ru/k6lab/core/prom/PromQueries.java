@@ -133,6 +133,12 @@ public final class PromQueries {
         return "sum by (scenario) (increase(" + selector(n.dropped(), runId, null) + "[" + range(rangeSec) + "]))";
     }
 
+    /** Мгновенная скорость роста dropped_iterations (ит/с) в моменте по операциям за короткое окно. */
+    public static String droppedRatePerSec(Names n, long runId, long rangeSec) {
+        long r = Math.max(1, rangeSec);
+        return "sum by (scenario) (increase(" + selector(n.dropped(), runId, null) + "[" + range(r) + "])) / " + r;
+    }
+
     /** Суммарные VU run (метрика vus без разбивки по scenario). */
     public static String totalVus(Names n, long runId) {
         return "sum(" + selector(n.vus(), runId, null) + ")";

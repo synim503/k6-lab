@@ -72,7 +72,13 @@ public class RunMonitor {
     /** Строка live-таблицы по операции. */
     public record LiveRow(String operation, double targetRatePerSec, Double actualRatePerSec, Double percentileMs,
                           int slaPercentile, double slaThresholdMs, Double errorPct, double maxErrorPct, Double dropped,
-                          boolean violation, List<String> reasons, Double iterationPercentileMs) {
+                          boolean violation, List<String> reasons, Double iterationPercentileMs, Double droppedPerSec) {
+        public LiveRow(String operation, double targetRatePerSec, Double actualRatePerSec, Double percentileMs,
+                       int slaPercentile, double slaThresholdMs, Double errorPct, double maxErrorPct, Double dropped,
+                       boolean violation, List<String> reasons, Double iterationPercentileMs) {
+            this(operation, targetRatePerSec, actualRatePerSec, percentileMs, slaPercentile, slaThresholdMs,
+                    errorPct, maxErrorPct, dropped, violation, reasons, iterationPercentileMs, null);
+        }
     }
 
     private final RunService runService;
@@ -282,6 +288,7 @@ public class RunMonitor {
             putD(o, "err", r.errorPct());
             o.put("maxErr", r.maxErrorPct());
             putD(o, "dropped", r.dropped());
+            putD(o, "droppedPerSec", r.droppedPerSec());
             o.put("violation", r.violation());
             ArrayNode rs = o.putArray("reasons");
             r.reasons().forEach(rs::add);
@@ -332,7 +339,7 @@ public class RunMonitor {
                 List<LiveRow> evalRows = w == window ? rows : liveRows(snap, current, current.getLevelPct(), run.getId(), w, now, p, run.getK6Config(), run.getPlannedStartAt(), false);
                 for (LiveRow r : evalRows) {
                     samples.add(new StopCriteriaEvaluator.Sample(r.operation(), r.percentileMs(), r.slaThresholdMs(), r.errorPct(),
-                            r.maxErrorPct(), r.actualRatePerSec(), r.targetRatePerSec(), r.dropped()));
+                            r.maxErrorPct(), r.actualRatePerSec(), r.targetRatePerSec(), r.dropped(), r.droppedPerSec()));
                 }
             }
             List<StopCriteriaEvaluator.CustomSample> customSamples = new ArrayList<>();
@@ -460,7 +467,10 @@ public class RunMonitor {
             iterPct.put(q, byScenario(prom.query(p, PromQueries.iterationPercentileMs(n, q, runId, windowSec), at)));
         }
         Map<String, Double> rate = byScenario(prom.query(p, PromQueries.ratePerSec(n, runId, windowSec), at));
-        Map<String, Double> dropped = byScenario(prom.query(p, PromQueries.dropped(n, runId, windowSec), at));
+        // В live-режиме (average=false) дроп операций оцениваем в моменте за короткий тик minWindowSec(), а не накопительно за минуту
+        long dropWin = average ? windowSec : Math.max(1L, Math.min(windowSec, minWindowSec()));
+        Map<String, Double> dropped = byScenario(prom.query(p, PromQueries.dropped(n, runId, dropWin), at));
+        Map<String, Double> droppedRate = byScenario(prom.query(p, PromQueries.droppedRatePerSec(n, runId, dropWin), at));
         Map<String, Double> errHelper = helper ? byScenario(prom.query(p, PromQueries.errorPct(n, PromQueries.FailureSource.HELPER, runId, windowSec), at)) : Map.of();
         Map<String, Double> errHttp = Map.of();
         Map<String, Double> errChecks = Map.of();
@@ -502,6 +512,7 @@ public class RunMonitor {
             Double p95 = pct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name());
             Double err = (helper ? errHelper : "CHECKS".equals(o.failureSource()) ? errChecks : errHttp).get(o.name());
             Double drop = dropped.get(o.name());
+            Double dropPerSec = droppedRate.get(o.name());
             List<String> reasons = new ArrayList<>();
             if (!warm) {
                 if (p95 != null && p95 > o.slaThresholdMs()) {
@@ -513,12 +524,13 @@ public class RunMonitor {
                 if (actual != null && target > 0 && levelOrNull != null && steady && actual < target * criteria.minRatePct() / 100.0) {
                     reasons.add(String.format(java.util.Locale.ROOT, "интенсивность < %.0f%% цели", criteria.minRatePct()));
                 }
-                if (drop != null && drop > criteria.maxDropped()) {
-                    reasons.add("dropped_iterations");
+                double allowedDropRate = target > 0 && criteria.maxDropped() > 0 ? criteria.maxDropped() / Math.max(1.0, dropWin) : criteria.maxDropped();
+                if (dropPerSec != null && dropPerSec > Math.max(0.0, allowedDropRate)) {
+                    reasons.add("дроп операций");
                 }
             }
             rows.add(new LiveRow(o.name(), target, actual, p95, o.slaPercentile(), o.slaThresholdMs(), err, o.maxErrorPct(), drop,
-                    !reasons.isEmpty(), reasons, iterPct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name())));
+                    !reasons.isEmpty(), reasons, iterPct.getOrDefault(o.slaPercentile(), Map.of()).get(o.name()), dropPerSec));
         }
         return rows;
     }

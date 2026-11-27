@@ -198,6 +198,24 @@ public class PrometheusClient {
         return out;
     }
 
+    /** Список имён меток Prometheus (опционально для конкретной метрики). */
+    public List<String> labelNames(SettingsService.Prometheus p, String metric) throws IOException {
+        String q = (metric != null && !metric.isBlank() && metric.matches("^[a-zA-Z_:][a-zA-Z0-9_:]*$"))
+                ? "match[]=" + enc("{" + "__name__=\"" + metric.trim() + "\"}")
+                : "";
+        JsonNode data = call(p, "/api/v1/labels", q);
+        List<String> out = new ArrayList<>();
+        if (data.isArray()) {
+            for (JsonNode n : data) {
+                String s = n.asText("");
+                if (!s.isEmpty() && !"__name__".equals(s)) {
+                    out.add(s);
+                }
+            }
+        }
+        return out;
+    }
+
     /** Доступность и права: тривиальный запрос. */
     public void ping(SettingsService.Prometheus p) throws IOException {
         call(p, "/api/v1/query", "query=1");

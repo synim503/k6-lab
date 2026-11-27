@@ -23,6 +23,7 @@ import ru.k6lab.server.load.ProfileImportService;
 import ru.k6lab.server.load.RunPlan;
 import ru.k6lab.server.load.RunPlanner;
 import ru.k6lab.server.result.ChartTemplateStore;
+import ru.k6lab.server.result.ChartVariableStore;
 import ru.k6lab.server.schedule.ScheduledRunService;
 import ru.k6lab.server.script.AdminHelper;
 import ru.k6lab.server.script.K6Tool;
@@ -64,12 +65,13 @@ public class LoadApiController {
     private final ProfileImportService profileImport;
     private final ScheduledRunService scheduledRuns;
     private final ChartTemplateStore chartTemplates;
+    private final ChartVariableStore chartVariables;
 
     public LoadApiController(ScriptService scripts, GitRepoService gitRepos, LoadService load,
                              RunPlanner planner, SecretService secrets, K6Tool k6,
                              AdminHelper helper, LoadProfileStore profiles,
                              ProfileImportService profileImport, ScheduledRunService scheduledRuns,
-                             ChartTemplateStore chartTemplates) {
+                             ChartTemplateStore chartTemplates, ChartVariableStore chartVariables) {
         this.scripts = scripts;
         this.gitRepos = gitRepos;
         this.load = load;
@@ -81,6 +83,7 @@ public class LoadApiController {
         this.profileImport = profileImport;
         this.scheduledRuns = scheduledRuns;
         this.chartTemplates = chartTemplates;
+        this.chartVariables = chartVariables;
     }
 
     public record SaveLoadPayload(LoadForm form, Map<String, String> env, String baseWarmupDuration,
@@ -88,14 +91,20 @@ public class LoadApiController {
                                   Boolean baseOverrideWarmup, Boolean baseOverrideData, Boolean baseOverrideGenerators) {
     }
 
-    public record SaveProfilePayload(String profileName, Long profileId, LoadForm form, Map<String, String> env,
+    public record SaveProfilePayload(String profileName, String folder, Long profileId, LoadForm form, Map<String, String> env,
                                      String baseWarmupDuration) {
     }
 
     public record IdsPayload(List<Long> ids) {
     }
 
-    public record RenamePayload(String name) {
+    public record MoveFolderPayload(List<Long> ids, String folder) {
+    }
+
+    public record RenameFolderPayload(String oldFolder, String newFolder) {
+    }
+
+    public record RenamePayload(String name, String folder) {
     }
 
     public record ConfigPayload(String config) {
@@ -176,7 +185,8 @@ public class LoadApiController {
             throw new IllegalArgumentException("В профиле нет включённых операций");
         }
         load.build(id, f);
-        var saved = profiles.save(id, name, LoadJson.toJson(f), user != null ? user.getName() : "system");
+        String who = user != null ? user.getName() : "system";
+        var saved = profiles.save(id, name, req.folder(), LoadJson.toJson(f), who);
         Script s = scripts.get(id);
         int gens = Math.max(1, f.getGeneratorCount() != null ? f.getGeneratorCount() : s.getGeneratorCount());
         Map<String, Object> state = buildLoadState(s, f, gens, saved.id(), name);
@@ -190,26 +200,44 @@ public class LoadApiController {
     @PostMapping("/profile/{pid}/delete")
     public Map<String, Object> deleteProfile(@PathVariable Long id, @PathVariable Long pid) {
         profiles.delete(id, pid);
-        return Map.of("ok", true, "profiles", serializeProfiles(profiles.list(id)));
+        return Map.of("ok", true, "profiles", serializeProfiles(id, profiles.list(id)));
     }
 
     @PostMapping("/profiles/bulk-delete")
     public Map<String, Object> bulkDeleteProfiles(@PathVariable Long id, @RequestBody IdsPayload req) {
         int deleted = profiles.deleteMany(id, req.ids());
-        return Map.of("ok", true, "deleted", deleted, "profiles", serializeProfiles(profiles.list(id)));
+        return Map.of("ok", true, "deleted", deleted, "profiles", serializeProfiles(id, profiles.list(id)));
+    }
+
+    @PostMapping("/profiles/move-folder")
+    public Map<String, Object> moveProfilesToFolder(@PathVariable Long id, @RequestBody MoveFolderPayload req, Principal user) {
+        int moved = profiles.moveToFolder(id, req.ids(), req.folder(), user != null ? user.getName() : "system");
+        return Map.of("ok", true, "moved", moved, "profiles", serializeProfiles(id, profiles.list(id)));
+    }
+
+    @PostMapping("/profiles/rename-folder")
+    public Map<String, Object> renameProfileFolder(@PathVariable Long id, @RequestBody RenameFolderPayload req, Principal user) {
+        int updated = profiles.renameFolder(id, req.oldFolder(), req.newFolder(), user != null ? user.getName() : "system");
+        return Map.of("ok", true, "updated", updated, "profiles", serializeProfiles(id, profiles.list(id)));
     }
 
     @PostMapping("/profile/{pid}/duplicate")
     public Map<String, Object> duplicateProfile(@PathVariable Long id, @PathVariable Long pid, Principal user) {
         var copy = profiles.duplicate(id, pid, user != null ? user.getName() : "system");
-        return Map.of("ok", true, "profileId", copy.id(), "profileName", copy.name(), "profiles", serializeProfiles(profiles.list(id)));
+        return Map.of("ok", true, "profileId", copy.id(), "profileName", copy.name(), "profiles", serializeProfiles(id, profiles.list(id)));
     }
 
     @PostMapping("/profile/{pid}/rename")
     public Map<String, Object> renameProfile(@PathVariable Long id, @PathVariable Long pid,
                                              @RequestBody RenamePayload req, Principal user) {
-        var upd = profiles.rename(id, pid, req.name(), user != null ? user.getName() : "system");
-        return Map.of("ok", true, "profileId", upd.id(), "profileName", upd.name(), "profiles", serializeProfiles(profiles.list(id)));
+        String who = user != null ? user.getName() : "system";
+        var upd = profiles.rename(id, pid, req.name(), who);
+        if (req.folder() != null) {
+            profiles.moveToFolder(id, List.of(pid), req.folder(), who);
+            upd = profiles.find(id, pid).orElse(upd);
+        }
+        return Map.of("ok", true, "profileId", upd.id(), "profileName", upd.name(), "folder", upd.folder(),
+                "profiles", serializeProfiles(id, profiles.list(id)));
     }
 
     @PostMapping("/profiles/import")
@@ -242,7 +270,7 @@ public class LoadApiController {
                 "importedCount", done.size(),
                 "scheduledCount", scheduledCount,
                 "message", msg,
-                "profiles", serializeProfiles(profiles.list(id))
+                "profiles", serializeProfiles(id, profiles.list(id))
         );
     }
 
@@ -381,10 +409,21 @@ public class LoadApiController {
             }
         });
 
+        String loadedFolder = "";
+        if (loadedProfileId != null) {
+            for (var p : profList) {
+                if (p.id() == loadedProfileId) {
+                    loadedFolder = p.folder() != null ? p.folder() : "";
+                    break;
+                }
+            }
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("script", ScriptApiController.toScriptDto(s, s.getGitRepoId() != null ? safeRepo(s.getGitRepoId()) : null));
         out.put("loadedProfileId", loadedProfileId);
         out.put("loadedProfileName", loadedProfileName);
+        out.put("loadedProfileFolder", loadedFolder);
         out.put("baseDefined", baseDefined);
         out.put("hasReadyProfile", hasReadyProfile);
         out.put("basePushDefaults", Map.of(
@@ -398,9 +437,10 @@ public class LoadApiController {
         out.put("form", f);
         out.put("env", LoadForm.parseKv(f.getEnvText()));
         out.put("baseWarmupDuration", f.getBaseWarmupDuration());
-        out.put("profiles", serializeProfiles(profList));
+        out.put("profiles", serializeProfiles(id, profList));
         out.put("secretNames", secrets.list().stream().map(Secret::getName).toList());
         out.put("scriptCharts", chartTemplates.list(id));
+        out.put("chartVariables", chartVariables.list(id));
         out.put("staleOps", load.staleOperations(id).stream().map(LoadOperation::getName).toList());
         out.put("operationNames", scripts.latest(id).map(v -> v.operationNames()).orElse(List.of()));
         out.put("plan", Map.of(
@@ -416,14 +456,19 @@ public class LoadApiController {
         return out;
     }
 
-    private List<Map<String, Object>> serializeProfiles(List<LoadProfileStore.Profile> list) {
+    private List<Map<String, Object>> serializeProfiles(Long scriptId, List<LoadProfileStore.Profile> list) {
+        Map<Long, LoadProfileStore.ProfileRunStats> stats = profiles.runStatsByProfile(scriptId);
         List<Map<String, Object>> out = new ArrayList<>(list.size());
         for (var p : list) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", p.id());
             m.put("name", p.name());
+            m.put("folder", p.folder() != null ? p.folder() : "");
             m.put("updatedAt", p.updatedAt());
             m.put("updatedBy", p.updatedBy());
+            var st = stats.get(p.id());
+            m.put("lastRunAt", st != null ? st.lastRunAt() : null);
+            m.put("runCount", st != null ? st.runCount() : 0L);
             try {
                 m.put("data", MAPPER.readTree(p.data()));
             } catch (IOException e) {

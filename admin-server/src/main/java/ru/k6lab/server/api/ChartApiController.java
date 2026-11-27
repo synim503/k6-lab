@@ -86,6 +86,11 @@ public class ChartApiController {
         csDto.put("legend", cs.legend().name());
         csDto.put("stats", cs.stats());
         csDto.put("maxLegend", cs.maxLegend());
+        csDto.put("autoWidth", cs.autoWidth());
+        csDto.put("sortBy", cs.sortBy().name());
+        csDto.put("sortDir", cs.sortDir().name());
+        csDto.put("absoluteTime", chartStyle.absoluteTime());
+        csDto.put("skipWarmup", chartStyle.skipWarmup());
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("script", ScriptApiController.toScriptDto(s, s.getGitRepoId() != null ? safeRepo(s.getGitRepoId()) : null));

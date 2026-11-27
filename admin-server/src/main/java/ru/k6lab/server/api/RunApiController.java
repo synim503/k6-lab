@@ -69,6 +69,7 @@ public class RunApiController {
     private final LoadProfileStore profileStore;
     private final StepResultService results;
     private final CustomChartService customCharts;
+    private final ru.k6lab.server.result.ReportService reports;
     private final ru.k6lab.server.settings.SettingsService settings;
 
     public RunApiController(RunService runs, RunViewService runViews, RunOrchestrator orchestrator,
@@ -77,6 +78,7 @@ public class RunApiController {
                             ScheduledRunService schedule, LoadService load,
                             LoadProfileStore profileStore, StepResultService results,
                             CustomChartService customCharts,
+                            ru.k6lab.server.result.ReportService reports,
                             ru.k6lab.server.settings.SettingsService settings) {
         this.runs = runs;
         this.runViews = runViews;
@@ -91,6 +93,7 @@ public class RunApiController {
         this.profileStore = profileStore;
         this.results = results;
         this.customCharts = customCharts;
+        this.reports = reports;
         this.settings = settings;
     }
 
@@ -106,7 +109,7 @@ public class RunApiController {
     public record ControlPayload(String action, Integer vus) {
     }
 
-    public record ConclusionPayload(String conclusion, String comment) {
+    public record ConclusionPayload(String conclusion, String comment, Map<String, Object> reportConfig) {
     }
 
     @GetMapping("/scripts/{id}/run-init")
@@ -154,7 +157,11 @@ public class RunApiController {
         out.put("selectedProfileId", selected);
         out.put("autoSelectedProfile", autoSelected);
         out.put("blockReason", runs.blockReason().orElse(null));
-        out.put("profiles", profList.stream().map(p -> Map.of("id", p.id(), "name", p.name())).toList());
+        out.put("profiles", profList.stream().map(p -> Map.of(
+                "id", p.id(),
+                "name", p.name(),
+                "folder", p.folder() != null ? p.folder() : ""
+        )).toList());
         out.put("profileDetails", detailsByProfile);
         out.put("pendingScheduleCount", schedule.pendingOf(id).size());
         out.put("generators", allGens.stream().map(g -> {
@@ -384,7 +391,11 @@ public class RunApiController {
     @GetMapping("/runs/{id}/results")
     public Map<String, Object> runResults(@PathVariable Long id,
                                           @RequestParam(defaultValue = "false") boolean refresh,
-                                          @RequestParam(defaultValue = "false") boolean skipWarmup) {
+                                          @RequestParam(required = false) Boolean skipWarmup,
+                                          @RequestParam(required = false) String warmup,
+                                          @RequestParam(required = false) String time,
+                                          @RequestParam(required = false) String sort,
+                                          @RequestParam(required = false) String dir) {
         Run run = runs.get(id);
         boolean terminal = run.getStatus().isTerminal();
         boolean livePreview = !terminal && (run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.STOPPING);
@@ -398,12 +409,25 @@ public class RunApiController {
         }
 
         RunSnapshot snap = runs.snapshot(run);
-        long warmSec = snap.warmup() != null ? snap.warmup().sec() : 0L;
-        List<Map<String, String>> charts = List.of();
+        long warmSec = ru.k6lab.server.result.ReportService.warmupSec(snap);
+        Boolean effAbs = time == null || time.isBlank() ? null
+                : ("abs".equalsIgnoreCase(time.trim()) ? Boolean.TRUE : ("rel".equalsIgnoreCase(time.trim()) ? Boolean.FALSE : null));
+        Boolean effSkip = parseWarmupParam(warmup, skipWarmup);
+        ru.k6lab.server.result.ChartStyle.SortBy effSort = parseSortByParam(sort);
+        ru.k6lab.server.result.ChartStyle.SortDir effDir = parseSortDirParam(dir);
+
+        List<Map<String, Object>> charts = List.of();
         if (data != null && data.prometheusOk()) {
             try {
-                List<ChartRenderer.Img> imgs = customCharts.charts(run, warmSec, skipWarmup);
-                charts = imgs.stream().map(im -> Map.of("title", im.title(), "dataUri", im.dataUri())).toList();
+                var imgs = reports.allChartsForEditor(run, snap, data, effAbs, effSort, effDir, effSkip);
+                charts = imgs.stream().map(im -> {
+                    Map<String, Object> cm = new LinkedHashMap<>();
+                    cm.put("category", im.category());
+                    cm.put("title", im.title());
+                    cm.put("dataUri", im.dataUri());
+                    cm.put("included", im.included());
+                    return cm;
+                }).toList();
             } catch (RuntimeException ignored) {
             }
         }
@@ -426,6 +450,9 @@ public class RunApiController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("terminal", terminal);
         out.put("livePreview", livePreview);
+        out.put("defaultTitle", ru.k6lab.server.result.ReportService.defaultTitle(run));
+        out.put("reportConfig", ru.k6lab.server.result.ReportConfig.fromRun(run).toMap());
+        out.put("warmupSec", warmSec);
         out.put("conclusions", CONCLUSIONS);
         out.put("conclusion", run.getConclusion());
         out.put("conclusionComment", run.getConclusionComment());
@@ -437,8 +464,41 @@ public class RunApiController {
 
     @PostMapping("/runs/{id}/conclusion")
     public Map<String, Object> saveConclusion(@PathVariable Long id, @RequestBody ConclusionPayload req) {
-        runs.setConclusion(id, req.conclusion(), req.comment());
-        return Map.of("ok", true);
+        runs.setReportDetails(id, req.conclusion(), req.comment(), req.reportConfig());
+        return Map.of("ok", true, "reportConfig", ru.k6lab.server.result.ReportConfig.fromRun(runs.get(id)).toMap());
+    }
+
+    @PostMapping("/runs/{id}/report-config")
+    public Map<String, Object> saveReportConfig(@PathVariable Long id, @RequestBody Map<String, Object> req) {
+        runs.setReportConfigOnly(id, req);
+        return Map.of("ok", true, "reportConfig", ru.k6lab.server.result.ReportConfig.fromRun(runs.get(id)).toMap());
+    }
+
+    private static Boolean parseWarmupParam(String warmup, Boolean legacySkipWarmup) {
+        if (warmup != null && !warmup.isBlank()) {
+            String v = warmup.trim().toLowerCase(java.util.Locale.ROOT);
+            if ("skip".equals(v) || "after".equals(v) || "true".equals(v) || "1".equals(v)) return Boolean.TRUE;
+            if ("include".equals(v) || "all".equals(v) || "false".equals(v) || "0".equals(v)) return Boolean.FALSE;
+        }
+        return legacySkipWarmup;
+    }
+
+    private static ru.k6lab.server.result.ChartStyle.SortBy parseSortByParam(String s) {
+        if (s == null || s.isBlank()) return null;
+        try {
+            return ru.k6lab.server.result.ChartStyle.SortBy.valueOf(s.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static ru.k6lab.server.result.ChartStyle.SortDir parseSortDirParam(String s) {
+        if (s == null || s.isBlank()) return null;
+        try {
+            return ru.k6lab.server.result.ChartStyle.SortDir.valueOf(s.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private static Map<String, Object> summaryOf(String title, RunPlan p, Map<String, String> env, List<String> opNames) {

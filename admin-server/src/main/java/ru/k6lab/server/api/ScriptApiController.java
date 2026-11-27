@@ -146,6 +146,38 @@ public class ScriptApiController {
                 .toList();
 
         var profList = profiles.list(id);
+        var profStats = profiles.runStatsByProfile(id);
+        List<Map<String, Object>> profDtos = profList.stream().map(p -> {
+            var st = profStats.get(p.id());
+            Map<String, Object> pm = new LinkedHashMap<>();
+            pm.put("id", p.id());
+            pm.put("name", p.name());
+            pm.put("folder", p.folder() != null ? p.folder() : "");
+            pm.put("updatedAt", p.updatedAt() != null ? p.updatedAt().toString() : "");
+            pm.put("updatedBy", p.updatedBy() != null ? p.updatedBy() : "");
+            pm.put("lastRunAt", st != null && st.lastRunAt() != null ? st.lastRunAt().toString() : null);
+            pm.put("runCount", st != null ? st.runCount() : 0L);
+            return pm;
+        }).toList();
+        List<Map<String, Object>> recentProfiles = profList.stream()
+                .filter(p -> {
+                    var st = profStats.get(p.id());
+                    return st != null && st.lastRunAt() != null;
+                })
+                .sorted((a, b) -> profStats.get(b.id()).lastRunAt().compareTo(profStats.get(a.id()).lastRunAt()))
+                .limit(5)
+                .map(p -> {
+                    var st = profStats.get(p.id());
+                    Map<String, Object> pm = new LinkedHashMap<>();
+                    pm.put("id", p.id());
+                    pm.put("name", p.name());
+                    pm.put("folder", p.folder() != null ? p.folder() : "");
+                    pm.put("lastRunAt", st.lastRunAt().toString());
+                    pm.put("runCount", st.runCount());
+                    return pm;
+                })
+                .toList();
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("script", toScriptDto(s, repo));
         out.put("latestVersion", latest != null ? toVersionDto(latest, scripts.hasFiles(latest)) : null);
@@ -153,12 +185,8 @@ public class ScriptApiController {
         out.put("missingFiles", vers.stream().filter(v -> !scripts.hasFiles(v)).map(ScriptVersion::getId).toList());
         out.put("loadDefined", load.isDefined(id));
         out.put("profilesCount", profList.size());
-        out.put("profiles", profList.stream().map(p -> Map.of(
-                "id", p.id(),
-                "name", p.name(),
-                "updatedAt", p.updatedAt() != null ? p.updatedAt().toString() : "",
-                "updatedBy", p.updatedBy() != null ? p.updatedBy() : ""
-        )).toList());
+        out.put("profiles", profDtos);
+        out.put("recentProfiles", recentProfiles);
         out.put("activeOperations", load.activeOperations(id).stream().map(op -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("name", op.getName());

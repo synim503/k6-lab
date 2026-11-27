@@ -99,20 +99,22 @@ public class GitClient {
         try {
             Path dir = cacheDir(repoId);
             boolean exists = Files.isDirectory(dir.resolve("objects"));
+            String effectiveUrl = applyDefaultSshUser(url, auth);
+            String logicalHost = extractLogicalHost(effectiveUrl);
             try {
                 if (!exists) {
                     Files.createDirectories(dir);
-                    var clone = Git.cloneRepository().setURI(url).setBare(true).setDirectory(dir.toFile())
+                    var clone = Git.cloneRepository().setURI(effectiveUrl).setBare(true).setDirectory(dir.toFile())
                             .setTimeout(TRANSPORT_TIMEOUT_SEC);
-                    sshHandle = configure(clone, auth);
+                    sshHandle = configure(clone, auth, logicalHost);
                     clone.call().close();
                 } else {
                     try (Git git = Git.open(dir.toFile())) {
-                        var fetch = git.fetch().setRemote(url)
+                        var fetch = git.fetch().setRemote(effectiveUrl)
                                 .setRefSpecs("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
                                 .setRemoveDeletedRefs(true)
                                 .setTimeout(TRANSPORT_TIMEOUT_SEC);
-                        sshHandle = configure(fetch, auth);
+                        sshHandle = configure(fetch, auth, logicalHost);
                         fetch.call();
                     }
                 }
@@ -120,7 +122,18 @@ public class GitClient {
                 if (!exists) {
                     deleteQuietly(dir);
                 }
+                if (sshHandle != null && sshHandle.problem().get() != null) {
+                    throw sshHandle.problem().get();
+                }
                 throw unwrap(e);
+            } catch (RuntimeException e) {
+                if (!exists) {
+                    deleteQuietly(dir);
+                }
+                if (sshHandle != null && sshHandle.problem().get() != null) {
+                    throw sshHandle.problem().get();
+                }
+                throw e;
             }
         } finally {
             if (sshHandle != null) {
@@ -285,7 +298,8 @@ public class GitClient {
 
     // ------------------------------------------------------------------ авторизация
 
-    private record SshHandle(SshdSessionFactory factory, Path home) implements AutoCloseable {
+    private record SshHandle(SshdSessionFactory factory, Path home,
+                             java.util.concurrent.atomic.AtomicReference<GitHostKeyException> problem) implements AutoCloseable {
         @Override
         public void close() {
             try {
@@ -297,7 +311,55 @@ public class GitClient {
         }
     }
 
-    private SshHandle configure(TransportCommand<?, ?> cmd, Auth auth) throws IOException {
+    private static String applyDefaultSshUser(String url, Auth auth) {
+        if (url == null || auth == null || auth.ssh() == null) {
+            return url;
+        }
+        String defUser = auth.ssh().username();
+        if (defUser == null || defUser.isBlank() || !url.startsWith("ssh://")) {
+            return url;
+        }
+        try {
+            org.eclipse.jgit.transport.URIish u = new org.eclipse.jgit.transport.URIish(url);
+            if (u.getUser() == null || u.getUser().isBlank()) {
+                return u.setUser(defUser.trim()).toString();
+            }
+        } catch (Exception ignored) {
+            // оставляем исходный URL
+        }
+        return url;
+    }
+
+    private static String extractLogicalHost(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        try {
+            org.eclipse.jgit.transport.URIish u = new org.eclipse.jgit.transport.URIish(url);
+            if (u.getHost() != null && !u.getHost().isBlank()) {
+                return u.getHost().trim();
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    static String resolveHostName(String logicalHost, String connectAddress, InetSocketAddress remote) {
+        if (logicalHost != null && !logicalHost.isBlank()) {
+            return logicalHost;
+        }
+        if (connectAddress != null && !connectAddress.isBlank()) {
+            String ca = connectAddress.trim();
+            if (ca.startsWith("[") && ca.contains("]")) {
+                return ca.substring(1, ca.indexOf(']'));
+            }
+            int colon = ca.indexOf(':');
+            return colon > 0 ? ca.substring(0, colon) : ca;
+        }
+        return remote.getHostString();
+    }
+
+    private SshHandle configure(TransportCommand<?, ?> cmd, Auth auth, String logicalHost) throws IOException {
         if (auth.token() != null && !auth.token().isBlank()) {
             String t = auth.token();
             String user = "token";
@@ -310,7 +372,7 @@ public class GitClient {
             cmd.setCredentialsProvider(new UsernamePasswordCredentialsProvider(user, pass));
         }
         if (auth.ssh() != null) {
-            SshHandle handle = sshFactory(auth.ssh());
+            SshHandle handle = sshFactory(auth.ssh(), logicalHost);
             cmd.setTransportConfigCallback(t -> {
                 if (t instanceof SshTransport st) {
                     st.setSshSessionFactory(handle.factory());
@@ -321,8 +383,9 @@ public class GitClient {
         return null;
     }
 
-    private SshHandle sshFactory(ResolvedCredential cred) throws IOException {
+    private SshHandle sshFactory(ResolvedCredential cred, String logicalHost) throws IOException {
         Path home = Files.createTempDirectory("k6lab-git-ssh");
+        var problem = new java.util.concurrent.atomic.AtomicReference<GitHostKeyException>();
         try {
             List<KeyPair> keys = new ArrayList<>();
             if (cred.authType() == ru.k6lab.server.ssh.SshCredential.AuthType.KEY) {
@@ -342,10 +405,10 @@ public class GitClient {
                     .setHomeDirectory(home.toFile())
                     .setSshDirectory(home.toFile())
                     .setDefaultKeysProvider(f -> keys)
-                    .setServerKeyDatabase((h, s) -> new DbServerKeyDatabase())
+                    .setServerKeyDatabase((h, s) -> new DbServerKeyDatabase(problem, logicalHost))
                     .setConfigStoreFactory((h, c, u) -> null)
                     .build(null);
-            return new SshHandle(factory, home);
+            return new SshHandle(factory, home, problem);
         } catch (IOException | RuntimeException e) {
             deleteQuietly(home);
             throw e;
@@ -354,6 +417,14 @@ public class GitClient {
 
     /** Проверка ключа SSH-хоста Git по таблице known_host (та же, что для генераторов). */
     private final class DbServerKeyDatabase implements ServerKeyDatabase {
+        private final java.util.concurrent.atomic.AtomicReference<GitHostKeyException> problem;
+        private final String logicalHost;
+
+        private DbServerKeyDatabase(java.util.concurrent.atomic.AtomicReference<GitHostKeyException> problem, String logicalHost) {
+            this.problem = problem;
+            this.logicalHost = logicalHost;
+        }
+
         @Override
         public List<PublicKey> lookup(String connectAddress, InetSocketAddress remote, Configuration config) {
             return List.of();
@@ -362,19 +433,22 @@ public class GitClient {
         @Override
         public boolean accept(String connectAddress, InetSocketAddress remote, PublicKey serverKey, Configuration config,
                               CredentialsProvider provider) {
-            String host = remote.getHostString();
+            String host = resolveHostName(logicalHost, connectAddress, remote);
             int port = remote.getPort();
             String fp = KeyUtils.getFingerPrint(serverKey);
+            String keyType = KeyUtils.getKeyType(serverKey);
+            String pubKey = PublicKeyEntry.toString(serverKey);
             var known = knownHosts.find(host, port);
             if (known.isPresent()) {
                 if (known.get().getFingerprintSha256().equals(fp)) {
                     return true;
                 }
-                throw new GitHostKeyException(new SshExceptions.HostKeyMismatch(host, port,
-                        known.get().getFingerprintSha256(), fp));
+                problem.set(new GitHostKeyException(new SshExceptions.HostKeyMismatch(host, port, keyType,
+                        known.get().getFingerprintSha256(), fp, pubKey)));
+                return false;
             }
-            throw new GitHostKeyException(new SshExceptions.HostKeyUnconfirmed(host, port, KeyUtils.getKeyType(serverKey), fp,
-                    PublicKeyEntry.toString(serverKey)));
+            problem.set(new GitHostKeyException(new SshExceptions.HostKeyUnconfirmed(host, port, keyType, fp, pubKey)));
+            return false;
         }
     }
 

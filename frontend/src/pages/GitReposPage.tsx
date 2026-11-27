@@ -16,6 +16,7 @@ export function GitReposPage() {
   const [editModal, setEditModal] = useState<any | null>(null);
   const [refsModal, setRefsModal] = useState<{ repo: any; refs: any[] } | null>(null);
   const [hostKeyPrompt, setHostKeyPrompt] = useState<any | null>(null);
+  const [confirmingKey, setConfirmingKey] = useState(false);
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
 
   const { data, isLoading } = useQuery({
@@ -23,12 +24,36 @@ export function GitReposPage() {
     queryFn: () => apiFetch('/api/v1/git-repos'),
   });
 
+  const handleRefresh = async (repo: any, silentSuccessModal = false) => {
+    setRefreshingId(repo.id);
+    try {
+      const res = await apiFetch(`/api/v1/git-repos/${repo.id}/refresh`, { method: 'POST' });
+      qc.invalidateQueries({ queryKey: ['git-repos'] });
+      if (!silentSuccessModal) {
+        setRefsModal({ repo, refs: res.refs || [] });
+      } else {
+        toast.success(`Доступ к «${repo.name}» проверен: веток и тегов ${res.refs?.length || 0}`);
+      }
+    } catch (err: any) {
+      if (err?.data?.hostKeyRequired) {
+        setHostKeyPrompt(err.data);
+      } else {
+        toast.error(err.message);
+      }
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+
   const saveMut = useMutation({
     mutationFn: (payload: any) => apiFetch('/api/v1/git-repos', { method: 'POST', body: payload }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       setEditModal(null);
       qc.invalidateQueries({ queryKey: ['git-repos'] });
-      toast.success('Репозиторий сохранён');
+      toast.success('Репозиторий сохранён — проверяем подключение…');
+      if (res?.repo) {
+        void handleRefresh(res.repo, true);
+      }
     },
     onError: (err: any) => toast.error(err.message),
   });
@@ -41,23 +66,6 @@ export function GitReposPage() {
     },
     onError: (err: any) => toast.error(err.message),
   });
-
-  const handleRefresh = async (repo: any) => {
-    setRefreshingId(repo.id);
-    try {
-      const res = await apiFetch(`/api/v1/git-repos/${repo.id}/refresh`, { method: 'POST' });
-      qc.invalidateQueries({ queryKey: ['git-repos'] });
-      setRefsModal({ repo, refs: res.refs || [] });
-    } catch (err: any) {
-      if (err?.data?.hostKeyRequired) {
-        setHostKeyPrompt(err.data);
-      } else {
-        toast.error(err.message);
-      }
-    } finally {
-      setRefreshingId(null);
-    }
-  };
 
   if (isLoading) return <Spinner label="Загрузка Git-репозиториев…" />;
 
@@ -308,7 +316,7 @@ export function GitReposPage() {
         title={
           <span className="flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-amber-500" />
-            Подтвердите SSH-ключ хоста
+            {hostKeyPrompt?.mismatch ? 'Ключ SSH-хоста изменился' : 'Подтвердите SSH-ключ хоста'}
           </span>
         }
         footer={
@@ -316,32 +324,66 @@ export function GitReposPage() {
             <Button variant="outline" size="sm" onClick={() => setHostKeyPrompt(null)}>
               Отмена
             </Button>
-            <Button
-              size="sm"
-              onClick={async () => {
-                try {
-                  await apiFetch('/api/v1/git-repos/confirm-host-key', { method: 'POST', body: hostKeyPrompt });
-                  setHostKeyPrompt(null);
-                  qc.invalidateQueries({ queryKey: ['git-repos'] });
-                  toast.success('Ключ подтверждён');
-                } catch (err: any) {
-                  toast.error(err.message);
-                }
-              }}
-            >
-              Подтвердить
-            </Button>
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant={hostKeyPrompt?.mismatch ? 'danger' : 'primary'}
+                loading={confirmingKey}
+                onClick={async () => {
+                  setConfirmingKey(true);
+                  try {
+                    const res = await apiFetch('/api/v1/git-repos/confirm-host-key', {
+                      method: 'POST',
+                      body: { ...hostKeyPrompt, replace: !!hostKeyPrompt.mismatch },
+                    });
+                    setHostKeyPrompt(null);
+                    qc.invalidateQueries({ queryKey: ['git-repos'] });
+                    if (res.refreshError) {
+                      toast.warning(`Ключ подтверждён, но не удалось загрузить ветки: ${res.refreshError}`);
+                    } else {
+                      toast.success(`Ключ хоста подтверждён (веток и тегов: ${res.refs?.length || 0})`);
+                    }
+                  } catch (err: any) {
+                    if (err?.data?.hostKeyRequired) {
+                      setHostKeyPrompt(err.data);
+                    } else {
+                      toast.error(err.message);
+                    }
+                  } finally {
+                    setConfirmingKey(false);
+                  }
+                }}
+              >
+                {hostKeyPrompt?.mismatch ? 'Заменить ключ и подключить' : 'Подтвердить и подключить'}
+              </Button>
+            )}
           </>
         }
       >
         {hostKeyPrompt && (
-          <div className="text-xs space-y-2 text-slate-700">
+          <div className="text-xs space-y-2.5 text-slate-700">
+            <p className="text-slate-600">
+              {hostKeyPrompt.mismatch
+                ? 'Сервер предъявил новый SSH-ключ, отличный от ранее сохранённого в known_hosts.'
+                : 'Первое подключение к Git-серверу по SSH. Проверьте отпечаток ключа и добавьте хост в доверенные:'}
+            </p>
             <div>
-              Хост: <code>{hostKeyPrompt.host}:{hostKeyPrompt.port}</code> ({hostKeyPrompt.keyType})
+              Хост: <code className="font-semibold text-slate-900">{hostKeyPrompt.host}:{hostKeyPrompt.port}</code>{' '}
+              {hostKeyPrompt.keyType && `(${hostKeyPrompt.keyType})`}
             </div>
+            {hostKeyPrompt.mismatch && hostKeyPrompt.expectedFingerprint && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                Прежний SHA-256: <code className="break-all">{hostKeyPrompt.expectedFingerprint}</code>
+              </div>
+            )}
             <div>
-              SHA-256: <code className="break-all bg-slate-100 px-1.5 py-0.5 rounded">{hostKeyPrompt.fingerprint}</code>
+              SHA-256: <code className="break-all bg-slate-100 px-1.5 py-0.5 rounded font-semibold">{hostKeyPrompt.fingerprint}</code>
             </div>
+            {!isAdmin && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                Подтвердить SSH-ключ хоста может только администратор.
+              </div>
+            )}
           </div>
         )}
       </Modal>

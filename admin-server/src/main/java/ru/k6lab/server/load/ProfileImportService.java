@@ -39,7 +39,7 @@ public class ProfileImportService {
         this.scripts = scripts;
     }
 
-    private record Ready(Script script, String name, String data) {
+    private record Ready(Script script, String name, String folder, String data) {
     }
 
     /** scriptId != null - профили этого скрипта (поле script в JSON не нужно); null - скрипт берётся из поля script каждого профиля. */
@@ -73,7 +73,7 @@ public class ProfileImportService {
         }
         List<Imported> out = new ArrayList<>();
         for (Ready r : ready) {
-            var saved = profiles.save(r.script().getId(), r.name(), r.data(), user);
+            var saved = profiles.save(r.script().getId(), r.name(), r.folder(), r.data(), user);
             out.add(new Imported(r.script().getId(), r.script().getName(), saved.id(), r.name(), saved.updated()));
         }
         return out;
@@ -86,6 +86,8 @@ public class ProfileImportService {
         ObjectNode cfg = obj.deepCopy();
         String name = cfg.path("name").asText("").strip();
         cfg.remove("name");
+        String folder = cfg.has("folder") ? LoadProfileStore.normalizeFolder(cfg.path("folder").asText("")) : null;
+        cfg.remove("folder");
         String scriptName = cfg.path("script").asText("").strip();
         cfg.remove("script");
         if (name.isEmpty() || name.length() > 120) {
@@ -118,7 +120,7 @@ public class ProfileImportService {
         } catch (IllegalArgumentException | IllegalStateException e) {
             throw new IllegalArgumentException("«" + name + "»: " + e.getMessage());
         }
-        return new Ready(script, name, LoadJson.toJson(LoadJson.fromJson(LoadJson.toJson(f))));
+        return new Ready(script, name, folder, LoadJson.toJson(LoadJson.fromJson(LoadJson.toJson(f))));
     }
 
     /**
@@ -146,6 +148,9 @@ public class ProfileImportService {
             for (var p : profiles.list(scriptId)) {
                 ObjectNode n = MAPPER.createObjectNode();
                 n.put("name", p.name());
+                if (p.folder() != null && !p.folder().isBlank()) {
+                    n.put("folder", p.folder());
+                }
                 JsonNode cfg = MAPPER.readTree(p.data());
                 cfg.fields().forEachRemaining(e -> n.set(e.getKey(), e.getValue()));
                 arr.add(n);

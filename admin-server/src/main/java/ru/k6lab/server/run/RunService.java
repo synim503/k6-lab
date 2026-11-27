@@ -414,11 +414,41 @@ public class RunService {
     }
 
     public void setConclusion(Long runId, String conclusion, String comment) {
+        setReportDetails(runId, conclusion, comment, null);
+    }
+
+    public void setReportDetails(Long runId, String conclusion, String comment, Map<String, Object> reportConfig) {
         update(runId, r -> {
-            r.setConclusion(conclusion == null || conclusion.isBlank() ? null : conclusion.trim());
-            r.setConclusionComment(comment == null || comment.isBlank() ? null : comment.trim());
+            if (conclusion != null) {
+                r.setConclusion(conclusion.isBlank() ? null : conclusion.strip());
+            } else if (reportConfig == null) {
+                r.setConclusion(null);
+            }
+            if (comment != null) {
+                r.setConclusionComment(comment.isBlank() ? null : comment.replace("\r\n", "\n").strip());
+            } else if (reportConfig == null) {
+                r.setConclusionComment(null);
+            }
+            if (reportConfig != null) {
+                Map<String, Object> reqCopy = r.getRequest() != null
+                        ? new LinkedHashMap<>(r.getRequest())
+                        : new LinkedHashMap<>();
+                reqCopy.put("reportConfig", ru.k6lab.server.result.ReportConfig.fromMap(reportConfig).toMap());
+                r.setRequest(reqCopy);
+            }
         });
         audit.record("run.conclusion", "run", runId, null);
+    }
+
+    public void setReportConfigOnly(Long runId, Map<String, Object> reportConfig) {
+        update(runId, r -> {
+            Map<String, Object> reqCopy = r.getRequest() != null
+                    ? new LinkedHashMap<>(r.getRequest())
+                    : new LinkedHashMap<>();
+            reqCopy.put("reportConfig", ru.k6lab.server.result.ReportConfig.fromMap(reportConfig).toMap());
+            r.setRequest(reqCopy);
+        });
+        audit.record("run.report_config", "run", runId, null);
     }
 
     public JsonNode config(Run run) {

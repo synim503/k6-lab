@@ -77,10 +77,51 @@ public final class SshExceptions {
 
     /** Ключ хоста изменился относительно подтверждённого: возможна подмена, операция прерывается. */
     public static class HostKeyMismatch extends SshFailure {
+        private final String host;
+        private final int port;
+        private final String keyType;
+        private final String expected;
+        private final String actual;
+        private final String publicKey;
+
         public HostKeyMismatch(String host, int port, String expected, String actual) {
+            this(host, port, "", expected, actual, "");
+        }
+
+        public HostKeyMismatch(String host, int port, String keyType, String expected, String actual, String publicKey) {
             super("ВНИМАНИЕ: ключ хоста " + host + ":" + port + " не совпадает с подтверждённым (ожидали " + expected
                     + ", получили " + actual + "). Установка прервана. Если ключ сменили намеренно, удалите "
-                    + "запись о хосте и подтвердите новый ключ.");
+                    + "запись о хосте или подтвердите замену ключа.");
+            this.host = host;
+            this.port = port;
+            this.keyType = keyType == null ? "" : keyType;
+            this.expected = expected;
+            this.actual = actual;
+            this.publicKey = publicKey == null ? "" : publicKey;
+        }
+
+        public String host() {
+            return host;
+        }
+
+        public int port() {
+            return port;
+        }
+
+        public String keyType() {
+            return keyType;
+        }
+
+        public String expected() {
+            return expected;
+        }
+
+        public String actual() {
+            return actual;
+        }
+
+        public String publicKey() {
+            return publicKey;
         }
     }
 }

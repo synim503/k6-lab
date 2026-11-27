@@ -58,7 +58,11 @@ public class StopCriteriaEvaluator {
 
     /** Живая выборка по операции за окно (null - данных нет, проверка пропускается). */
     public record Sample(String operation, Double percentileMs, double slaThresholdMs, Double errorPct,
-                         double maxErrorPct, Double actualRate, double targetRate, Double dropped) {
+                         double maxErrorPct, Double actualRate, double targetRate, Double dropped, Double droppedPerSec) {
+        public Sample(String operation, Double percentileMs, double slaThresholdMs, Double errorPct,
+                      double maxErrorPct, Double actualRate, double targetRate, Double dropped) {
+            this(operation, percentileMs, slaThresholdMs, errorPct, maxErrorPct, actualRate, targetRate, dropped, null);
+        }
     }
 
     /** Живая выборка по кастомной метрике Prometheus с включённым автостопом (null value - данных пока нет). */
@@ -142,13 +146,19 @@ public class StopCriteriaEvaluator {
                     markMissing(rKey);
                 }
                 String dKey = s.operation() + "/d";
-                if (config.droppedEnabled() && s.dropped() != null && Double.isFinite(s.dropped()) && s.targetRate() > 0) {
+                boolean hasInstantDrop = s.droppedPerSec() != null && Double.isFinite(s.droppedPerSec());
+                boolean hasWindowDrop = s.dropped() != null && Double.isFinite(s.dropped());
+                if (config.droppedEnabled() && (hasInstantDrop || hasWindowDrop) && s.targetRate() > 0) {
                     if (seenK6.add(dKey)) {
-                        // доля итераций, которые k6 не успел запустить, от плана за фактическое окно (цель × окно)
-                        double pct = s.dropped() / (s.targetRate() * winSec) * 100.0;
-                        Optional<String> r = track(dKey, pct > config.maxDroppedPct(),
-                                String.format(java.util.Locale.ROOT, "%s: dropped_iterations %.1f%% от плана (> %.1f%%, %d шт)", s.operation(),
-                                        pct, config.maxDroppedPct(), s.dropped().longValue()));
+                        // смотрим дроп операций в моменте (droppedPerSec / targetRate), чтобы одиночный прошлый всплеск не копился в окне
+                        double dropRate = hasInstantDrop ? s.droppedPerSec() : (s.dropped() / winSec);
+                        double pct = (dropRate / s.targetRate()) * 100.0;
+                        String msg = hasInstantDrop
+                                ? String.format(java.util.Locale.ROOT, "%s: дроп операций в моменте %.1f%% от плана (> %.1f%%, %.2f оп/с)",
+                                s.operation(), pct, config.maxDroppedPct(), dropRate)
+                                : String.format(java.util.Locale.ROOT, "%s: dropped_iterations %.1f%% от плана (> %.1f%%, %d шт)",
+                                s.operation(), pct, config.maxDroppedPct(), s.dropped().longValue());
+                        Optional<String> r = track(dKey, pct > config.maxDroppedPct(), msg);
                         if (r.isPresent() && stop.isEmpty()) {
                             stop = r;
                         }

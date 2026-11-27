@@ -272,4 +272,36 @@ class ReportDocxTest {
             throw new IllegalStateException(e);
         }
     }
+
+    @Test
+    void reportConfigCustomTitleSectionsAndExcludedCharts() {
+        var run = new ru.k6lab.server.run.Run();
+        run.setScriptName("Платежи");
+        run.setRequest(new LinkedHashMap<>(Map.of("loadProfileName", "Поиск макс.")));
+        assertThat(ru.k6lab.server.result.ReportService.defaultTitle(run)).isEqualTo("Платежи - Поиск макс.");
+        assertThat(ru.k6lab.server.result.ReportService.title(run)).isEqualTo("Платежи - Поиск макс.");
+
+        var cfg = ru.k6lab.server.result.ReportConfig.fromMap(Map.of(
+                "customTitle", "  Релиз 2026.11 — Платежи  ",
+                "sections", Map.of("env", false, "generators", false, "summary", true),
+                "excludedCharts", List.of("CPU приложения", ""),
+                "timeAxis", "abs",
+                "warmup", "skip",
+                "sortBy", "max",
+                "sortDir", "asc"
+        ));
+        run.getRequest().put("reportConfig", cfg.toMap());
+        assertThat(ru.k6lab.server.result.ReportService.title(run)).isEqualTo("Релиз 2026.11 — Платежи");
+        var parsed = ru.k6lab.server.result.ReportConfig.fromRun(run);
+        assertThat(parsed.show("summary")).isTrue();
+        assertThat(parsed.show("steps")).isTrue();
+        assertThat(parsed.show("env")).isFalse();
+        assertThat(parsed.show("generators")).isFalse();
+        assertThat(parsed.isChartIncluded("RPS")).isTrue();
+        assertThat(parsed.isChartIncluded("CPU приложения")).isFalse();
+        assertThat(parsed.defaultAbsTime()).isTrue();
+        assertThat(parsed.defaultSkipWarmup()).isTrue();
+        assertThat(parsed.defaultSortBy()).isEqualTo(ru.k6lab.server.result.ChartStyle.SortBy.MAX);
+        assertThat(parsed.defaultSortDir()).isEqualTo(ru.k6lab.server.result.ChartStyle.SortDir.ASC);
+    }
 }

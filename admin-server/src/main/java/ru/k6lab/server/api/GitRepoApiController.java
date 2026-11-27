@@ -42,7 +42,7 @@ public class GitRepoApiController {
     }
 
     public record ConfirmHostKeyPayload(Long repoId, String host, int port, String keyType,
-                                        String fingerprint, String publicKey) {
+                                        String fingerprint, String publicKey, Boolean replace) {
     }
 
     @GetMapping
@@ -52,14 +52,17 @@ public class GitRepoApiController {
             m.put("cachedRefs", repos.cachedRefs(r.getId()));
             return m;
         }).toList();
-        List<Map<String, Object>> creds = sshCreds.list().stream().map(c -> {
-            Map<String, Object> cm = new LinkedHashMap<>();
-            cm.put("id", c.getId());
-            cm.put("name", c.getName());
-            cm.put("username", c.getUsername());
-            cm.put("authType", c.getAuthType().name());
-            return cm;
-        }).toList();
+        List<Map<String, Object>> creds = sshCreds.list().stream()
+                .filter(c -> c.getAuthType() == ru.k6lab.server.ssh.SshCredential.AuthType.KEY
+                        && (c.getJumpHost() == null || c.getJumpHost().isBlank()))
+                .map(c -> {
+                    Map<String, Object> cm = new LinkedHashMap<>();
+                    cm.put("id", c.getId());
+                    cm.put("name", c.getName());
+                    cm.put("username", c.getUsername());
+                    cm.put("authType", c.getAuthType().name());
+                    return cm;
+                }).toList();
         return Map.of("items", items, "sshCredentials", creds);
     }
 
@@ -107,12 +110,23 @@ public class GitRepoApiController {
     public ResponseEntity<Map<String, Object>> confirmHostKey(@RequestBody ConfirmHostKeyPayload p,
                                                               Authentication auth) throws IOException {
         knownHosts.confirm(p.host(), p.port(), p.keyType(), p.fingerprint(), p.publicKey(),
-                auth != null ? auth.getName() : "admin");
+                auth != null ? auth.getName() : "admin", p.replace() != null && p.replace());
         if (p.repoId() != null) {
-            List<GitClient.RefInfo> refs = repos.refresh(p.repoId());
-            return ResponseEntity.ok(Map.of("ok", true, "refs", refs));
+            try {
+                List<GitClient.RefInfo> refs = repos.refresh(p.repoId());
+                return ResponseEntity.ok(Map.of("ok", true, "confirmed", true, "refs", refs));
+            } catch (GitClient.GitHostKeyException e) {
+                return hostKeyResponse(e, p.repoId());
+            } catch (IOException | RuntimeException e) {
+                Map<String, Object> partial = new LinkedHashMap<>();
+                partial.put("ok", true);
+                partial.put("confirmed", true);
+                partial.put("refs", List.of());
+                partial.put("refreshError", e.getMessage() != null ? e.getMessage() : "Не удалось загрузить ветки после подтверждения ключа");
+                return ResponseEntity.ok(partial);
+            }
         }
-        return ResponseEntity.ok(Map.of("ok", true));
+        return ResponseEntity.ok(Map.of("ok", true, "confirmed", true));
     }
 
     public static Map<String, Object> toRepoDto(GitRepo r) {
@@ -133,6 +147,7 @@ public class GitRepoApiController {
         out.put("ok", false);
         if (e.failure() instanceof SshExceptions.HostKeyUnconfirmed u) {
             out.put("hostKeyRequired", true);
+            out.put("mismatch", false);
             out.put("repoId", repoId);
             out.put("host", u.host());
             out.put("port", u.port());
@@ -140,6 +155,19 @@ public class GitRepoApiController {
             out.put("fingerprint", u.fingerprint());
             out.put("publicKey", u.publicKey());
             out.put("error", "Ключ SSH-хоста " + u.host() + ":" + u.port() + " ещё не подтверждён");
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(out);
+        }
+        if (e.failure() instanceof SshExceptions.HostKeyMismatch mm && !mm.actual().isEmpty()) {
+            out.put("hostKeyRequired", true);
+            out.put("mismatch", true);
+            out.put("repoId", repoId);
+            out.put("host", mm.host());
+            out.put("port", mm.port());
+            out.put("keyType", mm.keyType());
+            out.put("expectedFingerprint", mm.expected());
+            out.put("fingerprint", mm.actual());
+            out.put("publicKey", mm.publicKey());
+            out.put("error", "Ключ SSH-хоста " + mm.host() + ":" + mm.port() + " изменился (ожидался " + mm.expected() + ")");
             return ResponseEntity.status(HttpStatus.CONFLICT).body(out);
         }
         out.put("error", e.getMessage() != null ? e.getMessage() : "Ошибка проверки SSH-ключа Git-сервера");

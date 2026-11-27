@@ -73,16 +73,19 @@
     · отчёт сформирован <span th:text="${fmt.dt(generatedAt)}"></span>
 </div>
 
+<th:block th:if="${secSummary == null or secSummary}">
 <h2 th:if="${run.conclusion != null or run.conclusionComment != null or run.stopReason != null or run.degraded or !data.prometheusOk or run.error != null}">Итог</h2>
 <div class="box" th:if="${run.conclusion != null or run.conclusionComment != null}">
     <div th:if="${run.conclusion != null}"><b>Вывод инженера:</b> <span th:text="${run.conclusion}"></span></div>
-    <div th:if="${run.conclusionComment != null}" th:text="${run.conclusionComment}"></div>
+    <div th:if="${run.conclusionComment != null}" style="white-space: pre-line; margin-top: 4px;" th:text="${run.conclusionComment}"></div>
 </div>
 <div class="box" th:if="${run.stopReason != null}">Тест остановлен: <span th:text="${run.stopReason}"></span></div>
 <div class="box" th:if="${run.degraded}">Во время теста терялись генераторы: ступени, на которые это повлияло, помечены как недостоверные.</div>
 <div class="box bad-text" th:if="${!data.prometheusOk}" th:text="${data.error}"></div>
 <div class="box" th:if="${run.error != null}" th:text="'Ошибка: ' + ${run.error}"></div>
+</th:block>
 
+<th:block th:if="${secConfig == null or secConfig}">
 <h2>Конфигурация</h2>
 <table class="tbl">
     <tbody>
@@ -114,18 +117,24 @@
         </td>
     </tr></tbody>
 </table>
+</th:block>
 
+<th:block th:if="${secEnv == null or secEnv}">
 <h4>Переменные запуска</h4>
 <div class="muted" th:if="${envRows.isEmpty()}">Переменные не заданы.</div>
 <table class="tbl" th:if="${!envRows.isEmpty()}">
     <thead><tr><th>Где задана</th><th>Переменная</th><th>Значение</th></tr></thead>
     <tbody><tr th:each="e : ${envRows}"><td th:text="${e.scope}"></td><td><code th:text="${e.name}"></code></td><td th:text="${e.value}"></td></tr></tbody>
 </table>
+</th:block>
 
+<th:block th:if="${secSteps == null or secSteps}">
 <h2>Результаты по ступеням</h2>
 <div class="muted">Перцентили рассчитаны в Prometheus через histogram_quantile по гистограммам, просуммированным по всем генераторам (не усреднением). Окно ступени — удержание без первых секунд выхода на режим.</div>
 <div th:replace="~{reports/_steps :: steps(${data}, ${fmt})}"></div>
+</th:block>
 
+<th:block th:if="${secCharts == null or secCharts}">
 <h2 th:if="${!charts.isEmpty()}">Графики</h2>
 <div class="noprint chart-toolbar" th:if="${!charts.isEmpty()}"
      th:with="tParam=${timeAbs ? 'abs' : 'rel'}, wParam=${skipWarmup ? 'skip' : 'include'}, qBase=${'?time=' + tParam + '&amp;warmup=' + wParam + '&amp;sort=' + sortBy + '&amp;dir=' + sortDir}">
@@ -180,7 +189,9 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { close(); } });
 })();
 </script>
+</th:block>
 
+<th:block th:if="${secGenerators == null or secGenerators}">
 <h2>Генераторы (справочно)</h2>
 <div class="muted">Сводка k6 по каждому генератору содержит накопленные за весь тест значения; для оценки SLA не используется.</div>
 <table class="tbl">
@@ -191,5 +202,6 @@
         <td class="num" th:text="${fmt.n(g.dropped, 0)}"></td><td class="num" th:text="${fmt.n(g.httpReqs, 0)}"></td>
         <td class="num" th:text="${fmt.n(g.httpFailedRate, 4)}"></td></tr></tbody>
 </table>
+</th:block>
 </body>
 </html>

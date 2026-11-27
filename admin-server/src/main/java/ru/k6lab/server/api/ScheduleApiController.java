@@ -123,7 +123,11 @@ public class ScheduleApiController {
                 "id", s.getId(),
                 "name", s.getName(),
                 "generatorCount", s.getGeneratorCount(),
-                "profiles", profiles.list(s.getId()).stream().map(p -> Map.of("id", p.id(), "name", p.name())).toList()
+                "profiles", profiles.list(s.getId()).stream().map(p -> Map.of(
+                        "id", p.id(),
+                        "name", p.name(),
+                        "folder", p.folder() != null ? p.folder() : ""
+                )).toList()
         )).toList());
         out.put("generators", allGens.stream().map(g -> Map.of(
                 "id", g.getId(),
@@ -241,13 +245,37 @@ public class ScheduleApiController {
         return Map.of("ok", true, "count", created.size(), "message", "Запланировано запусков: " + created.size());
     }
 
+    @GetMapping("/timeline")
+    public Map<String, Object> getTimeline(@RequestParam(required = false) Long from,
+                                           @RequestParam(required = false) Long to) {
+        return timeline.overview(from, to);
+    }
+
     @PostMapping("/import-profiles")
     public Map<String, Object> importProfiles(@RequestParam(required = false) String json,
                                               @RequestParam(required = false) MultipartFile file,
+                                              @RequestParam(defaultValue = "false") boolean scheduleSequential,
+                                              @RequestParam(required = false) String runAt,
+                                              @RequestParam(required = false) Integer count,
+                                              @RequestParam(defaultValue = "5") int gapMinutes,
+                                              @RequestParam(defaultValue = "true") boolean shift,
                                               Principal user) throws IOException {
+        String by = user != null ? user.getName() : "system";
         String body = file != null && !file.isEmpty() ? new String(file.getBytes(), StandardCharsets.UTF_8) : json;
-        var done = profileImport.importProfiles(null, body, user != null ? user.getName() : "system");
-        return Map.of("ok", true, "count", done.size(), "message", "Импортировано профилей: " + done.size());
+        var done = profileImport.importProfiles(null, body, by);
+        long upd = done.stream().filter(ProfileImportService.Imported::updated).count();
+        String msg = "Импортировано профилей: " + done.size() + (upd > 0 ? " (обновлено: " + upd + ")" : "");
+        int scheduledCount = 0;
+        if (scheduleSequential && !done.isEmpty()) {
+            java.time.Instant firstAt = (runAt != null && !runAt.isBlank()) ? java.time.Instant.parse(runAt.trim()) : null;
+            var specs = done.stream()
+                    .map(x -> new ScheduledRunService.SequentialSpec(x.scriptId(), x.profileId()))
+                    .toList();
+            var ids = schedule.scheduleSequential(specs, firstAt, count, Math.max(5, gapMinutes) * 60, shift, by);
+            scheduledCount = ids.size();
+            msg += ". Запланировано последовательно: " + scheduledCount;
+        }
+        return Map.of("ok", true, "count", done.size(), "scheduledCount", scheduledCount, "message", msg);
     }
 
     // ---------- Prometheus / SSH Guards ----------

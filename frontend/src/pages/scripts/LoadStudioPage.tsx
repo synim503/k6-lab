@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/primitives';
 import { useConfirm } from '@/components/ui/ConfirmContext';
 import { MonacoEditor } from '@/components/ui/MonacoEditor';
+import { PromqlEditor } from '@/components/ui/PromqlEditor';
 import { FormulaInput } from '@/components/load/FormulaInput';
 import {
   K6Stage,
@@ -38,7 +39,7 @@ import {
   stepUnitShort,
 } from '@/components/load/StageConstructor';
 import { ScriptHead } from './ScriptHead';
-import { fmtDurationSec, fmtShortDate, parseDurationToSec } from '@/lib/utils';
+import { fmtDurationSec, fmtShortDate, naturalCompare, parseDurationToSec, sortProfilesSmart } from '@/lib/utils';
 import {
   Activity,
   AlertTriangle,
@@ -53,7 +54,9 @@ import {
   Download,
   ExternalLink,
   Flame,
+  Folder,
   FolderOpen,
+  FolderPlus,
   KeyRound,
   Layers,
   Minimize2,
@@ -277,7 +280,12 @@ function isRampingExecutor(exec: string): boolean {
   return exec === 'ramping-arrival-rate' || exec === 'ramping-vus';
 }
 
-function applyWarmupTransitionToOp(op: any, nextWarmOn: boolean, nextWarmDur: string): any {
+function applyWarmupTransitionToOp(
+  op: any,
+  nextWarmOn: boolean,
+  nextWarmDur: string,
+  forceGlobalDur = true
+): any {
   const ex = op.executor || 'ramping-arrival-rate';
   const sc = { ...(op.scenario || {}) };
   const dur = nextWarmDur.trim() || '2m';
@@ -286,12 +294,29 @@ function applyWarmupTransitionToOp(op: any, nextWarmOn: boolean, nextWarmDur: st
     const stages: K6Stage[] = Array.isArray(sc.stages) ? [...sc.stages] : [];
     const hadWarmStage = Number(sc.warmup?.stages) > 0;
     if (nextWarmOn) {
+      const searchStart = hadWarmStage && stages.length > 1 ? 1 : 0;
+      let firstMainTarget = ex.includes('arrival') ? 50 : 20;
+      for (let i = searchStart; i < stages.length; i++) {
+        const tVal = Number(stages[i]?.target) || 0;
+        if (tVal > 0) {
+          firstMainTarget = tVal;
+          break;
+        }
+      }
+      const warmTarget = Math.max(1, Math.round(firstMainTarget));
       if (hadWarmStage && stages.length > 0) {
-        stages[0] = { ...stages[0], duration: dur };
+        const keepDur = !forceGlobalDur && stages[0]?.duration ? stages[0].duration : dur;
+        stages[0] = { duration: keepDur, target: warmTarget };
       } else {
-        const firstTarget = Number(stages[0]?.target) || (ex.includes('arrival') ? 50 : 20);
-        const warmTarget = Math.max(1, Math.round(firstTarget * 0.3));
         stages.unshift({ duration: dur, target: warmTarget });
+      }
+      // Если 1-я ступень идёт парой (переход -> полка) на том же уровне warmTarget, обнуляем лишний переход после прогрева
+      if (
+        stages.length >= 3 &&
+        Math.round(Number(stages[1]?.target) || 0) === warmTarget &&
+        Math.round(Number(stages[2]?.target) || 0) === warmTarget
+      ) {
+        stages[1] = { ...stages[1], duration: '0s' };
       }
       sc.stages = stages;
       sc.warmup = { stages: 1 };
@@ -304,7 +329,8 @@ function applyWarmupTransitionToOp(op: any, nextWarmOn: boolean, nextWarmDur: st
     }
   } else if (supportsConstantWarmup(ex)) {
     if (nextWarmOn) {
-      sc.warmup = { duration: dur };
+      const keepDur = !forceGlobalDur && sc.warmup?.duration ? sc.warmup.duration : dur;
+      sc.warmup = { duration: keepDur };
     } else {
       delete sc.warmup;
     }
@@ -487,6 +513,7 @@ export function LoadStudioPage() {
   const [stop, setStop] = useState<any>({});
   const [dataFiles, setDataFiles] = useState<any[]>([]);
   const [profileName, setProfileName] = useState('');
+  const [profileFolder, setProfileFolder] = useState('');
   const [warmupOn, setWarmupOn] = useState(false);
   const [warmupDur, setWarmupDur] = useState('2m');
   const [saving, setSaving] = useState(false);
@@ -520,9 +547,15 @@ export function LoadStudioPage() {
   const [chartUnitMode, setChartUnitMode] = useState<'rate' | 'vu'>('rate');
   const [profilesModalOpen, setProfilesModalOpen] = useState(false);
   const [profSearch, setProfSearch] = useState('');
+  const [activeFolderFilter, setActiveFolderFilter] = useState<string>('__all__');
+  const [customFolders, setCustomFolders] = useState<string[]>([]);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderInput, setNewFolderInput] = useState('');
+  const [moveFolderTarget, setMoveFolderTarget] = useState<string>('');
+  const [renameFolderModal, setRenameFolderModal] = useState<{ oldFolder: string; newFolder: string } | null>(null);
   const [selectedProfIds, setSelectedProfIds] = useState<Set<number>>(new Set());
   const [lastClickedProfId, setLastClickedProfId] = useState<number | null>(null);
-  const [renameModal, setRenameModal] = useState<{ id: number; name: string } | null>(null);
+  const [renameModal, setRenameModal] = useState<{ id: number; name: string; folder: string } | null>(null);
 
   // Import/export modal
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -573,6 +606,7 @@ export function LoadStudioPage() {
     });
     setDataFiles(f.dataFiles || []);
     setProfileName(st.loadedProfileName || '');
+    setProfileFolder(st.loadedProfileFolder || '');
 
     if (st.basePushDefaults) {
       const d = st.basePushDefaults;
@@ -656,7 +690,7 @@ export function LoadStudioPage() {
       if (r.k.trim()) envObj[r.k.trim()] = r.v;
     });
 
-    const preparedOps = ops.map((o) => applyWarmupTransitionToOp(o, warmupOn, warmupDur));
+    const preparedOps = ops.map((o) => applyWarmupTransitionToOp(o, warmupOn, warmupDur, false));
 
     return {
       form: {
@@ -709,6 +743,7 @@ export function LoadStudioPage() {
         method: 'POST',
         body: {
           profileName: name,
+          folder: profileFolder.trim(),
           profileId: loadState?.loadedProfileId ?? null,
           ...payload,
         },
@@ -814,23 +849,15 @@ export function LoadStudioPage() {
       if (ex === 'constant-arrival-rate') {
         const tu = Math.max(1, parseDurationToSec(sc.timeUnit || '1s'));
         const r = (Number(sc.rate) || 0) / tu;
-        const wSec = sc.warmup?.duration ? parseDurationToSec(sc.warmup.duration) : 0;
-        if (wSec > 0) maxWarmupSec = Math.max(maxWarmupSec, startSec + wSec);
         const mainDur = parseDurationToSec(sc.duration || '5m');
-        const totalD = wSec + mainDur;
+        const wSec = sc.warmup?.duration ? Math.min(mainDur, parseDurationToSec(sc.warmup.duration)) : 0;
+        if (wSec > 0) maxWarmupSec = Math.max(maxWarmupSec, startSec + wSec);
         peakRate += r;
-        maxDurSec = Math.max(maxDurSec, startSec + totalD);
+        maxDurSec = Math.max(maxDurSec, startSec + mainDur);
         totalPreVus += Number(sc.preAllocatedVUs || 0) * Math.max(1, generatorCount);
         totalMaxVus += Number(sc.maxVUs || sc.preAllocatedVUs || 0) * Math.max(1, generatorCount);
-        if (wSec > 0) {
-          const wRate = Math.max(0.1, Math.round(r * 0.3 * 100) / 100);
-          pts.push({ t: startSec, v: wRate }, { t: startSec + wSec, v: wRate });
-          addBreakpoint(startSec + wSec, true);
-          pts.push({ t: startSec + wSec, v: r }, { t: startSec + totalD, v: r });
-        } else {
-          pts.push({ t: startSec, v: r }, { t: startSec + totalD, v: r });
-        }
-        addBreakpoint(startSec + totalD);
+        pts.push({ t: startSec, v: r }, { t: startSec + mainDur, v: r });
+        addBreakpoint(startSec + mainDur);
         rateSeries.push({ name: label, color, kind: 'rate', pts });
       } else if (ex === 'ramping-arrival-rate') {
         const tu = Math.max(1, parseDurationToSec(sc.timeUnit || '1s'));
@@ -885,9 +912,9 @@ export function LoadStudioPage() {
         vuSeries.push({ name: label, color, kind: 'vu', pts });
       } else {
         const v = Number(sc.vus) || 0;
-        const wSec = sc.warmup?.duration ? parseDurationToSec(sc.warmup.duration) : 0;
+        const d = parseDurationToSec(sc.duration || sc.maxDuration || '5m');
+        const wSec = sc.warmup?.duration ? Math.min(d, parseDurationToSec(sc.warmup.duration)) : 0;
         if (wSec > 0) maxWarmupSec = Math.max(maxWarmupSec, startSec + wSec);
-        const d = parseDurationToSec(sc.duration || sc.maxDuration || '5m') + wSec;
         totalMaxVus += Number(sc.maxVUs || v);
         maxDurSec = Math.max(maxDurSec, startSec + d);
         pts.push({ t: startSec, v }, { t: startSec + d, v });
@@ -973,16 +1000,59 @@ export function LoadStudioPage() {
     script,
     loadedProfileId,
     loadedProfileName,
+    loadedProfileFolder = '',
     profiles = [],
     secretNames = [],
     scriptCharts = [],
+    chartVariables = [],
     staleOps = [],
     plan,
   } = loadState;
 
-  const filteredProfiles = profiles.filter((p: any) =>
-    (p.name || '').toLowerCase().includes(profSearch.trim().toLowerCase())
-  );
+  const chartVarsMap: Record<string, string> = {};
+  (chartVariables || []).forEach((cv: any) => {
+    if (cv?.name) chartVarsMap[cv.name] = cv.value ?? '';
+  });
+
+  const sortedProfiles = sortProfilesSmart<any>(profiles);
+  const folderNames = Array.from(
+    new Set(
+      [
+        ...sortedProfiles.map((p: any) => (p.folder || '').trim()).filter(Boolean),
+        ...customFolders.map((f) => f.trim()).filter(Boolean),
+      ]
+    )
+  ).sort(naturalCompare);
+
+  const rootProfilesCount = sortedProfiles.filter((p: any) => !(p.folder || '').trim()).length;
+  const folderCounts: Record<string, number> = {};
+  for (const fn of folderNames) folderCounts[fn] = 0;
+  for (const p of sortedProfiles) {
+    const fn = (p.folder || '').trim();
+    if (fn) folderCounts[fn] = (folderCounts[fn] || 0) + 1;
+  }
+
+  const filteredProfiles = sortedProfiles.filter((p: any) => {
+    const fn = (p.folder || '').trim();
+    if (activeFolderFilter === '__root__' && fn !== '') return false;
+    if (activeFolderFilter !== '__all__' && activeFolderFilter !== '__root__' && fn !== activeFolderFilter) {
+      return false;
+    }
+    const q = profSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (p.name || '').toLowerCase().includes(q) || fn.toLowerCase().includes(q);
+  });
+
+  const enabledOpsErrorLimits = ops
+    .filter((o: any) => o.enabled !== false)
+    .map((o: any) => Number(o.maxErrorPct ?? 1))
+    .filter((v: number) => Number.isFinite(v));
+  const errSlaSummary =
+    enabledOpsErrorLimits.length === 0
+      ? 'из SLA операций'
+      : Math.min(...enabledOpsErrorLimits) === Math.max(...enabledOpsErrorLimits)
+      ? `порог из SLA: ≤ ${enabledOpsErrorLimits[0]}%`
+      : `пороги из SLA: ${Math.min(...enabledOpsErrorLimits)}–${Math.max(...enabledOpsErrorLimits)}%`;
 
   const updateOp = (idx: number, patch: any) => {
     setOps((prev) => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
@@ -1132,12 +1202,18 @@ export function LoadStudioPage() {
               className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-800 hover:bg-slate-100 cursor-pointer"
             >
               <Layers className="h-4 w-4 text-indigo-600" />
-              <span>{loadedProfileName ? `Профиль: ${loadedProfileName}` : '★ Базовый профиль скрипта'}</span>
+              <span>
+                {loadedProfileName
+                  ? loadedProfileFolder
+                    ? `${loadedProfileFolder} / ${loadedProfileName}`
+                    : `Профиль: ${loadedProfileName}`
+                  : '★ Базовый профиль скрипта'}
+              </span>
               <Badge variant="info">{profiles.length}</Badge>
               <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
             </button>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Input
                 value={profileName}
                 onChange={(e) => {
@@ -1145,8 +1221,24 @@ export function LoadStudioPage() {
                   setDirty(true);
                 }}
                 placeholder="Название профиля…"
-                className="h-8 text-xs w-52"
+                className="h-8 text-xs w-48"
               />
+              <Input
+                list="load-profile-folders-datalist"
+                value={profileFolder}
+                onChange={(e) => {
+                  setProfileFolder(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="Папка (необяз.)"
+                title="Папка профиля (можно выбрать существующую или ввести новую)"
+                className="h-8 text-xs w-40"
+              />
+              <datalist id="load-profile-folders-datalist">
+                {folderNames.map((fn) => (
+                  <option key={fn} value={fn} />
+                ))}
+              </datalist>
               <Button variant="outline" size="sm" loading={saving} onClick={handleSaveProfile}>
                 <Save className="h-3.5 w-3.5 text-emerald-600" />
                 Сохранить профиль
@@ -1410,7 +1502,7 @@ export function LoadStudioPage() {
               ))}
             </div>
             <p className="text-[11px] text-slate-500 leading-snug">
-              Для стадий автоматически создаёт 1-ю прогревочную стадию (30% от старта). Ошибки и время ответа на прогреве не портят итоги и SLA ступеней.
+              Плавно выводит нагрузку с 0 до интенсивности 1-й ступени за указанную длительность. Ошибки и время ответа на прогреве не портят итоги и SLA ступеней.
             </p>
           </Card>
         </div>
@@ -2091,179 +2183,233 @@ export function LoadStudioPage() {
       </Card>
 
       {/* Раздел 3: Автостоп и кастомные проверки Prometheus */}
-      <Card id="sec-stop" className="scroll-mt-4">
-        <CardHeader>
-          <div className="flex flex-wrap items-center gap-2 font-semibold text-sm">
-            <ShieldAlert className="h-4 w-4 text-indigo-600" />
-            Автостоп и метрики SLA Prometheus
+      <Card id="sec-stop" className="scroll-mt-4 border-slate-300/90 shadow-xs">
+        <CardHeader className="bg-slate-50/80 border-b border-slate-200">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-2xs">
+              <ShieldAlert className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="font-bold text-sm text-slate-900">Автостоп и метрики SLA Prometheus</div>
+              <div className="text-[11px] text-slate-600">
+                Серверная защита прогона по метрикам k6 и целевой инфраструктуры
+              </div>
+            </div>
           </div>
-          <span className="text-xs text-slate-500">
-            Срабатывание автостопа ≈ <b>{stopEtaSec} с</b> ({stop.consecutive ?? 4} проверок подряд по 15 с)
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="info">
+              Реакция ≈ {stopEtaSec} с ({stop.consecutive ?? 4} × 15 с)
+            </Badge>
+          </div>
         </CardHeader>
-        <CardBody className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
-            <div className="rounded-xl border border-slate-200 p-3 space-y-2">
-              <Switch
-                checked={!!stop.rateEnabled}
-                onChange={(v) => {
-                  setStop({ ...stop, rateEnabled: v });
-                  setDirty(true);
-                }}
-                label={<span className="text-xs font-medium">Падение интенсивности</span>}
-              />
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500">Мин. от плана:</span>
-                <Input
-                  type="number"
-                  value={stop.minRatePct ?? 90}
-                  onChange={(e) => {
-                    setStop({ ...stop, minRatePct: Number(e.target.value) });
-                    setDirty(true);
-                  }}
-                  className="h-7 w-16 text-xs"
-                />
-                <span>%</span>
-              </div>
-            </div>
 
-            <div className="rounded-xl border border-slate-200 p-3 space-y-2">
+        <CardBody className="space-y-5 text-xs">
+          {/* Общие параметры срабатывания ВСЕГО автостопа (включая +1 контрольную ступень) */}
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-indigo-200/80 bg-indigo-50/45 px-4 py-3">
+            <div className="space-y-0.5 min-w-[240px] flex-1">
               <Switch
-                checked={!!stop.droppedEnabled}
-                onChange={(v) => {
-                  setStop({ ...stop, droppedEnabled: v });
-                  setDirty(true);
-                }}
-                label={<span className="text-xs font-medium">Высокий dropped_iterations</span>}
-              />
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500">Порог от плана:</span>
-                <Input
-                  type="number"
-                  step="0.1"
-                  value={stop.maxDroppedPct ?? 1}
-                  onChange={(e) => {
-                    setStop({ ...stop, maxDroppedPct: Number(e.target.value) });
-                    setDirty(true);
-                  }}
-                  className="h-7 w-16 text-xs"
-                />
-                <span>%</span>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 p-3 space-y-2">
-              <Switch
-                checked={!!stop.percentileEnabled}
-                onChange={(v) => {
-                  setStop({ ...stop, percentileEnabled: v });
-                  setDirty(true);
-                }}
-                label={<span className="text-xs font-medium">Превышение времени ответа</span>}
-              />
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500">Множитель к SLA:</span>
-                <Input
-                  type="number"
-                  step="0.1"
-                  value={stop.slaMultiplier ?? 1.5}
-                  onChange={(e) => {
-                    setStop({ ...stop, slaMultiplier: Number(e.target.value) });
-                    setDirty(true);
-                  }}
-                  className="h-7 w-16 text-xs"
-                />
-                <span>×</span>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 p-3 space-y-2">
-              <Switch
-                checked={!!stop.errorsEnabled}
-                onChange={(v) => {
-                  setStop({ ...stop, errorsEnabled: v });
-                  setDirty(true);
-                }}
-                label={<span className="text-xs font-medium">Превышение % ошибок</span>}
-              />
-              <Switch
-                checked={!!stop.extraStepOnMaxSearch}
+                checked={stop.extraStepOnMaxSearch !== false}
                 onChange={(v) => {
                   setStop({ ...stop, extraStepOnMaxSearch: v });
                   setDirty(true);
                 }}
-                label={<span className="text-xs text-slate-600">+1 ступень при поиске макс.</span>}
+                label={
+                  <span className="text-xs font-bold text-slate-900">
+                    +1 контрольная ступень при срабатывании автостопа
+                  </span>
+                }
               />
+              <p className="text-[11px] text-slate-600 pl-10">
+                Действует для <b>всех</b> критериев ниже и PromQL-правил: на ступенчатом тесте после пробоя ступени N проходит ещё ступень N+1 для фиксации деградации и останавливает прогон.
+              </p>
             </div>
 
-            <div className="rounded-xl border border-slate-200 p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Окно, сек:</span>
-                <Input
-                  type="number"
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                <span className="font-medium text-slate-700">Окно оценки:</span>
+                <FormulaInput
                   value={stop.windowSec ?? 60}
-                  onChange={(e) => {
-                    setStop({ ...stop, windowSec: Number(e.target.value) });
+                  integer
+                  min={15}
+                  onChange={(v) => {
+                    setStop({ ...stop, windowSec: Math.max(15, v) });
                     setDirty(true);
                   }}
-                  className="h-7 w-16 text-xs"
+                  suffix="с"
+                  className="w-24"
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Подряд раз:</span>
-                <Input
-                  type="number"
+              <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                <span className="font-medium text-slate-700">Проверок подряд:</span>
+                <FormulaInput
                   value={stop.consecutive ?? 4}
-                  onChange={(e) => {
-                    setStop({ ...stop, consecutive: Number(e.target.value) });
+                  integer
+                  min={1}
+                  onChange={(v) => {
+                    setStop({ ...stop, consecutive: Math.max(1, v) });
                     setDirty(true);
                   }}
-                  className="h-7 w-16 text-xs"
+                  suffix="раз"
+                  className="w-24"
                 />
+              </div>
+            </div>
+          </div>
+
+          {/* 4 карточки встроенных критериев k6 с чётким контрастом включено/выключено */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* 1. Падение интенсивности */}
+            <div
+              className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                stop.rateEnabled
+                  ? 'border-indigo-300 bg-white shadow-2xs ring-1 ring-indigo-500/10'
+                  : 'border-slate-200 bg-slate-50/80 opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <Switch
+                  checked={!!stop.rateEnabled}
+                  onChange={(v) => {
+                    setStop({ ...stop, rateEnabled: v });
+                    setDirty(true);
+                  }}
+                  label={<span className="text-xs font-bold text-slate-900">Падение интенсивности</span>}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <span className="text-slate-600 font-medium">Мин. от плана:</span>
+                <FormulaInput
+                  disabled={!stop.rateEnabled}
+                  value={stop.minRatePct ?? 90}
+                  min={1}
+                  onChange={(v) => {
+                    setStop({ ...stop, minRatePct: v });
+                    setDirty(true);
+                  }}
+                  suffix="%"
+                  className="w-24"
+                />
+              </div>
+              <div className="text-[11px] text-slate-500 leading-snug">
+                Остановка, если фактический RPS не дотягивает до целевого плана.
+              </div>
+            </div>
+
+            {/* 2. Дроп операций в моменте */}
+            <div
+              className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                stop.droppedEnabled
+                  ? 'border-indigo-300 bg-white shadow-2xs ring-1 ring-indigo-500/10'
+                  : 'border-slate-200 bg-slate-50/80 opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <Switch
+                  checked={!!stop.droppedEnabled}
+                  onChange={(v) => {
+                    setStop({ ...stop, droppedEnabled: v });
+                    setDirty(true);
+                  }}
+                  label={<span className="text-xs font-bold text-slate-900">Дроп операций в моменте</span>}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <span className="text-slate-600 font-medium">Макс. доля сейчас:</span>
+                <FormulaInput
+                  disabled={!stop.droppedEnabled}
+                  value={stop.maxDroppedPct ?? 1}
+                  min={0}
+                  onChange={(v) => {
+                    setStop({ ...stop, maxDroppedPct: v });
+                    setDirty(true);
+                  }}
+                  suffix="%"
+                  className="w-24"
+                />
+              </div>
+              <div className="text-[11px] text-slate-500 leading-snug">
+                Смотрит мгновенную скорость пропусков k6 за текущий 15с тик, а не сумму с начала теста.
+              </div>
+            </div>
+
+            {/* 3. Превышение времени ответа */}
+            <div
+              className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                stop.percentileEnabled
+                  ? 'border-indigo-300 bg-white shadow-2xs ring-1 ring-indigo-500/10'
+                  : 'border-slate-200 bg-slate-50/80 opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <Switch
+                  checked={!!stop.percentileEnabled}
+                  onChange={(v) => {
+                    setStop({ ...stop, percentileEnabled: v });
+                    setDirty(true);
+                  }}
+                  label={<span className="text-xs font-bold text-slate-900">Деградация времени ответа</span>}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <span className="text-slate-600 font-medium">Множитель к SLA:</span>
+                <FormulaInput
+                  disabled={!stop.percentileEnabled}
+                  value={stop.slaMultiplier ?? 1.5}
+                  min={0.1}
+                  onChange={(v) => {
+                    setStop({ ...stop, slaMultiplier: v });
+                    setDirty(true);
+                  }}
+                  suffix="×"
+                  className="w-24"
+                />
+              </div>
+              <div className="text-[11px] text-slate-500 leading-snug">
+                Сравнивает перцентиль операции с её порогом SLA × множитель.
+              </div>
+            </div>
+
+            {/* 4. Превышение % ошибок */}
+            <div
+              className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                stop.errorsEnabled
+                  ? 'border-indigo-300 bg-white shadow-2xs ring-1 ring-indigo-500/10'
+                  : 'border-slate-200 bg-slate-50/80 opacity-70'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <Switch
+                  checked={!!stop.errorsEnabled}
+                  onChange={(v) => {
+                    setStop({ ...stop, errorsEnabled: v });
+                    setDirty(true);
+                  }}
+                  label={<span className="text-xs font-bold text-slate-900">Превышение % ошибок</span>}
+                />
+              </div>
+              <div className="pt-0.5">
+                <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] font-semibold text-slate-800">
+                  {errSlaSummary}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-500 leading-snug">
+                Индивидуальный порог ошибок задаётся в блоке SLA каждой операции выше.
               </div>
             </div>
           </div>
 
           {/* Кастомные PromQL проверки + готовые инфраструктурные пресеты */}
-          <div className="border-t border-slate-100 pt-3 space-y-2.5">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-semibold text-slate-800">
-                Инфраструктурные и прикладные метрики Prometheus (SLA ступеней / автостоп)
-              </span>
+              <div>
+                <div className="font-bold text-sm text-slate-900">
+                  Инфраструктурные и прикладные метрики Prometheus
+                </div>
+                <div className="text-[11px] text-slate-600">
+                  Контроль CPU, RAM, БД, JVM и бизнес-метрик для вердикта по ступеням (SLA) и автостопа
+                </div>
+              </div>
               <div className="flex flex-wrap items-center gap-1.5">
-                <Select
-                  value=""
-                  onChange={(e) => {
-                    const pr = CC_PRESETS.find((p) => p.key === e.target.value);
-                    if (!pr) return;
-                    setStop({
-                      ...stop,
-                      customChecks: [
-                        ...(stop.customChecks || []),
-                        {
-                          name: pr.name,
-                          promql: pr.promql,
-                          cmp: pr.cmp,
-                          threshold: pr.threshold,
-                          unit: pr.unit,
-                          stepSla: pr.stepSla,
-                          autoStop: pr.autoStop,
-                        },
-                      ],
-                    });
-                    setDirty(true);
-                  }}
-                  className="h-7 text-xs w-52"
-                >
-                  <option value="">⚡ Готовый шаблон метрики…</option>
-                  {CC_PRESETS.map((pr) => (
-                    <option key={pr.key} value={pr.key}>
-                      {pr.label} ({pr.cmp === 'LTE' ? '≤' : ''} {pr.threshold}
-                      {pr.unit})
-                    </option>
-                  ))}
-                </Select>
-
                 {scriptCharts.length > 0 && (
                   <Select
                     value=""
@@ -2288,7 +2434,7 @@ export function LoadStudioPage() {
                       });
                       setDirty(true);
                     }}
-                    className="h-7 text-xs w-48"
+                    className="h-8 text-xs w-48 bg-white"
                   >
                     <option value="">+ Из графика скрипта…</option>
                     {scriptCharts.map((c: any) => (
@@ -2300,7 +2446,7 @@ export function LoadStudioPage() {
                 )}
 
                 <Button
-                  variant="outline"
+                  variant="primary"
                   size="xs"
                   onClick={() => {
                     setStop({
@@ -2319,101 +2465,214 @@ export function LoadStudioPage() {
               </div>
             </div>
 
-            {(stop.customChecks || []).map((cc: any, cIdx: number) => (
-              <div key={cIdx} className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    value={cc.name || ''}
-                    onChange={(e) => {
-                      const next = [...stop.customChecks];
-                      next[cIdx] = { ...next[cIdx], name: e.target.value };
-                      setStop({ ...stop, customChecks: next });
-                      setDirty(true);
-                    }}
-                    placeholder="Название метрики (например CPU серверов)"
-                    className="h-7 w-52 text-xs bg-white"
-                  />
-                  <Select
-                    value={cc.cmp || 'LTE'}
-                    onChange={(e) => {
-                      const next = [...stop.customChecks];
-                      next[cIdx] = { ...next[cIdx], cmp: e.target.value };
-                      setStop({ ...stop, customChecks: next });
-                      setDirty(true);
-                    }}
-                    className="h-7 w-20 text-xs bg-white"
-                  >
-                    <option value="LTE">≤</option>
-                    <option value="LT">&lt;</option>
-                    <option value="GTE">≥</option>
-                    <option value="GT">&gt;</option>
-                  </Select>
-                  <FormulaInput
-                    value={cc.threshold ?? 80}
-                    onChange={(v) => {
-                      const next = [...stop.customChecks];
-                      next[cIdx] = { ...next[cIdx], threshold: v };
-                      setStop({ ...stop, customChecks: next });
-                      setDirty(true);
-                    }}
-                    className="w-24"
-                  />
-                  <Input
-                    value={cc.unit || ''}
-                    onChange={(e) => {
-                      const next = [...stop.customChecks];
-                      next[cIdx] = { ...next[cIdx], unit: e.target.value };
-                      setStop({ ...stop, customChecks: next });
-                      setDirty(true);
-                    }}
-                    placeholder="%"
-                    className="h-7 w-16 text-xs bg-white"
-                  />
-                  <Switch
-                    checked={cc.stepSla !== false}
-                    onChange={(v) => {
-                      const next = [...stop.customChecks];
-                      next[cIdx] = { ...next[cIdx], stepSla: v };
-                      setStop({ ...stop, customChecks: next });
-                      setDirty(true);
-                    }}
-                    label={<span className="text-xs">SLA ступени</span>}
-                  />
-                  <Switch
-                    checked={!!cc.autoStop}
-                    onChange={(v) => {
-                      const next = [...stop.customChecks];
-                      next[cIdx] = { ...next[cIdx], autoStop: v };
-                      setStop({ ...stop, customChecks: next });
-                      setDirty(true);
-                    }}
-                    label={<span className="text-xs">Автостоп</span>}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="ml-auto"
-                    onClick={() => {
-                      setStop({ ...stop, customChecks: stop.customChecks.filter((_: any, i: number) => i !== cIdx) });
-                      setDirty(true);
-                    }}
-                  >
-                    <X className="h-4 w-4 text-rose-500" />
-                  </Button>
-                </div>
-                <Input
-                  value={cc.promql || ''}
-                  onChange={(e) => {
-                    const next = [...stop.customChecks];
-                    next[cIdx] = { ...next[cIdx], promql: e.target.value };
-                    setStop({ ...stop, customChecks: next });
+            {/* Быстрые шаблоны в 1 клик */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium text-slate-600 mr-1">Шаблоны в 1 клик:</span>
+              {CC_PRESETS.map((pr) => (
+                <button
+                  key={pr.key}
+                  type="button"
+                  onClick={() => {
+                    setStop({
+                      ...stop,
+                      customChecks: [
+                        ...(stop.customChecks || []),
+                        {
+                          name: pr.name,
+                          promql: pr.promql,
+                          cmp: pr.cmp,
+                          threshold: pr.threshold,
+                          unit: pr.unit,
+                          stepSla: pr.stepSla,
+                          autoStop: pr.autoStop,
+                        },
+                      ],
+                    });
                     setDirty(true);
                   }}
-                  placeholder="PromQL (доступны {range}, {run_id}, $var)"
-                  className="h-8 font-mono text-xs bg-white"
-                />
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-800 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-800 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Plus className="h-3 w-3 text-indigo-600" />
+                  {pr.label}
+                  <span className="font-mono text-[10px] text-slate-500">
+                    ({pr.cmp === 'LTE' ? '≤' : ''}
+                    {pr.threshold}
+                    {pr.unit})
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {(!stop.customChecks || stop.customChecks.length === 0) ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white/80 px-4 py-5 text-center text-xs text-slate-500">
+                Кастомные правила Prometheus пока не добавлены — нажмите на любой шаблон выше (CPU, RAM, JVM, БД) или создайте своё выражение PromQL с автокомплитом.
               </div>
-            ))}
+            ) : (
+              <div className="space-y-3">
+                {(stop.customChecks || []).map((cc: any, cIdx: number) => {
+                  const isSla = cc.stepSla !== false;
+                  const isAutoStop = !!cc.autoStop;
+                  const neitherActive = !isSla && !isAutoStop;
+                  return (
+                    <div
+                      key={cIdx}
+                      className="rounded-xl border border-slate-300/90 bg-white p-3.5 shadow-2xs space-y-2.5"
+                    >
+                      <div className="flex flex-wrap items-end gap-2.5">
+                        <div className="flex-1 min-w-[200px]">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            Название правила #{cIdx + 1}
+                          </label>
+                          <Input
+                            value={cc.name || ''}
+                            onChange={(e) => {
+                              const next = [...stop.customChecks];
+                              next[cIdx] = { ...next[cIdx], name: e.target.value };
+                              setStop({ ...stop, customChecks: next });
+                              setDirty(true);
+                            }}
+                            placeholder="Например: Утилизация CPU серверов"
+                            className="h-8 text-xs font-medium bg-white"
+                          />
+                        </div>
+
+                        <div className="w-24">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Норма</label>
+                          <Select
+                            value={cc.cmp || 'LTE'}
+                            onChange={(e) => {
+                              const next = [...stop.customChecks];
+                              next[cIdx] = { ...next[cIdx], cmp: e.target.value };
+                              setStop({ ...stop, customChecks: next });
+                              setDirty(true);
+                            }}
+                            className="h-8 text-xs font-semibold bg-white"
+                          >
+                            <option value="LTE">≤ (не выше)</option>
+                            <option value="LT">&lt; (строго ниже)</option>
+                            <option value="GTE">≥ (не ниже)</option>
+                            <option value="GT">&gt; (строго выше)</option>
+                          </Select>
+                        </div>
+
+                        <div className="w-28">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Порог</label>
+                          <FormulaInput
+                            value={cc.threshold ?? 80}
+                            onChange={(v) => {
+                              const next = [...stop.customChecks];
+                              next[cIdx] = { ...next[cIdx], threshold: v };
+                              setStop({ ...stop, customChecks: next });
+                              setDirty(true);
+                            }}
+                            className="w-full"
+                          />
+                        </div>
+
+                        <div className="w-20">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Ед. изм.</label>
+                          <Input
+                            value={cc.unit || ''}
+                            onChange={(e) => {
+                              const next = [...stop.customChecks];
+                              next[cIdx] = { ...next[cIdx], unit: e.target.value };
+                              setStop({ ...stop, customChecks: next });
+                              setDirty(true);
+                            }}
+                            placeholder="%, мс…"
+                            className="h-8 text-xs bg-white"
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-2 pb-0.5">
+                          <label
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold cursor-pointer select-none transition-colors ${
+                              isSla
+                                ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                                : 'border-slate-200 bg-slate-50 text-slate-500'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSla}
+                              onChange={(e) => {
+                                const next = [...stop.customChecks];
+                                next[cIdx] = { ...next[cIdx], stepSla: e.target.checked };
+                                setStop({ ...stop, customChecks: next });
+                                setDirty(true);
+                              }}
+                              className="accent-emerald-600"
+                            />
+                            SLA ступени
+                          </label>
+
+                          <label
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold cursor-pointer select-none transition-colors ${
+                              isAutoStop
+                                ? 'border-rose-300 bg-rose-50 text-rose-900'
+                                : 'border-slate-200 bg-slate-50 text-slate-500'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isAutoStop}
+                              onChange={(e) => {
+                                const next = [...stop.customChecks];
+                                next[cIdx] = { ...next[cIdx], autoStop: e.target.checked };
+                                setStop({ ...stop, customChecks: next });
+                                setDirty(true);
+                              }}
+                              className="accent-rose-600"
+                            />
+                            Автостоп
+                          </label>
+                        </div>
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="ml-auto shrink-0"
+                          title="Удалить правило"
+                          onClick={() => {
+                            setStop({
+                              ...stop,
+                              customChecks: stop.customChecks.filter((_: any, i: number) => i !== cIdx),
+                            });
+                            setDirty(true);
+                          }}
+                        >
+                          <X className="h-4 w-4 text-rose-500" />
+                        </Button>
+                      </div>
+
+                      {neitherActive && (
+                        <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1">
+                          Правило отключено: включите «SLA ступени» и/или «Автостоп», чтобы оно проверялось при запуске.
+                        </div>
+                      )}
+
+                      <PromqlEditor
+                        rows={2}
+                        value={cc.promql || ''}
+                        onChange={(val) => {
+                          const next = [...stop.customChecks];
+                          next[cIdx] = { ...next[cIdx], promql: val };
+                          setStop({ ...stop, customChecks: next });
+                          setDirty(true);
+                        }}
+                        scriptId={id}
+                        variables={Object.keys(chartVarsMap)}
+                        varValues={chartVarsMap}
+                        allowMacros={true}
+                        showToolbar={true}
+                        showTestButton={true}
+                        placeholder="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode='idle'}[{range}])) * 100)"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </CardBody>
       </Card>
@@ -2639,238 +2898,479 @@ export function LoadStudioPage() {
         </div>
       </div>
 
-      {/* Модальное окно выбора и массового управления профилями */}
+      {/* Модальное окно выбора и массового управления профилями и папками */}
       <Modal
         open={profilesModalOpen}
         onClose={() => setProfilesModalOpen(false)}
         title={`Профили нагрузки (${profiles.length})`}
-        maxWidth="max-w-4xl"
+        maxWidth="max-w-5xl"
       >
-        <div className="space-y-3">
-          {profiles.length > 0 && (
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="relative flex-1 min-w-[200px]">
-                <Search className="h-4 w-4 text-slate-400 absolute left-3 top-2.5" />
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          {/* Левая панель папок профилей */}
+          <div className="lg:col-span-3 space-y-2 border-b lg:border-b-0 lg:border-r border-slate-200 pb-3 lg:pb-0 lg:pr-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Папки</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreatingFolder(true);
+                  setNewFolderInput('');
+                }}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-50 cursor-pointer"
+              >
+                <FolderPlus className="h-3.5 w-3.5" />
+                Создать
+              </button>
+            </div>
+
+            {creatingFolder && (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const nf = newFolderInput.trim();
+                  if (!nf) return;
+                  if (!customFolders.includes(nf)) {
+                    setCustomFolders((prev) => [...prev, nf]);
+                  }
+                  setActiveFolderFilter(nf);
+                  setMoveFolderTarget(nf);
+                  setCreatingFolder(false);
+                  setNewFolderInput('');
+                  toast.success(`Папка «${nf}» создана — переместите или сохраните в неё профили`);
+                }}
+              >
                 <Input
-                  value={profSearch}
-                  onChange={(e) => setProfSearch(e.target.value)}
-                  placeholder="Поиск профиля…"
-                  className="pl-9 h-8 text-xs"
+                  autoFocus
+                  value={newFolderInput}
+                  onChange={(e) => setNewFolderInput(e.target.value)}
+                  placeholder="Имя папки…"
+                  className="h-7 text-xs flex-1"
                 />
-              </div>
-              <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={filteredProfiles.length > 0 && filteredProfiles.every((p: any) => selectedProfIds.has(p.id))}
-                  onChange={(e) => {
-                    const next = new Set(selectedProfIds);
-                    filteredProfiles.forEach((p: any) => {
-                      if (e.target.checked) next.add(p.id);
-                      else next.delete(p.id);
-                    });
-                    setSelectedProfIds(next);
-                  }}
-                />
-                Выбрать все видимые
-              </label>
-              {selectedProfIds.size > 0 && (
-                <Button
-                  variant="danger"
-                  size="xs"
-                  onClick={async () => {
-                    const ids = Array.from(selectedProfIds);
-                    const ok = await confirm({
-                      title: 'Удалить выбранные профили?',
-                      message: `Будет удалено профилей: ${ids.length}`,
-                      confirmText: `Удалить (${ids.length})`,
-                    });
-                    if (!ok) return;
-                    await apiFetch(`/api/v1/scripts/${id}/load/profiles/bulk-delete`, {
-                      method: 'POST',
-                      body: { ids },
-                    });
-                    setSelectedProfIds(new Set());
-                    if (loadedProfileId && ids.includes(loadedProfileId)) {
-                      setSearchParams({});
-                    }
-                    qc.invalidateQueries({ queryKey: ['script-load', id] });
-                    toast.success(`Удалено профилей: ${ids.length}`);
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Удалить выбранные ({selectedProfIds.size})
+                <Button type="submit" size="xs">
+                  ОК
                 </Button>
-              )}
-            </div>
-          )}
-
-          {/* Базовый профиль */}
-          <div
-            onClick={() => {
-              setSearchParams({});
-              setProfilesModalOpen(false);
-            }}
-            className={`flex items-center justify-between rounded-xl border p-3 cursor-pointer transition-colors ${
-              loadedProfileId == null ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            <div>
-              <div className="text-sm font-semibold text-slate-900 flex items-center gap-1.5">
-                <Star className="h-4 w-4 text-amber-500 fill-amber-500" />
-                Базовый профиль скрипта
-                {loadedProfileId == null && <Badge variant="info">Открыт</Badge>}
-              </div>
-              <div className="text-xs text-slate-500">Основная нагрузка скрипта по умолчанию</div>
-            </div>
-            {loadedProfileId != null && (
-              <Button variant="outline" size="xs">
-                Открыть
-              </Button>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-[55vh] overflow-y-auto">
-            {filteredProfiles.map((p: any) => {
-              const isCur = loadedProfileId === p.id;
-              const isChecked = selectedProfIds.has(p.id);
-              const meta = summarizeProfileData(p.data);
-              return (
-                <div
-                  key={p.id}
-                  className={`rounded-xl border p-3 space-y-2 ${
-                    isCur ? 'border-indigo-500 bg-indigo-50/40' : 'border-slate-200 bg-white'
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => setCreatingFolder(false)}
+                  className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {}}
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          const next = new Set(selectedProfIds);
-                          const targetChecked = !isChecked;
-                          if (ev.shiftKey && lastClickedProfId != null) {
-                            const i1 = filteredProfiles.findIndex((x: any) => x.id === lastClickedProfId);
-                            const i2 = filteredProfiles.findIndex((x: any) => x.id === p.id);
-                            if (i1 >= 0 && i2 >= 0) {
-                              for (let k = Math.min(i1, i2); k <= Math.max(i1, i2); k++) {
-                                if (targetChecked) next.add(filteredProfiles[k].id);
-                                else next.delete(filteredProfiles[k].id);
-                              }
-                            }
-                          } else {
-                            if (targetChecked) next.add(p.id);
-                            else next.delete(p.id);
-                          }
-                          setLastClickedProfId(p.id);
-                          setSelectedProfIds(next);
-                        }}
-                      />
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </form>
+            )}
+
+            <div className="space-y-1 max-h-[48vh] overflow-y-auto">
+              <button
+                type="button"
+                onClick={() => setActiveFolderFilter('__all__')}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+                  activeFolderFilter === '__all__'
+                    ? 'bg-indigo-600 text-white font-semibold'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span className="flex items-center gap-1.5 truncate">
+                  <Layers className="h-3.5 w-3.5 shrink-0" />
+                  Все профили
+                </span>
+                <span className="text-[11px] opacity-80">{profiles.length}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveFolderFilter('__root__')}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+                  activeFolderFilter === '__root__'
+                    ? 'bg-indigo-600 text-white font-semibold'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span className="flex items-center gap-1.5 truncate">
+                  <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                  Без папки
+                </span>
+                <span className="text-[11px] opacity-80">{rootProfilesCount}</span>
+              </button>
+
+              {folderNames.map((fn) => {
+                const isSel = activeFolderFilter === fn;
+                return (
+                  <div
+                    key={fn}
+                    className={`group flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
+                      isSel ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setActiveFolderFilter(fn)}
+                      className="flex items-center gap-1.5 truncate flex-1 text-left cursor-pointer"
+                    >
+                      <Folder className={`h-3.5 w-3.5 shrink-0 ${isSel ? 'text-white' : 'text-amber-500'}`} />
+                      <span className="truncate">{fn}</span>
+                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
-                        onClick={() => {
-                          setSearchParams({ profile: String(p.id) });
-                          setProfilesModalOpen(false);
+                        title="Переименовать или расформировать папку"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setRenameFolderModal({ oldFolder: fn, newFolder: fn });
                         }}
-                        className="font-semibold text-sm text-slate-900 hover:text-indigo-600 truncate text-left cursor-pointer"
+                        className={`opacity-0 group-hover:opacity-100 rounded p-0.5 cursor-pointer ${
+                          isSel ? 'hover:bg-indigo-500 text-white' : 'hover:bg-slate-200 text-slate-500'
+                        }`}
                       >
-                        {p.name}
+                        <Pencil className="h-3 w-3" />
                       </button>
+                      <span className="text-[11px] opacity-80 min-w-[14px] text-right">{folderCounts[fn] || 0}</span>
                     </div>
-                    {isCur && <Badge variant="info">Открыт</Badge>}
                   </div>
+                );
+              })}
+            </div>
+          </div>
 
-                  {/* Метрики профиля */}
-                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-                    <Badge variant="neutral">{meta.opsCnt} оп.</Badge>
-                    {meta.peakRate > 0 && <Badge variant="info">{meta.peakRate} оп/с</Badge>}
-                    {meta.peakVu > 0 && <Badge variant="neutral">{meta.peakVu} VU</Badge>}
-                    {meta.maxDurSec > 0 && <span>⏱ {fmtDurationSec(meta.maxDurSec)}</span>}
-                    {meta.warmup && <Badge variant="warning">🔥 {meta.warmup}</Badge>}
-                    {meta.envCnt > 0 && <span>· env: {meta.envCnt}</span>}
-                    {meta.gens > 1 && <span>· ген: {meta.gens}</span>}
-                  </div>
+          {/* Правая часть: поиск, массовые операции и карточки профилей (умная сортировка) */}
+          <div className="lg:col-span-9 space-y-3">
+            {profiles.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="relative flex-1 min-w-[180px]">
+                  <Search className="h-4 w-4 text-slate-400 absolute left-3 top-2" />
+                  <Input
+                    value={profSearch}
+                    onChange={(e) => setProfSearch(e.target.value)}
+                    placeholder="Поиск по названию или папке (умная сортировка 1, 2, 10)…"
+                    className="pl-9 h-8 text-xs"
+                  />
+                </div>
+                <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={filteredProfiles.length > 0 && filteredProfiles.every((p: any) => selectedProfIds.has(p.id))}
+                    onChange={(e) => {
+                      const next = new Set(selectedProfIds);
+                      filteredProfiles.forEach((p: any) => {
+                        if (e.target.checked) next.add(p.id);
+                        else next.delete(p.id);
+                      });
+                      setSelectedProfIds(next);
+                    }}
+                  />
+                  Все видимые ({filteredProfiles.length})
+                </label>
 
-                  <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                    {p.updatedAt && <span>{fmtShortDate(p.updatedAt)}</span>}
-                    {p.updatedBy && <span>· {p.updatedBy}</span>}
-                  </div>
-
-                  <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
+                {selectedProfIds.size > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 w-full rounded-xl border border-indigo-200 bg-indigo-50/60 px-3 py-2">
+                    <span className="text-xs font-semibold text-indigo-950 mr-1">
+                      Выбрано: {selectedProfIds.size}
+                    </span>
+                    <Input
+                      list="load-profile-folders-datalist"
+                      value={moveFolderTarget}
+                      onChange={(e) => setMoveFolderTarget(e.target.value)}
+                      placeholder="Имя папки (пусто = без папки)"
+                      className="h-7 text-xs w-52 bg-white"
+                    />
                     <Button
                       variant="outline"
                       size="xs"
-                      onClick={() => {
-                        setSearchParams({ profile: String(p.id) });
-                        setProfilesModalOpen(false);
-                      }}
-                    >
-                      <FolderOpen className="h-3.5 w-3.5" />
-                      Открыть
-                    </Button>
-                    <Link to={`/scripts/${script.id}/run?profile=${p.id}`}>
-                      <Button variant="outline" size="xs" title="Запустить">
-                        <Play className="h-3.5 w-3.5 text-emerald-600 fill-emerald-600" />
-                      </Button>
-                    </Link>
-                    <Link to={`/scripts/${script.id}/run?profile=${p.id}#schedule`}>
-                      <Button variant="outline" size="xs" title="Запланировать">
-                        <CalendarPlus className="h-3.5 w-3.5 text-indigo-600" />
-                      </Button>
-                    </Link>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title="Дублировать"
                       onClick={async () => {
-                        const res = await apiFetch(`/api/v1/scripts/${id}/load/profile/${p.id}/duplicate`, {
+                        const ids = Array.from(selectedProfIds);
+                        const targetF = moveFolderTarget.trim();
+                        await apiFetch(`/api/v1/scripts/${id}/load/profiles/move-folder`, {
                           method: 'POST',
+                          body: { ids, folder: targetF },
                         });
+                        setSelectedProfIds(new Set());
                         qc.invalidateQueries({ queryKey: ['script-load', id] });
-                        toast.success(`Создана копия «${res.profileName}»`);
+                        toast.success(
+                          targetF
+                            ? `Перемещено в папку «${targetF}»: ${ids.length}`
+                            : `Убрано из папки: ${ids.length}`
+                        );
                       }}
                     >
-                      <Copy className="h-3.5 w-3.5" />
+                      <Folder className="h-3.5 w-3.5 text-amber-500" />
+                      В папку
                     </Button>
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      title="Переименовать"
-                      onClick={() => setRenameModal({ id: p.id, name: p.name })}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
+                      variant="danger"
+                      size="xs"
                       className="ml-auto"
-                      title="Удалить"
                       onClick={async () => {
+                        const ids = Array.from(selectedProfIds);
                         const ok = await confirm({
-                          title: 'Удалить профиль?',
-                          message: `Профиль «${p.name}» будет удалён безвозвратно.`,
+                          title: 'Удалить выбранные профили?',
+                          message: `Будет удалено профилей: ${ids.length}`,
+                          confirmText: `Удалить (${ids.length})`,
                         });
                         if (!ok) return;
-                        await apiFetch(`/api/v1/scripts/${id}/load/profile/${p.id}/delete`, { method: 'POST' });
-                        if (loadedProfileId === p.id) setSearchParams({});
+                        await apiFetch(`/api/v1/scripts/${id}/load/profiles/bulk-delete`, {
+                          method: 'POST',
+                          body: { ids },
+                        });
+                        setSelectedProfIds(new Set());
+                        if (loadedProfileId && ids.includes(loadedProfileId)) {
+                          setSearchParams({});
+                        }
                         qc.invalidateQueries({ queryKey: ['script-load', id] });
-                        toast.success('Профиль удалён');
+                        toast.success(`Удалено профилей: ${ids.length}`);
                       }}
                     >
-                      <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Удалить ({selectedProfIds.size})
                     </Button>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* Базовый профиль */}
+            {activeFolderFilter === '__all__' && !profSearch.trim() && (
+              <div
+                onClick={() => {
+                  setSearchParams({});
+                  setProfilesModalOpen(false);
+                }}
+                className={`flex items-center justify-between rounded-xl border p-3 cursor-pointer transition-colors ${
+                  loadedProfileId == null ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <div>
+                  <div className="text-sm font-semibold text-slate-900 flex items-center gap-1.5">
+                    <Star className="h-4 w-4 text-amber-500 fill-amber-500" />
+                    Базовый профиль скрипта
+                    {loadedProfileId == null && <Badge variant="info">Открыт</Badge>}
+                  </div>
+                  <div className="text-xs text-slate-500">Основная нагрузка скрипта по умолчанию</div>
                 </div>
-              );
-            })}
+                {loadedProfileId != null && (
+                  <Button variant="outline" size="xs">
+                    Открыть
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {filteredProfiles.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-xs text-slate-400">
+                В выбранной папке нет подходящих профилей
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-[52vh] overflow-y-auto pr-0.5">
+                {filteredProfiles.map((p: any) => {
+                  const isCur = loadedProfileId === p.id;
+                  const isChecked = selectedProfIds.has(p.id);
+                  const meta = summarizeProfileData(p.data);
+                  return (
+                    <div
+                      key={p.id}
+                      className={`rounded-xl border p-3 space-y-2 transition-colors ${
+                        isCur ? 'border-indigo-500 bg-indigo-50/40' : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              const next = new Set(selectedProfIds);
+                              const targetChecked = !isChecked;
+                              if (ev.shiftKey && lastClickedProfId != null) {
+                                const i1 = filteredProfiles.findIndex((x: any) => x.id === lastClickedProfId);
+                                const i2 = filteredProfiles.findIndex((x: any) => x.id === p.id);
+                                if (i1 >= 0 && i2 >= 0) {
+                                  for (let k = Math.min(i1, i2); k <= Math.max(i1, i2); k++) {
+                                    if (targetChecked) next.add(filteredProfiles[k].id);
+                                    else next.delete(filteredProfiles[k].id);
+                                  }
+                                }
+                              } else {
+                                if (targetChecked) next.add(p.id);
+                                else next.delete(p.id);
+                              }
+                              setLastClickedProfId(p.id);
+                              setSelectedProfIds(next);
+                            }}
+                          />
+                          <div className="min-w-0">
+                            {p.folder && activeFolderFilter === '__all__' && (
+                              <div className="flex items-center gap-1 text-[10px] font-medium text-amber-700">
+                                <Folder className="h-3 w-3 text-amber-500 shrink-0" />
+                                <span className="truncate">{p.folder}</span>
+                              </div>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSearchParams({ profile: String(p.id) });
+                                setProfilesModalOpen(false);
+                              }}
+                              className="font-semibold text-sm text-slate-900 hover:text-indigo-600 truncate block text-left cursor-pointer"
+                            >
+                              {p.name}
+                            </button>
+                          </div>
+                        </div>
+                        {isCur && <Badge variant="info">Открыт</Badge>}
+                      </div>
+
+                      {/* Метрики профиля */}
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
+                        <Badge variant="neutral">{meta.opsCnt} оп.</Badge>
+                        {meta.peakRate > 0 && <Badge variant="info">{meta.peakRate} оп/с</Badge>}
+                        {meta.peakVu > 0 && <Badge variant="neutral">{meta.peakVu} VU</Badge>}
+                        {meta.maxDurSec > 0 && <span>⏱ {fmtDurationSec(meta.maxDurSec)}</span>}
+                        {meta.warmup && <Badge variant="warning">🔥 {meta.warmup}</Badge>}
+                        {meta.envCnt > 0 && <span>· env: {meta.envCnt}</span>}
+                        {meta.gens > 1 && <span>· ген: {meta.gens}</span>}
+                      </div>
+
+                      <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5">
+                        {p.lastRunAt && (
+                          <span className="text-emerald-700 font-medium">
+                            ▶ зап.: {fmtShortDate(p.lastRunAt)} ({p.runCount})
+                          </span>
+                        )}
+                        {p.updatedAt && <span>изм.: {fmtShortDate(p.updatedAt)}</span>}
+                        {p.updatedBy && <span>· {p.updatedBy}</span>}
+                      </div>
+
+                      <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          onClick={() => {
+                            setSearchParams({ profile: String(p.id) });
+                            setProfilesModalOpen(false);
+                          }}
+                        >
+                          <FolderOpen className="h-3.5 w-3.5" />
+                          Открыть
+                        </Button>
+                        <Link to={`/scripts/${script.id}/run?profile=${p.id}`}>
+                          <Button variant="outline" size="xs" title="Запустить">
+                            <Play className="h-3.5 w-3.5 text-emerald-600 fill-emerald-600" />
+                          </Button>
+                        </Link>
+                        <Link to={`/scripts/${script.id}/run?profile=${p.id}#schedule`}>
+                          <Button variant="outline" size="xs" title="Запланировать">
+                            <CalendarPlus className="h-3.5 w-3.5 text-indigo-600" />
+                          </Button>
+                        </Link>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="Дублировать"
+                          onClick={async () => {
+                            const res = await apiFetch(`/api/v1/scripts/${id}/load/profile/${p.id}/duplicate`, {
+                              method: 'POST',
+                            });
+                            qc.invalidateQueries({ queryKey: ['script-load', id] });
+                            toast.success(`Создана копия «${res.profileName}»`);
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="Переименовать / сменить папку"
+                          onClick={() => setRenameModal({ id: p.id, name: p.name, folder: p.folder || '' })}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="ml-auto"
+                          title="Удалить"
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: 'Удалить профиль?',
+                              message: `Профиль «${p.name}» будет удалён безвозвратно.`,
+                            });
+                            if (!ok) return;
+                            await apiFetch(`/api/v1/scripts/${id}/load/profile/${p.id}/delete`, { method: 'POST' });
+                            if (loadedProfileId === p.id) setSearchParams({});
+                            qc.invalidateQueries({ queryKey: ['script-load', id] });
+                            toast.success('Профиль удалён');
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </Modal>
 
-      {/* Переименование профиля */}
-      <Modal open={!!renameModal} onClose={() => setRenameModal(null)} title="Переименовать профиль" maxWidth="max-w-sm">
+      {/* Переименование / расформирование папки */}
+      <Modal
+        open={!!renameFolderModal}
+        onClose={() => setRenameFolderModal(null)}
+        title="Управление папкой профилей"
+        maxWidth="max-w-sm"
+      >
+        {renameFolderModal && (
+          <form
+            className="space-y-3"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                const nf = renameFolderModal.newFolder.trim();
+                await apiFetch(`/api/v1/scripts/${id}/load/profiles/rename-folder`, {
+                  method: 'POST',
+                  body: { oldFolder: renameFolderModal.oldFolder, newFolder: nf },
+                });
+                setCustomFolders((prev) =>
+                  prev.map((f) => (f === renameFolderModal.oldFolder ? nf : f)).filter(Boolean)
+                );
+                if (activeFolderFilter === renameFolderModal.oldFolder) {
+                  setActiveFolderFilter(nf || '__all__');
+                }
+                setRenameFolderModal(null);
+                qc.invalidateQueries({ queryKey: ['script-load', id] });
+                toast.success(nf ? `Папка переименована в «${nf}»` : 'Папка расформирована (профили перенесены в корень)');
+              } catch (err: any) {
+                toast.error(err.message);
+              }
+            }}
+          >
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Новое имя папки (оставьте пустым, чтобы убрать папку у профилей)
+              </label>
+              <Input
+                autoFocus
+                value={renameFolderModal.newFolder}
+                onChange={(e) => setRenameFolderModal({ ...renameFolderModal, newFolder: e.target.value })}
+                placeholder="Без папки"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setRenameFolderModal(null)}>
+                Отмена
+              </Button>
+              <Button type="submit" size="sm">
+                Применить
+              </Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Переименование профиля и смена папки */}
+      <Modal open={!!renameModal} onClose={() => setRenameModal(null)} title="Профиль: имя и папка" maxWidth="max-w-sm">
         {renameModal && (
           <form
             className="space-y-3"
@@ -2879,22 +3379,34 @@ export function LoadStudioPage() {
               try {
                 await apiFetch(`/api/v1/scripts/${id}/load/profile/${renameModal.id}/rename`, {
                   method: 'POST',
-                  body: { name: renameModal.name.trim() },
+                  body: { name: renameModal.name.trim(), folder: renameModal.folder.trim() },
                 });
                 setRenameModal(null);
                 qc.invalidateQueries({ queryKey: ['script-load', id] });
-                toast.success('Профиль переименован');
+                toast.success('Профиль обновлён');
               } catch (err: any) {
                 toast.error(err.message);
               }
             }}
           >
-            <Input
-              autoFocus
-              required
-              value={renameModal.name}
-              onChange={(e) => setRenameModal({ ...renameModal, name: e.target.value })}
-            />
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Название профиля *</label>
+              <Input
+                autoFocus
+                required
+                value={renameModal.name}
+                onChange={(e) => setRenameModal({ ...renameModal, name: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Папка</label>
+              <Input
+                list="load-profile-folders-datalist"
+                value={renameModal.folder}
+                onChange={(e) => setRenameModal({ ...renameModal, folder: e.target.value })}
+                placeholder="Без папки"
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setRenameModal(null)}>
                 Отмена

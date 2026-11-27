@@ -100,7 +100,14 @@ public class ScheduleTimelineService {
 
     /** Для страницы расписания: только занятость, без нового запуска. */
     public Map<String, Object> overview() {
+        return overview(null, null);
+    }
+
+    /** Таймлайн занятости генераторов с поддержкой прокрутки в прошлое и будущее ([fromMs..toMs]). */
+    public Map<String, Object> overview(Long fromMs, Long toMs) {
         long now = Instant.now().toEpochMilli();
+        long historyCutoff = fromMs != null ? Math.min(fromMs, now) : (now - 24L * 3600_000L);
+        long maxFutureMs = toMs != null ? Math.max(toMs, now + 3600_000L) : Long.MAX_VALUE;
         List<Generator> all = generators.findAll().stream().sorted(Comparator.comparing(Generator::getName)).toList();
         Map<Long, String> names = all.stream().collect(Collectors.toMap(Generator::getId, Generator::getName, (a, b) -> a));
         Map<String, Object> out = new LinkedHashMap<>();
@@ -119,7 +126,9 @@ public class ScheduleTimelineService {
         out.put("generators", gens);
 
         List<Map<String, Object>> bars = new ArrayList<>();
+        java.util.Set<Long> seenRuns = new java.util.HashSet<>();
         for (Run r : runs.activeAndQueuedRuns()) {
+            seenRuns.add(r.getId());
             long from = (r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getStartedAt() != null ? r.getStartedAt() : r.getQueuedAt())
                     .toEpochMilli();
             long span = ConfigDuration.of(r.getK6Config()).totalSec();
@@ -135,6 +144,42 @@ public class ScheduleTimelineService {
                 b.put("genCount", genIds.size());
                 b.put("genNames", genNames);
                 b.put("scheduled", r.getRequest() != null && r.getRequest().get("scheduleId") != null);
+                bars.add(b);
+            }
+        }
+
+        // Недавние и исторические завершённые запуски (для прокрутки таймлайна назад)
+        for (Run r : runs.search(null, null, 200)) {
+            if (seenRuns.contains(r.getId()) || r.getFinishedAt() == null) {
+                continue;
+            }
+            long finMs = r.getFinishedAt().toEpochMilli();
+            if (finMs < historyCutoff) {
+                continue;
+            }
+            long startMs = (r.getStartedAt() != null ? r.getStartedAt() : r.getPlannedStartAt() != null ? r.getPlannedStartAt() : r.getQueuedAt())
+                    .toEpochMilli();
+            if (startMs > maxFutureMs) {
+                continue;
+            }
+            long endMs = Math.max(startMs + 15_000L, finMs);
+            Object pn = r.getRequest() == null ? null : r.getRequest().get("loadProfileName");
+            String profile = pn == null ? null : String.valueOf(pn);
+            List<Long> genIds = runs.generatorsOf(r.getId()).stream()
+                    .map(RunGenerator::getGeneratorId)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList();
+            String genNames = genIds.stream().map(gid -> names.getOrDefault(gid, "#" + gid)).collect(Collectors.joining(", "));
+            List<Long> targets = genIds.isEmpty() ? java.util.Collections.singletonList(null) : genIds;
+            for (Long gid : targets) {
+                Map<String, Object> b = bar("run", gid, 1, r.getScriptName(), profile, startMs, endMs, r.getId(), null);
+                b.put("by", r.getCreatedBy());
+                b.put("status", r.getStatus().name());
+                b.put("genCount", Math.max(1, genIds.size()));
+                b.put("genNames", genNames);
+                b.put("scheduled", r.getRequest() != null && r.getRequest().get("scheduleId") != null);
+                b.put("historical", true);
                 bars.add(b);
             }
         }

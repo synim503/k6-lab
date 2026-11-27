@@ -154,13 +154,15 @@ export function parseStepsFromStages(
 
 export function stepsToStages(warm: K6Stage | null, steps: LoadStep[], fallbackWarmDur = '2m'): K6Stage[] {
   const out: K6Stage[] = [];
+  const firstStepTarget = Number(steps?.[0]?.target) || 0;
   if (warm) {
-    out.push({ duration: warm.duration || fallbackWarmDur, target: Number(warm.target) || 0 });
+    const wt = firstStepTarget > 0 ? firstStepTarget : Number(warm.target) || 0;
+    out.push({ duration: warm.duration || fallbackWarmDur, target: wt });
   }
-  (steps || []).forEach((st) => {
+  (steps || []).forEach((st, idx) => {
     const hold = String(st.hold || '').trim();
     if (!hold) return;
-    const ramp = String(st.ramp || '').trim() || '0s';
+    const ramp = idx === 0 && warm ? '0s' : String(st.ramp || '').trim() || '0s';
     const tg = Number(st.target) || 0;
     out.push({ duration: ramp, target: tg }, { duration: hold, target: tg });
   });
@@ -437,39 +439,30 @@ export function StageConstructor({
         </div>
       )}
 
-      {/* Строка прогрева (когда включён общий прогрев) */}
+      {/* Строка прогрева (длительность плавного выхода до интенсивности 1-го шага) */}
       {warmupStagesCount > 0 && parsed.warm && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300/80 bg-amber-50/80 px-2.5 py-1.5 text-xs">
-          <span className="inline-flex items-center gap-1 font-semibold text-amber-900">
+        <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-amber-300/90 bg-amber-50/90 px-3 py-1.5 text-xs">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-amber-950">
             <Flame className="h-3.5 w-3.5 text-amber-600" />
-            Прогрев (стадия #1)
+            Прогрев до 1-й ступени:
+          </span>
+          <span className="rounded bg-white/90 border border-amber-200 px-2 py-0.5 font-mono font-semibold text-amber-900">
+            {startVal || 0} → {parsed.steps[0]?.target ?? parsed.warm.target} {unit}
           </span>
           <div className="flex items-center gap-1">
-            <span className="text-[11px] text-amber-800">Уровень:</span>
-            <FormulaInput
-              value={parsed.warm.target}
-              onChange={(v) => {
-                const next = [...stages];
-                next[0] = { duration: parsed.warm?.duration || globalWarmupDur || '2m', target: v };
-                onChangeStages(next);
-              }}
-              suffix={unit}
-              className="w-28"
-            />
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="text-[11px] text-amber-800">Длит.:</span>
+            <span className="text-[11px] text-amber-800">за</span>
             <Input
               value={parsed.warm.duration}
               onChange={(e) => {
                 const next = [...stages];
-                next[0] = { ...next[0], duration: e.target.value };
+                const step1Target = parsed.steps[0]?.target ?? parsed.warm?.target ?? 0;
+                next[0] = { duration: e.target.value, target: step1Target };
                 onChangeStages(next);
               }}
               className="h-7 w-20 text-xs font-mono bg-white"
             />
           </div>
-          <span className="text-[11px] text-amber-700 ml-auto">
+          <span className="text-[11px] text-amber-800 ml-auto">
             Не портит SLA ступеней и итоги прогона
           </span>
         </div>
@@ -693,16 +686,28 @@ export function StageConstructor({
                     title="Длительность стадии (0s, 30s, 5m)"
                     className="h-7 w-20 text-xs font-mono bg-white"
                   />
-                  <FormulaInput
-                    value={st.target ?? 0}
-                    onChange={(v) => {
-                      const next = [...stages];
-                      next[sIdx] = { ...next[sIdx], target: v };
-                      onChangeStages(next);
-                    }}
-                    suffix={unit}
-                    className="flex-1 min-w-[90px]"
-                  />
+                  {isWarmRow ? (
+                    <span
+                      className="flex-1 min-w-[90px] rounded border border-amber-200 bg-white/80 px-2 py-1 font-mono text-xs text-amber-900"
+                      title="Прогрев плавно выводит нагрузку на уровень 1-й основной стадии"
+                    >
+                      → {stages[1]?.target ?? st.target ?? 0} {unit} (1-й шаг)
+                    </span>
+                  ) : (
+                    <FormulaInput
+                      value={st.target ?? 0}
+                      onChange={(v) => {
+                        const next = [...stages];
+                        next[sIdx] = { ...next[sIdx], target: v };
+                        if (sIdx === warmupStagesCount && warmupStagesCount > 0) {
+                          next[0] = { ...next[0], target: v };
+                        }
+                        onChangeStages(next);
+                      }}
+                      suffix={unit}
+                      className="flex-1 min-w-[90px]"
+                    />
+                  )}
 
                   {!isWarmRow && (
                     <div className="flex items-center gap-0.5">

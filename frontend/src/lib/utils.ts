@@ -141,3 +141,39 @@ export function deployStatusMeta(status?: string): { label: string; variant: Bad
     default: return { label: status || '—', variant: 'default' };
   }
 }
+
+const NATURAL_COLLATOR = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
+
+/** Умное сравнение строк с учётом чисел и кириллицы/латиницы без регистра («20%» < «100%», «Шаг 2» < «Шаг 10»). */
+export function naturalCompare(a?: string | null, b?: string | null): number {
+  return NATURAL_COLLATOR.compare(a ?? '', b ?? '');
+}
+
+/** Сортирует профили: сначала без папки по естественному порядку имени, затем по папкам и имени внутри папки. */
+export function sortProfilesSmart<T extends { name?: string | null; folder?: string | null }>(list: T[]): T[] {
+  return [...list].sort((a, b) => {
+    const fa = (a.folder || '').trim();
+    const fb = (b.folder || '').trim();
+    if (Boolean(fa) !== Boolean(fb)) {
+      return fa ? 1 : -1;
+    }
+    const fc = naturalCompare(fa, fb);
+    if (fc !== 0) return fc;
+    return naturalCompare(a.name, b.name);
+  });
+}
+
+/** Группирует отсортированные профили по папкам (корень folder='' идёт первым). */
+export function groupProfilesByFolder<T extends { name?: string | null; folder?: string | null }>(
+  list: T[]
+): { folder: string; items: T[] }[] {
+  const sorted = sortProfilesSmart(list);
+  const map = new Map<string, T[]>();
+  for (const item of sorted) {
+    const f = (item.folder || '').trim();
+    const bucket = map.get(f);
+    if (bucket) bucket.push(item);
+    else map.set(f, [item]);
+  }
+  return Array.from(map.entries()).map(([folder, items]) => ({ folder, items }));
+}

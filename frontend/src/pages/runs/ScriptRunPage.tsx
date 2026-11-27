@@ -19,6 +19,7 @@ import {
 import { apiFetch } from '@/lib/api';
 import { Badge, Button, Card, CardBody, CardHeader, Input, Select, Spinner, Switch, Textarea } from '@/components/ui/primitives';
 import { ScheduleTimeline, toLocalDatetimeValue } from '@/components/schedule/ScheduleTimeline';
+import { groupProfilesByFolder } from '@/lib/utils';
 import { ScriptHead } from '../scripts/ScriptHead';
 
 type TimePreset = 'front' | 'back' | 'auto' | '+15m' | '+1h' | '22:00' | 'custom';
@@ -320,11 +321,23 @@ export function ScriptRunPage() {
                               <option value="">
                                 {data.baseOk ? 'Нагрузка скрипта (как сохранена)' : 'Нагрузка скрипта (не описана)'}
                               </option>
-                              {profiles.map((p: any) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name}
-                                </option>
-                              ))}
+                              {groupProfilesByFolder<any>(profiles).map((grp) =>
+                                grp.folder ? (
+                                  <optgroup key={grp.folder} label={`📁 ${grp.folder}`}>
+                                    {grp.items.map((p: any) => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.name}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                ) : (
+                                  grp.items.map((p: any) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.name}
+                                    </option>
+                                  ))
+                                )
+                              )}
                             </Select>
                             <div className="text-xs text-slate-500 mt-1">
                               Запуск пойдёт с операциями и переменными профиля; нагрузка скрипта не меняется.
@@ -597,11 +610,23 @@ export function ScriptRunPage() {
                             ? 'Нагрузка скрипта (как сохранена на момент запуска)'
                             : 'Нагрузка скрипта (не описана)'}
                         </option>
-                        {profiles.map((p: any) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
+                        {groupProfilesByFolder<any>(profiles).map((grp) =>
+                          grp.folder ? (
+                            <optgroup key={grp.folder} label={`📁 ${grp.folder}`}>
+                              {grp.items.map((p: any) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ) : (
+                            grp.items.map((p: any) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))
+                          )
+                        )}
                       </Select>
                     </div>
                   )}

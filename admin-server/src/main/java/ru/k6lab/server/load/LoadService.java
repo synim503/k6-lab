@@ -437,23 +437,37 @@ public class LoadService {
                     }
                 }
                 int existingWarm = (sc.get("warmup") instanceof Map<?, ?> wm && wm.get("stages") instanceof Number n) ? n.intValue() : 0;
+                int searchFrom = existingWarm > 0 && existingWarm < stages.size() ? existingWarm : 0;
+                double firstTarget = ex.contains("arrival") ? 50 : 20;
+                for (int i = searchFrom; i < stages.size(); i++) {
+                    Object tObj = stages.get(i).get("target");
+                    if (tObj instanceof Number tn && tn.doubleValue() > 0) {
+                        firstTarget = tn.doubleValue();
+                        break;
+                    }
+                }
+                long warmTarget = Math.max(1L, Math.round(firstTarget));
                 if (existingWarm > 0 && !stages.isEmpty()) {
                     if (existingWarm > 1 && stages.size() >= existingWarm) {
                         stages.subList(1, existingWarm).clear();
                     }
                     stages.get(0).put("duration", dur);
+                    stages.get(0).put("target", warmTarget);
                 } else {
-                    double firstTarget = 50;
-                    for (Map<String, Object> st : stages) {
-                        if (st.get("target") instanceof Number tn && tn.doubleValue() > 0) {
-                            firstTarget = tn.doubleValue();
-                            break;
-                        }
-                    }
                     Map<String, Object> warmStage = new java.util.LinkedHashMap<>();
                     warmStage.put("duration", dur);
-                    warmStage.put("target", Math.max(1L, Math.round(firstTarget * 0.3)));
+                    warmStage.put("target", warmTarget);
                     stages.add(0, warmStage);
+                }
+                // Если 1-я ступень уже начинается с пары (разгон -> полка) на том же уровне warmTarget, убираем лишний разгон после прогрева
+                if (stages.size() >= 3) {
+                    Object t1 = stages.get(1).get("target");
+                    Object t2 = stages.get(2).get("target");
+                    if (t1 instanceof Number n1 && t2 instanceof Number n2
+                            && Math.round(n1.doubleValue()) == warmTarget
+                            && Math.round(n2.doubleValue()) == warmTarget) {
+                        stages.get(1).put("duration", "0s");
+                    }
                 }
                 sc.put("stages", stages);
                 sc.put("warmup", Map.of("stages", 1));

@@ -29,16 +29,34 @@ public class KnownHostService {
         return repo.findAll();
     }
 
-    /** Подтверждение ключа пользователем. Существующая запись с другим ключом НЕ перезаписывается. */
+    /** Подтверждение ключа пользователем. Существующая запись с другим ключом НЕ перезаписывается без явного флага replace. */
     @Transactional
     public KnownHost confirm(String host, int port, String keyType, String fingerprint, String publicKey, String user) {
+        return confirm(host, port, keyType, fingerprint, publicKey, user, false);
+    }
+
+    /** Подтверждение ключа с опциональной заменой изменившегося ключа хоста по явному решению администратора. */
+    @Transactional
+    public KnownHost confirm(String host, int port, String keyType, String fingerprint, String publicKey, String user, boolean replace) {
         Optional<KnownHost> existing = repo.findByHostAndPort(host, port);
         if (existing.isPresent()) {
-            if (existing.get().getFingerprintSha256().equals(fingerprint)) {
-                return existing.get();
+            KnownHost prev = existing.get();
+            if (prev.getFingerprintSha256().equals(fingerprint)) {
+                return prev;
             }
-            throw new IllegalStateException("Для " + host + ":" + port + " уже подтверждён другой ключ. "
-                    + "Удалите запись о хосте, если ключ сменили намеренно.");
+            if (!replace) {
+                throw new IllegalStateException("Для " + host + ":" + port + " уже подтверждён другой ключ. "
+                        + "Подтвердите замену ключа, если его сменили намеренно.");
+            }
+            String oldFp = prev.getFingerprintSha256();
+            prev.setKeyType(keyType);
+            prev.setFingerprintSha256(fingerprint);
+            prev.setPublicKey(publicKey);
+            prev.setConfirmedBy(user);
+            KnownHost saved = repo.save(prev);
+            audit.record("known_host.replace", "known_host", saved.getId(),
+                    Map.of("host", host, "port", port, "oldFingerprint", oldFp, "fingerprint", fingerprint));
+            return saved;
         }
         KnownHost k = new KnownHost();
         k.setHost(host);

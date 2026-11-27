@@ -19,10 +19,12 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowLeft,
+  BarChart3,
   Calendar,
   Camera,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsDown,
   ChevronsUp,
@@ -32,21 +34,30 @@ import {
   Download,
   Eraser,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileCode,
   FileText,
   Gauge,
+  LayoutList,
+  Maximize2,
   OctagonX,
   Pause,
   Play,
+  Printer,
   RefreshCw,
+  RotateCcw,
   RotateCw,
+  SlidersHorizontal,
+  Sparkles,
   Square,
   Terminal,
   TrendingUp,
   WrapText,
+  X,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { Badge, Button, Card, CardBody, CardHeader, Input, Select, Spinner, Textarea } from '@/components/ui/primitives';
+import { Badge, Button, Card, CardBody, CardHeader, Input, Modal, Select, Spinner, Textarea } from '@/components/ui/primitives';
 import { useConfirm } from '@/components/ui/ConfirmContext';
 import { runStatusMeta } from '@/lib/utils';
 
@@ -331,11 +342,32 @@ export function RunDetailPage() {
   });
   const [selectedOps, setSelectedOps] = useState<Set<string> | null>(null);
 
-  // Results state (manual refresh only — zero jitter!)
+  // Results & Report Studio state
+  const [repCustomTitle, setRepCustomTitle] = useState('');
+  const [repSections, setRepSections] = useState<Record<string, boolean>>({
+    summary: true,
+    config: true,
+    env: true,
+    steps: true,
+    charts: true,
+    generators: true,
+  });
+  const [repExcludedCharts, setRepExcludedCharts] = useState<string[]>([]);
   const [repTimeAxis, setRepTimeAxis] = useState<'' | 'rel' | 'abs'>('');
+  const [repWarmup, setRepWarmup] = useState<'' | 'include' | 'skip'>('');
+  const [repSortBy, setRepSortBy] = useState<'' | 'NONE' | 'MAX' | 'MEAN' | 'LAST'>('');
+  const [repSortDir, setRepSortDir] = useState<'' | 'DESC' | 'ASC'>('');
   const [conclusion, setConclusion] = useState('');
   const [comment, setComment] = useState('');
+  const [commentPreview, setCommentPreview] = useState(false);
+  const [savedReportSnap, setSavedReportSnap] = useState('');
+  const [reportSettingsOpen, setReportSettingsOpen] = useState(false);
+  const [reportPreviewOpen, setReportPreviewOpen] = useState(false);
+  const [chartCatFilter, setChartCatFilter] = useState<'all' | 'k6' | 'steps' | 'custom' | 'sla'>('all');
+  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const [refreshingResults, setRefreshingResults] = useState(false);
+  const reportInitRunRef = useRef<string | undefined>(undefined);
+  const commentTaRef = useRef<HTMLTextAreaElement>(null);
 
   // Logs state
   const [logLevel, setLogLevel] = useState<'' | 'ERROR' | 'WARN' | 'INFO' | 'DEBUG'>('');
@@ -374,19 +406,133 @@ export function RunDetailPage() {
     },
   });
 
-  // Вкладка «Результаты» загружается один раз без автообновления (обновление только вручную по кнопке)
-  const { data: resData } = useQuery({
-    queryKey: ['run-results', id],
-    queryFn: () => apiFetch(`/api/v1/runs/${id}/results`),
+  const buildResultsApiUrl = (refresh = false) => {
+    const qs = new URLSearchParams();
+    if (refresh) qs.set('refresh', 'true');
+    if (repTimeAxis) qs.set('time', repTimeAxis);
+    if (repWarmup) qs.set('warmup', repWarmup);
+    if (repSortBy) qs.set('sort', repSortBy);
+    if (repSortDir) qs.set('dir', repSortDir);
+    const s = qs.toString();
+    return `/api/v1/runs/${id}/results${s ? `?${s}` : ''}`;
+  };
+
+  // Вкладка «Результаты и отчёт» загружается без таймера (перестроение только при смене фильтров графиков или по кнопке)
+  const { data: resData, isFetching: fetchingResults } = useQuery({
+    queryKey: ['run-results', id, repTimeAxis, repWarmup, repSortBy, repSortDir],
+    queryFn: () => apiFetch(buildResultsApiUrl(false)),
     enabled: !!id,
   });
 
   useEffect(() => {
-    if (resData) {
-      setConclusion(resData.conclusion || '');
-      setComment(resData.conclusionComment || '');
+    if (lightboxIdx == null) return;
+    const list: any[] = resData?.charts || [];
+    if (list.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxIdx(null);
+      else if (e.key === 'ArrowRight') setLightboxIdx((prev) => (prev == null ? null : (prev + 1) % list.length));
+      else if (e.key === 'ArrowLeft')
+        setLightboxIdx((prev) => (prev == null ? null : (prev - 1 + list.length) % list.length));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxIdx, resData?.charts]);
+
+  const makeReportSnap = (
+    conc: string,
+    comm: string,
+    title: string,
+    secs: Record<string, boolean>,
+    excl: string[],
+    tAxis: string,
+    wMode: string,
+    sBy: string,
+    sDir: string
+  ) =>
+    JSON.stringify({
+      conc: conc.trim(),
+      comm: comm.replace(/\r\n/g, '\n').trim(),
+      title: title.trim(),
+      secs: {
+        summary: secs.summary !== false,
+        config: secs.config !== false,
+        env: secs.env !== false,
+        steps: secs.steps !== false,
+        charts: secs.charts !== false,
+        generators: secs.generators !== false,
+      },
+      excl: [...excl].sort(),
+      tAxis,
+      wMode,
+      sBy,
+      sDir,
+    });
+
+  useEffect(() => {
+    if (!resData || !id) return;
+    if (reportInitRunRef.current !== id) {
+      reportInitRunRef.current = id;
+      const cfg = resData.reportConfig || {};
+      const secs = {
+        summary: cfg.sections?.summary !== false,
+        config: cfg.sections?.config !== false,
+        env: cfg.sections?.env !== false,
+        steps: cfg.sections?.steps !== false,
+        charts: cfg.sections?.charts !== false,
+        generators: cfg.sections?.generators !== false,
+      };
+      const excl = Array.isArray(cfg.excludedCharts) ? cfg.excludedCharts : [];
+      const tAxis = (cfg.timeAxis || '') as '' | 'rel' | 'abs';
+      const wMode = (cfg.warmup || '') as '' | 'include' | 'skip';
+      const sBy = (cfg.sortBy || '') as '' | 'NONE' | 'MAX' | 'MEAN' | 'LAST';
+      const sDir = (cfg.sortDir || '') as '' | 'DESC' | 'ASC';
+      const conc = resData.conclusion || '';
+      const comm = resData.conclusionComment || '';
+      const cTitle = cfg.customTitle || '';
+
+      setConclusion(conc);
+      setComment(comm);
+      setRepCustomTitle(cTitle);
+      setRepSections(secs);
+      setRepExcludedCharts(excl);
+      setRepTimeAxis(tAxis);
+      setRepWarmup(wMode);
+      setRepSortBy(sBy);
+      setRepSortDir(sDir);
+      setSavedReportSnap(makeReportSnap(conc, comm, cTitle, secs, excl, tAxis, wMode, sBy, sDir));
     }
-  }, [resData]);
+  }, [resData, id]);
+
+  const currentReportConfigPayload = useMemo(
+    () => ({
+      customTitle: repCustomTitle.trim(),
+      sections: repSections,
+      excludedCharts: repExcludedCharts,
+      timeAxis: repTimeAxis,
+      warmup: repWarmup,
+      sortBy: repSortBy,
+      sortDir: repSortDir,
+    }),
+    [repCustomTitle, repSections, repExcludedCharts, repTimeAxis, repWarmup, repSortBy, repSortDir]
+  );
+
+  const currentReportSnap = useMemo(
+    () =>
+      makeReportSnap(
+        conclusion,
+        comment,
+        repCustomTitle,
+        repSections,
+        repExcludedCharts,
+        repTimeAxis,
+        repWarmup,
+        repSortBy,
+        repSortDir
+      ),
+    [conclusion, comment, repCustomTitle, repSections, repExcludedCharts, repTimeAxis, repWarmup, repSortBy, repSortDir]
+  );
+
+  const isReportDirty = Boolean(savedReportSnap && currentReportSnap !== savedReportSnap);
 
   // История и живые точки метрик Prometheus
   const { data: metricsPoints = [] } = useQuery<any[]>({
@@ -448,20 +594,198 @@ export function RunDetailPage() {
   });
 
   const saveConclusionMut = useMutation({
-    mutationFn: () =>
+    mutationFn: (silent?: boolean) =>
       apiFetch(`/api/v1/runs/${id}/conclusion`, {
         method: 'POST',
-        body: { conclusion, comment },
-      }),
-    onSuccess: () => toast.success('Вывод инженера сохранён'),
+        body: {
+          conclusion,
+          comment,
+          reportConfig: currentReportConfigPayload,
+        },
+      }).then((res) => ({ res, silent })),
+    onSuccess: ({ silent }) => {
+      setSavedReportSnap(currentReportSnap);
+      if (!silent) toast.success('Вывод инженера и настройки отчёта сохранены');
+    },
     onError: (err: any) => toast.error(err.message),
   });
+
+  const saveReportConfigQuick = async (nextSecs: Record<string, boolean>, nextExcl: string[]) => {
+    try {
+      await apiFetch(`/api/v1/runs/${id}/report-config`, {
+        method: 'POST',
+        body: {
+          customTitle: repCustomTitle.trim(),
+          sections: nextSecs,
+          excludedCharts: nextExcl,
+          timeAxis: repTimeAxis,
+          warmup: repWarmup,
+          sortBy: repSortBy,
+          sortDir: repSortDir,
+        },
+      });
+      setSavedReportSnap(
+        makeReportSnap(
+          conclusion,
+          comment,
+          repCustomTitle,
+          nextSecs,
+          nextExcl,
+          repTimeAxis,
+          repWarmup,
+          repSortBy,
+          repSortDir
+        )
+      );
+    } catch (err: any) {
+      toast.error(err.message);
+    }
+  };
+
+  const handleToggleReportSection = (secKey: string) => {
+    const next = { ...repSections, [secKey]: repSections[secKey] === false };
+    setRepSections(next);
+    if (resData?.terminal) {
+      saveReportConfigQuick(next, repExcludedCharts);
+    }
+  };
+
+  const handleToggleChartIncluded = (chartTitle: string) => {
+    const set = new Set(repExcludedCharts);
+    if (set.has(chartTitle)) set.delete(chartTitle);
+    else set.add(chartTitle);
+    const next = Array.from(set);
+    setRepExcludedCharts(next);
+    if (resData?.terminal) {
+      saveReportConfigQuick(repSections, next);
+    }
+  };
+
+  const handleExportAction = async (url: string, mode: 'tab' | 'download' | 'preview') => {
+    if (isReportDirty && resData?.terminal) {
+      try {
+        await saveConclusionMut.mutateAsync(true);
+      } catch {
+        return;
+      }
+    }
+    if (mode === 'preview') {
+      setReportPreviewOpen(true);
+      return;
+    }
+    if (mode === 'tab') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.click();
+    }
+  };
+
+  const insertConclusionSnippet = (snippet: string) => {
+    setCommentPreview(false);
+    setComment((prev) => {
+      const base = prev.trimEnd();
+      return base ? `${base}\n\n${snippet}` : snippet;
+    });
+    setTimeout(() => commentTaRef.current?.focus(), 20);
+  };
+
+  const handleGenerateDraft = async () => {
+    if (!resData?.data) return;
+    if (comment.trim()) {
+      const ok = await confirm({
+        title: 'Заменить текущий комментарий черновиком?',
+        message: 'Существующий текст вывода инженера будет заменён автоматически собранной сводкой по результатам прогона.',
+        confirmText: 'Сформировать заново',
+      });
+      if (!ok) return;
+    }
+
+    const r = detail?.run;
+    const snap = detail?.snapshot;
+    const steps: any[] = resData.data.steps || [];
+    const ms = resData.maxSummary;
+    const failedSteps = steps.filter((s) => s.status !== 'SUCCESS' && s.status !== 'NOT_RUN');
+    const passedSteps = steps.filter((s) => s.status === 'SUCCESS');
+
+    // Автоподбор итогового вердикта
+    if (r?.degraded || !resData.data.prometheusOk) {
+      setConclusion('Результат недостоверен');
+    } else if (failedSteps.length === 0 && passedSteps.length > 0) {
+      setConclusion('Нагрузка выдерживается');
+    } else if (r?.stopReason || (ms && ms.confirmedStepNo == null && failedSteps.length > 0)) {
+      setConclusion('Деградация');
+    } else if (failedSteps.length > 0) {
+      setConclusion('Есть нарушения SLA');
+    }
+
+    const lines: string[] = [];
+    const profPart = r?.loadProfileName ? `, профиль «${r.loadProfileName}»` : '';
+    const genCount = snap?.generators?.length || detail?.generators?.length || 1;
+    lines.push(
+      `Проведён нагрузочный тест сценария «${snap?.script?.name || r?.scriptName || ''}»` +
+        `${snap?.script?.versionNumber != null ? ` v${snap.script.versionNumber}` : ''}${profPart} ` +
+        `(генераторов: ${genCount}, ступеней: ${steps.length}).`
+    );
+
+    if (ms) {
+      lines.push(`Итог поиска максимума: ${ms.headline}.${ms.detail ? ` ${ms.detail}` : ''}`);
+    } else if (steps.length === 1) {
+      const s0 = steps[0];
+      lines.push(
+        `Стационарная ступень (${fmtNum(s0.levelPct, 1)}% от модели): план ${fmtNum(s0.totalTargetRate, 1)} оп/с, ` +
+          `факт ${fmtNum(s0.totalActualRate, 1)} оп/с, макс. ошибки ${fmtNum(s0.maxErrorPct, 2)}%.`
+      );
+    }
+
+    if (r?.stopReason) {
+      lines.push(`Причина досрочной остановки: ${r.stopReason}.`);
+    }
+
+    if (failedSteps.length > 0) {
+      const breachLines: string[] = [];
+      for (const fs of failedSteps.slice(0, 4)) {
+        const rs = (fs.reasons || []).join('; ');
+        breachLines.push(`• Ступень ${fs.stepNo} (${fmtNum(fs.levelPct, 1)}%): ${rs || fs.status}`);
+      }
+      lines.push(`Зафиксированные отклонения:\n${breachLines.join('\n')}`);
+    } else if (passedSteps.length > 0) {
+      lines.push('Нарушений SLA по времени отклика, доле ошибок и кастомным метрикам Prometheus не зафиксировано.');
+    }
+
+    const gens: any[] = resData.data.generators || [];
+    const hotGen = gens.filter((g) => (g.cpuMax ?? 0) >= 80);
+    const dropGen = gens.reduce((acc, g) => acc + (Number(g.dropped) || 0), 0);
+    if (r?.degraded) {
+      lines.push('Внимание: в ходе теста фиксировалась потеря связи с генераторами нагрузки.');
+    } else if (hotGen.length > 0 || dropGen > 0) {
+      lines.push(
+        `Утилизация генераторов: ${
+          hotGen.length > 0
+            ? `высокий CPU на ${hotGen.map((g) => `${g.generator} (${fmtNum(g.cpuMax, 0)}%)`).join(', ')}`
+            : 'CPU в норме'
+        }${dropGen > 0 ? `, накоплено dropped_iterations: ${fmtNum(dropGen, 0)}` : ''}.`
+      );
+    } else if (gens.length > 0) {
+      const maxCpu = Math.max(...gens.map((g) => Number(g.cpuMax) || 0));
+      lines.push(`Генераторы нагрузки отработали штатно (пик CPU до ${fmtNum(maxCpu, 0)}%, потерь связи нет).`);
+    }
+
+    if (failedSteps.length > 0) {
+      lines.push('Рекомендации:\n• Проанализировать узкие места СУБД / сервисов на ступени деградации.\n• Повторить контрольный прогон после оптимизации.');
+    }
+
+    setCommentPreview(false);
+    setComment(lines.join('\n\n'));
+    toast.success('Черновик вывода сформирован по метрикам прогона');
+  };
 
   const handleManualRefreshResults = async () => {
     setRefreshingResults(true);
     try {
-      const fresh = await apiFetch(`/api/v1/runs/${id}/results?refresh=true`);
-      qc.setQueryData(['run-results', id], fresh);
+      const fresh = await apiFetch(buildResultsApiUrl(true));
+      qc.setQueryData(['run-results', id, repTimeAxis, repWarmup, repSortBy, repSortDir], fresh);
       toast.success('Итоги пересчитаны');
     } catch (err: any) {
       toast.error(err.message);
@@ -577,7 +901,13 @@ export function RunDetailPage() {
         errMax.get(op)!.push(r?.maxErr ?? null);
         dropRate
           .get(op)!
-          .push(r?.dropped != null ? r.dropped / Math.max(1, m.windowSec || 1) : null);
+          .push(
+            r?.droppedPerSec != null
+              ? r.droppedPerSec
+              : r?.dropped != null
+              ? r.dropped / Math.max(1, m.windowSec || 1)
+              : null
+          );
       }
       void idx;
     });
@@ -670,10 +1000,42 @@ export function RunDetailPage() {
   const hotGensCount = generators.filter((g: any) => g.cpuHot).length;
   const failedGensCount = generators.filter((g: any) => g.status === 'FAILED' || g.status === 'LOST').length;
 
-  const timeQuery = repTimeAxis ? `time=${repTimeAxis}` : '';
   const buildReportHref = (base: string, extra?: string) => {
-    const parts = [extra, timeQuery].filter(Boolean);
-    return parts.length > 0 ? `${base}?${parts.join('&')}` : base;
+    const qs = new URLSearchParams();
+    if (extra) {
+      for (const pair of extra.split('&')) {
+        const [k, v] = pair.split('=');
+        if (k) qs.set(k, v ?? 'true');
+      }
+    }
+    if (repTimeAxis) qs.set('time', repTimeAxis);
+    if (repWarmup) qs.set('warmup', repWarmup);
+    if (repSortBy) qs.set('sort', repSortBy);
+    if (repSortDir) qs.set('dir', repSortDir);
+    const s = qs.toString();
+    return s ? `${base}?${s}` : base;
+  };
+
+  const allReportCharts: any[] = useMemo(() => resData?.charts || [], [resData?.charts]);
+  const excludedSet = useMemo(() => new Set(repExcludedCharts), [repExcludedCharts]);
+  const filteredReportCharts = useMemo(
+    () =>
+      chartCatFilter === 'all'
+        ? allReportCharts
+        : allReportCharts.filter((c) => (c.category || 'custom') === chartCatFilter),
+    [allReportCharts, chartCatFilter]
+  );
+  const includedChartsCount = useMemo(
+    () => allReportCharts.filter((c) => !excludedSet.has(c.title)).length,
+    [allReportCharts, excludedSet]
+  );
+
+  const downloadDataUriPng = (dataUri: string, chartTitle: string) => {
+    const safe = (chartTitle || 'chart').replace(/[\\/:*?"<>|\r\n]+/g, '_');
+    const a = document.createElement('a');
+    a.href = dataUri;
+    a.download = `run-${run.id}-${safe}.png`;
+    a.click();
   };
 
   // Текст фазы на вкладке «Метрики»
@@ -1063,7 +1425,7 @@ export function RunDetailPage() {
           [
             { id: 'metrics', label: 'Метрики', icon: TrendingUp },
             { id: 'system', label: 'Системные метрики', icon: Cpu },
-            { id: 'results', label: 'Результаты', icon: ClipboardList },
+            { id: 'results', label: 'Результаты и отчёт', icon: ClipboardList },
             { id: 'logs', label: 'Логи', icon: Terminal, errBadge: logCounts.ERROR },
             { id: 'snapshot', label: 'Параметры запуска', icon: Camera },
           ] as const
@@ -1187,11 +1549,18 @@ export function RunDetailPage() {
                   ) : (
                     currentTableRows.map((r: any) => {
                       const secs = useAllRange ? lastM?.wholeSec || 0 : lastM?.windowSec || 0;
-                      let dropTxt = fmtNum(r.dropped, 0);
-                      if (r.dropped != null && secs > 0) {
-                        dropTxt +=
-                          (r.target > 0 ? ` · ${fmtNum((r.dropped / (r.target * secs)) * 100, 1)} %` : '') +
-                          ` · ${fmtNum(r.dropped / secs, 2)} ит/с`;
+                      let dropTxt = '—';
+                      if (!useAllRange && r.droppedPerSec != null) {
+                        const dps = Number(r.droppedPerSec) || 0;
+                        const pctPart = r.target > 0 ? ` (${fmtNum((dps / r.target) * 100, 1)} %)` : '';
+                        dropTxt = `${fmtNum(dps, 2)} ит/с${pctPart}`;
+                      } else if (r.dropped != null) {
+                        dropTxt = fmtNum(r.dropped, 0);
+                        if (secs > 0) {
+                          dropTxt +=
+                            (r.target > 0 ? ` · ${fmtNum((r.dropped / (r.target * secs)) * 100, 1)} %` : '') +
+                            ` · ${fmtNum(r.dropped / secs, 2)} ит/с`;
+                        }
                       }
                       const reasonsTxt = (r.reasons || []).join(', ');
                       return (
@@ -1409,63 +1778,234 @@ export function RunDetailPage() {
                 </div>
               )}
 
-              {/* Панель экспорта отчётов для завершённого теста */}
+              {/* Студия отчёта и панель экспорта для завершённого теста */}
               {resData.terminal && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    loading={refreshingResults}
-                    onClick={handleManualRefreshResults}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    Пересчитать итоги
-                  </Button>
+                <Card className="overflow-hidden border-indigo-200/80 shadow-xs">
+                  <div className="flex flex-wrap items-center gap-2 bg-gradient-to-r from-slate-50 via-white to-indigo-50/40 px-4 py-2.5 border-b border-slate-200/80">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.html`), 'preview')}
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      Предпросмотр отчёта
+                    </Button>
 
-                  <div className="inline-flex rounded-lg border border-indigo-300 bg-white overflow-hidden">
-                    <a
-                      href={buildReportHref(`/runs/${run.id}/report.html`)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-200"
+                    <div className="inline-flex rounded-lg border border-indigo-200 bg-white overflow-hidden shadow-2xs">
+                      <button
+                        type="button"
+                        onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.html`), 'tab')}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-100 cursor-pointer"
+                        title="Открыть самодостаточный HTML-отчёт в новой вкладке"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        HTML
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleExportAction(buildReportHref(`/runs/${run.id}/report.html`, 'download=true'), 'download')
+                        }
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-100 cursor-pointer"
+                        title="Скачать автономный HTML-файл со всеми графиками внутри"
+                      >
+                        <FileCode className="h-3.5 w-3.5" />
+                        .html
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.pdf`), 'download')}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-100 cursor-pointer"
+                        title="Скачать PDF-отчёт (A4 альбомный)"
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        PDF
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.docx`), 'download')}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 cursor-pointer"
+                        title="Скачать редактируемый документ Word (.docx)"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Word (.docx)
+                      </button>
+                    </div>
+
+                    <Button
+                      variant={reportSettingsOpen ? 'secondary' : 'outline'}
+                      size="sm"
+                      onClick={() => setReportSettingsOpen((v) => !v)}
                     >
-                      <FileCode className="h-3.5 w-3.5" />
-                      HTML-отчёт
-                    </a>
-                    <a
-                      href={buildReportHref(`/runs/${run.id}/report.html`, 'download=true')}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-200"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Скачать HTML
-                    </a>
-                    <a
-                      href={buildReportHref(`/runs/${run.id}/report.pdf`)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-200"
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      PDF
-                    </a>
-                    <a
-                      href={buildReportHref(`/runs/${run.id}/report.docx`)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      Word (docx)
-                    </a>
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                      Структура и графики
+                      {(repCustomTitle.trim() ||
+                        Object.values(repSections).some((v) => v === false) ||
+                        repExcludedCharts.length > 0) && (
+                        <span className="ml-0.5 rounded-full bg-indigo-600 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none">
+                          настроено
+                        </span>
+                      )}
+                    </Button>
+
+                    <div className="sm:ml-auto flex flex-wrap items-center gap-2">
+                      {fetchingResults && !refreshingResults && (
+                        <span className="text-[11px] text-indigo-600 animate-pulse">Обновление графиков…</span>
+                      )}
+                      {run.scriptId != null && (
+                        <Link to={`/scripts/${run.scriptId}/charts`}>
+                          <Button variant="ghost" size="sm" title="Перейти в конструктор кастомных PromQL-графиков скрипта">
+                            <BarChart3 className="h-3.5 w-3.5 text-indigo-600" />
+                            Конструктор графиков
+                          </Button>
+                        </Link>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        loading={refreshingResults}
+                        onClick={handleManualRefreshResults}
+                        title="Пересчитать агрегаты по ступеням и перестроить графики из Prometheus"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Пересчитать итоги
+                      </Button>
+                    </div>
                   </div>
 
-                  <Select
-                    value={repTimeAxis}
-                    onChange={(e) => setRepTimeAxis(e.target.value as any)}
-                    className="w-auto h-8 text-xs sm:ml-auto"
-                    title="Ось времени на графиках отчёта"
-                  >
-                    <option value="">Время: по настройкам</option>
-                    <option value="rel">Время: от начала теста</option>
-                    <option value="abs">Время: абсолютное</option>
-                  </Select>
-                </div>
+                  {/* Компактная полоса быстрых переключателей графиков + раскрываемая настройка структуры */}
+                  <div className="px-4 py-2.5 bg-white space-y-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-slate-500 font-medium flex items-center gap-1">
+                        <LayoutList className="h-3.5 w-3.5 text-slate-400" />
+                        Разделы отчёта:
+                      </span>
+                      {(
+                        [
+                          ['summary', 'Итог'],
+                          ['config', 'Конфигурация'],
+                          ['env', 'Переменные'],
+                          ['steps', 'Ступени'],
+                          [
+                            'charts',
+                            allReportCharts.length > 0
+                              ? `Графики (${includedChartsCount}/${allReportCharts.length})`
+                              : 'Графики',
+                          ],
+                          ['generators', 'Генераторы'],
+                        ] as const
+                      ).map(([sKey, sLabel]) => {
+                        const active = repSections[sKey] !== false;
+                        return (
+                          <button
+                            key={sKey}
+                            type="button"
+                            onClick={() => handleToggleReportSection(sKey)}
+                            title={
+                              active
+                                ? `Раздел «${sLabel}» включён в HTML/PDF/Word (нажмите, чтобы скрыть)`
+                                : `Раздел «${sLabel}» исключён из экспорта (нажмите, чтобы вернуть)`
+                            }
+                            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors cursor-pointer border ${
+                              active
+                                ? 'bg-indigo-50/80 border-indigo-200 text-indigo-800 hover:bg-indigo-100/70'
+                                : 'bg-slate-50 border-slate-200 text-slate-400 line-through hover:text-slate-600'
+                            }`}
+                          >
+                            {active ? <Check className="h-3 w-3 text-indigo-600" /> : <EyeOff className="h-3 w-3" />}
+                            {sLabel}
+                          </button>
+                        );
+                      })}
+
+                      <div className="lg:ml-auto flex flex-wrap items-center gap-1.5">
+                        <Select
+                          value={repTimeAxis}
+                          onChange={(e) => setRepTimeAxis(e.target.value as any)}
+                          className="w-auto h-7 text-xs"
+                          title="Ось X на временных графиках отчёта"
+                        >
+                          <option value="">Ось X: по умолч.</option>
+                          <option value="rel">Ось X: минуты от старта</option>
+                          <option value="abs">Ось X: часы (абс.)</option>
+                        </Select>
+                        <Select
+                          value={repWarmup}
+                          onChange={(e) => setRepWarmup(e.target.value as any)}
+                          className="w-auto h-7 text-xs"
+                          title="Отображение участка прогрева на графиках"
+                        >
+                          <option value="">Прогрев: по умолч.</option>
+                          <option value="include">Прогрев: с начала теста</option>
+                          <option value="skip">
+                            Прогрев: без прогрева
+                            {resData.warmupSec > 0 ? ` (−${Math.round(resData.warmupSec / 6) / 10} мин)` : ''}
+                          </option>
+                        </Select>
+                        <Select
+                          value={repSortBy}
+                          onChange={(e) => setRepSortBy(e.target.value as any)}
+                          className="w-auto h-7 text-xs"
+                          title="Сортировка рядов в легенде графиков"
+                        >
+                          <option value="">Легенда: по умолч.</option>
+                          <option value="NONE">Легенда: как в запросе</option>
+                          <option value="MAX">Легенда: по Max</option>
+                          <option value="MEAN">Легенда: по Mean</option>
+                          <option value="LAST">Легенда: по Last</option>
+                        </Select>
+                        {repSortBy && repSortBy !== 'NONE' && (
+                          <Select
+                            value={repSortDir || 'DESC'}
+                            onChange={(e) => setRepSortDir(e.target.value as any)}
+                            className="w-auto h-7 text-xs"
+                            title="Направление сортировки легенды"
+                          >
+                            <option value="DESC">↓ по убыв.</option>
+                            <option value="ASC">↑ по возр.</option>
+                          </Select>
+                        )}
+                      </div>
+                    </div>
+
+                    {reportSettingsOpen && (
+                      <div className="pt-2.5 border-t border-slate-100 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                        <div className="md:col-span-8">
+                          <label className="block text-xs font-medium text-slate-600 mb-1">
+                            Заголовок отчёта (для HTML, PDF и имени файла Word)
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={repCustomTitle}
+                              onChange={(e) => setRepCustomTitle(e.target.value)}
+                              placeholder={resData.defaultTitle || run.scriptName}
+                              className="h-8 text-xs"
+                            />
+                            {repCustomTitle.trim() && (
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => setRepCustomTitle('')}
+                                title="Вернуть стандартный заголовок «Сценарий - Профиль»"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                Сбросить
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="md:col-span-4 flex items-center justify-end gap-2">
+                          <Link
+                            to="/settings"
+                            className="text-xs text-indigo-600 hover:underline inline-flex items-center gap-1"
+                          >
+                            Глобальная тема и размер графиков →
+                          </Link>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Card>
               )}
 
               {!resData.data ? (
@@ -1482,45 +2022,205 @@ export function RunDetailPage() {
                     </div>
                   )}
 
-                  {/* Вывод инженера (для завершённого теста) */}
+                  {/* Расширенный редактор вывода инженера (для завершённого теста) */}
                   {resData.terminal && (
-                    <Card>
-                      <CardBody className="space-y-2.5">
-                        <h3 className="text-sm font-semibold text-slate-900">Вывод инженера</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                          <div className="md:col-span-4">
-                            <label className="block text-xs text-slate-500 mb-1">Итоговая оценка</label>
-                            <Select value={conclusion} onChange={(e) => setConclusion(e.target.value)}>
-                              <option value="">— не указан —</option>
-                              {(resData.conclusions || []).map((c: string) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                              {conclusion && !(resData.conclusions || []).includes(conclusion) && (
-                                <option value={conclusion}>{conclusion}</option>
-                              )}
-                            </Select>
+                    <Card className={repSections.summary === false ? 'opacity-65 border-dashed' : ''}>
+                      <CardHeader className="py-2.5 bg-slate-50/70">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-900">Вывод инженера и резюме прогона</span>
+                          {repSections.summary === false && (
+                            <Badge variant="default">скрыто из экспорта</Badge>
+                          )}
+                          {isReportDirty && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                              ● Есть несохранённые изменения
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={handleGenerateDraft}
+                            title="Автоматически собрать структурированный вывод по фактическим ступеням, SLA и генераторам"
+                          >
+                            <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+                            Сформировать по итогам
+                          </Button>
+                          <div className="inline-flex rounded-md border border-slate-200 bg-white overflow-hidden text-xs">
+                            <button
+                              type="button"
+                              onClick={() => setCommentPreview(false)}
+                              className={`px-2.5 py-1 font-medium cursor-pointer ${
+                                !commentPreview ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'
+                              }`}
+                            >
+                              Редактор
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCommentPreview(true)}
+                              className={`px-2.5 py-1 font-medium cursor-pointer ${
+                                commentPreview ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'
+                              }`}
+                            >
+                              Как в отчёте
+                            </button>
                           </div>
-                          <div className="md:col-span-8">
-                            <label className="block text-xs text-slate-500 mb-1">Комментарий</label>
-                            <Textarea
-                              rows={2}
-                              value={comment}
-                              onChange={(e) => setComment(e.target.value)}
-                              placeholder="Наблюдения, узкие места, ссылка на задачу…"
+                        </div>
+                      </CardHeader>
+                      <CardBody className="space-y-3">
+                        {/* Визуальные плашки вердикта */}
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-medium text-slate-600">Итоговый вердикт</label>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {(
+                              [
+                                {
+                                  val: 'Нагрузка выдерживается',
+                                  cls: 'border-emerald-300 bg-emerald-50 text-emerald-900 ring-emerald-500',
+                                  dot: 'bg-emerald-500',
+                                },
+                                {
+                                  val: 'Есть нарушения SLA',
+                                  cls: 'border-amber-300 bg-amber-50 text-amber-900 ring-amber-500',
+                                  dot: 'bg-amber-500',
+                                },
+                                {
+                                  val: 'Деградация',
+                                  cls: 'border-rose-300 bg-rose-50 text-rose-900 ring-rose-500',
+                                  dot: 'bg-rose-500',
+                                },
+                                {
+                                  val: 'Результат недостоверен',
+                                  cls: 'border-slate-400 bg-slate-100 text-slate-800 ring-slate-500',
+                                  dot: 'bg-slate-500',
+                                },
+                              ] as const
+                            ).map((opt) => {
+                              const selected = conclusion === opt.val;
+                              return (
+                                <button
+                                  key={opt.val}
+                                  type="button"
+                                  onClick={() => setConclusion(selected ? '' : opt.val)}
+                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+                                    selected
+                                      ? `${opt.cls} ring-2 ring-offset-1 font-semibold`
+                                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <span className={`h-2 w-2 rounded-full ${opt.dot}`} />
+                                  {opt.val}
+                                </button>
+                              );
+                            })}
+                            <Input
+                              value={
+                                [
+                                  'Нагрузка выдерживается',
+                                  'Есть нарушения SLA',
+                                  'Деградация',
+                                  'Результат недостоверен',
+                                ].includes(conclusion)
+                                  ? ''
+                                  : conclusion
+                              }
+                              onChange={(e) => setConclusion(e.target.value)}
+                              placeholder="Или свой вердикт…"
+                              className="h-8 w-48 text-xs"
                             />
                           </div>
                         </div>
-                        <div>
-                          <Button
-                            size="sm"
-                            loading={saveConclusionMut.isPending}
-                            onClick={() => saveConclusionMut.mutate()}
-                          >
-                            <Check className="h-3.5 w-3.5" />
-                            Сохранить
-                          </Button>
+
+                        {/* Быстрые шаблоны блоков */}
+                        {!commentPreview && (
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                            <span className="text-slate-400 mr-0.5">Добавить блок:</span>
+                            {(
+                              [
+                                ['+ Цель теста', 'Цель теста:\n• Проверить производительность сценария под целевой нагрузкой.'],
+                                ['+ Предел мощности', 'Найденный предел:\n• Максимальная подтверждённая ступень — __% (__ оп/с).'],
+                                ['+ Узкие места', 'Узкие места и наблюдения:\n• Рост латентности на операции __ из-за __.'],
+                                ['+ Рекомендации', 'Рекомендации:\n• Оптимизировать __ и провести повторный прогон.'],
+                                ['+ Артефакты / Задача', 'Ссылки:\n• Задача в трекере: \n• Дашборд Grafana: '],
+                              ] as const
+                            ).map(([btnLabel, tpl]) => (
+                              <button
+                                key={btnLabel}
+                                type="button"
+                                onClick={() => insertConclusionSnippet(tpl)}
+                                className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600 hover:border-indigo-300 hover:text-indigo-700 hover:bg-indigo-50/50 cursor-pointer"
+                              >
+                                {btnLabel}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {commentPreview ? (
+                          <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3.5 text-xs text-slate-800 space-y-1.5 min-h-[110px]">
+                            {conclusion ? (
+                              <div>
+                                <strong className="text-slate-900">Вывод инженера:</strong> {conclusion}
+                              </div>
+                            ) : (
+                              <div className="text-slate-400 italic">Вердикт не выбран</div>
+                            )}
+                            {comment.trim() ? (
+                              <div className="whitespace-pre-line leading-relaxed pt-1">{comment}</div>
+                            ) : (
+                              <div className="text-slate-400 italic">Текст комментария пуст</div>
+                            )}
+                          </div>
+                        ) : (
+                          <Textarea
+                            ref={commentTaRef}
+                            rows={6}
+                            value={comment}
+                            onChange={(e) => setComment(e.target.value)}
+                            onKeyDown={(e) => {
+                              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                                e.preventDefault();
+                                saveConclusionMut.mutate(false);
+                              }
+                            }}
+                            placeholder="Подробный инженерный вывод: найденный предел RPS, деградировавшие операции и сервисы, рекомендации к релизу… (абзацы и списки сохраняются в HTML, PDF и Word)"
+                            className="text-xs leading-relaxed"
+                          />
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                          <span className="text-[11px] text-slate-400">
+                            Ctrl+Enter — сохранить · при экспорте или предпросмотре изменения сохраняются автоматически
+                          </span>
+                          <div className="flex items-center gap-2">
+                            {comment.trim() && (
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                onClick={async () => {
+                                  const ok = await confirm({
+                                    title: 'Очистить текст вывода?',
+                                    message: 'Поле комментария инженера будет очищено.',
+                                    confirmText: 'Очистить',
+                                  });
+                                  if (ok) setComment('');
+                                }}
+                              >
+                                <Eraser className="h-3.5 w-3.5" />
+                                Очистить
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              loading={saveConclusionMut.isPending}
+                              onClick={() => saveConclusionMut.mutate(false)}
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              Сохранить в отчёт
+                            </Button>
+                          </div>
                         </div>
                       </CardBody>
                     </Card>
@@ -1529,14 +2229,19 @@ export function RunDetailPage() {
                   {/* Ступени и операции (как в reports/_steps.html) */}
                   {(resData.terminal || resData.data.prometheusOk) && (
                     <div className="space-y-4">
-                      <div>
-                        <h3 className="text-base font-semibold text-slate-900">
-                          {resData.livePreview ? 'Ступени и операции (предварительно)' : 'Ступени и операции'}
-                        </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Перцентили — histogram_quantile по гистограммам, просуммированным по всем генераторам. Окно
-                          ступени — удержание без первых секунд выхода на режим.
-                        </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                            {resData.livePreview ? 'Ступени и операции (предварительно)' : 'Ступени и операции'}
+                            {resData.terminal && repSections.steps === false && (
+                              <Badge variant="default">раздел скрыт из экспорта</Badge>
+                            )}
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Перцентили — histogram_quantile по гистограммам, просуммированным по всем генераторам. Окно
+                            ступени — удержание без первых секунд выхода на режим.
+                          </p>
+                        </div>
                       </div>
 
                       {/* Поиск максимума + Сводка по ступеням */}
@@ -1807,27 +2512,182 @@ export function RunDetailPage() {
                         );
                       })}
 
-                      {/* Кастомные графики отчёта */}
-                      {resData.charts?.length > 0 && (
-                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                          {resData.charts.map((ch: any, idx: number) => (
-                            <Card key={idx} className="overflow-hidden">
-                              <CardHeader className="py-2">
-                                <span className="font-semibold text-xs">{ch.title}</span>
-                              </CardHeader>
-                              <CardBody className="p-2">
-                                <img src={ch.dataUri} alt={ch.title} className="w-full h-auto rounded-lg" />
-                              </CardBody>
-                            </Card>
-                          ))}
+                      {/* Все графики отчёта (k6, по ступеням, кастомные скрипта, SLA Prometheus) */}
+                      {allReportCharts.length > 0 && (
+                        <div className="space-y-3 pt-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                                Графики отчёта
+                                <Badge variant="info">
+                                  в отчёте {includedChartsCount} из {allReportCharts.length}
+                                </Badge>
+                                {resData.terminal && repSections.charts === false && (
+                                  <Badge variant="default">раздел скрыт из экспорта</Badge>
+                                )}
+                              </h3>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                Клик по графику открывает полноэкранный просмотр (← / →). Любой график можно скрыть из
+                                экспорта HTML/PDF/Word без удаления шаблона.
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {(
+                                [
+                                  ['all', 'Все', allReportCharts.length],
+                                  [
+                                    'k6',
+                                    'k6 (ряды)',
+                                    allReportCharts.filter((c) => c.category === 'k6').length,
+                                  ],
+                                  [
+                                    'steps',
+                                    'По ступеням',
+                                    allReportCharts.filter((c) => c.category === 'steps').length,
+                                  ],
+                                  [
+                                    'custom',
+                                    'Скрипт',
+                                    allReportCharts.filter((c) => (c.category || 'custom') === 'custom').length,
+                                  ],
+                                  [
+                                    'sla',
+                                    'SLA Prometheus',
+                                    allReportCharts.filter((c) => c.category === 'sla').length,
+                                  ],
+                                ] as const
+                              )
+                                .filter(([k, , cnt]) => k === 'all' || cnt > 0)
+                                .map(([catKey, catLabel, cnt]) => (
+                                  <button
+                                    key={catKey}
+                                    type="button"
+                                    onClick={() => setChartCatFilter(catKey)}
+                                    className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium cursor-pointer transition-colors ${
+                                      chartCatFilter === catKey
+                                        ? 'bg-slate-800 text-white'
+                                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                                    }`}
+                                  >
+                                    <span>{catLabel}</span>
+                                    <span className="opacity-70 text-[10px]">{cnt}</span>
+                                  </button>
+                                ))}
+
+                              {resData.terminal && repExcludedCharts.length > 0 && (
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  onClick={() => {
+                                    setRepExcludedCharts([]);
+                                    saveReportConfigQuick(repSections, []);
+                                  }}
+                                >
+                                  Вернуть все в отчёт
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                            {filteredReportCharts.map((ch: any, idx: number) => {
+                              const globalIdx = allReportCharts.indexOf(ch);
+                              const isIncluded = !excludedSet.has(ch.title);
+                              const catMeta =
+                                ch.category === 'k6'
+                                  ? { label: 'k6', variant: 'info' as const }
+                                  : ch.category === 'steps'
+                                    ? { label: 'Ступени', variant: 'default' as const }
+                                    : ch.category === 'sla'
+                                      ? { label: 'SLA', variant: 'warning' as const }
+                                      : { label: 'Скрипт', variant: 'success' as const };
+                              return (
+                                <Card
+                                  key={`${ch.category || 'c'}-${ch.title}-${idx}`}
+                                  className={`overflow-hidden transition-opacity ${
+                                    !isIncluded ? 'opacity-55 border-dashed bg-slate-50/50' : ''
+                                  }`}
+                                >
+                                  <CardHeader className="py-2 gap-2">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <Badge variant={catMeta.variant}>{catMeta.label}</Badge>
+                                      <span className="font-semibold text-xs text-slate-900 truncate" title={ch.title}>
+                                        {ch.title}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {resData.terminal && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleToggleChartIncluded(ch.title)}
+                                          title={
+                                            isIncluded
+                                              ? 'График включён в экспорт отчёта (нажмите, чтобы исключить)'
+                                              : 'График исключён из экспорта отчёта (нажмите, чтобы включить)'
+                                          }
+                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium border cursor-pointer ${
+                                            isIncluded
+                                              ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                                              : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
+                                          }`}
+                                        >
+                                          {isIncluded ? (
+                                            <>
+                                              <Eye className="h-3 w-3" />В отчёте
+                                            </>
+                                          ) : (
+                                            <>
+                                              <EyeOff className="h-3 w-3" />
+                                              Скрыт
+                                            </>
+                                          )}
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => downloadDataUriPng(ch.dataUri, ch.title)}
+                                        title="Скачать PNG графика"
+                                        className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 cursor-pointer"
+                                      >
+                                        <Download className="h-3 w-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setLightboxIdx(globalIdx >= 0 ? globalIdx : 0)}
+                                        title="Развернуть на весь экран"
+                                        className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 cursor-pointer"
+                                      >
+                                        <Maximize2 className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                  </CardHeader>
+                                  <CardBody className="p-2">
+                                    <img
+                                      src={ch.dataUri}
+                                      alt={ch.title}
+                                      onClick={() => setLightboxIdx(globalIdx >= 0 ? globalIdx : 0)}
+                                      title="Нажмите, чтобы увеличить"
+                                      className="w-full h-auto rounded-lg cursor-zoom-in hover:ring-2 hover:ring-indigo-300 transition-shadow"
+                                    />
+                                  </CardBody>
+                                </Card>
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
 
                       {/* Генераторы (справочно) для завершённого теста */}
                       {resData.terminal && resData.data.generators?.length > 0 && (
-                        <div className="space-y-2 pt-2">
+                        <div className={`space-y-2 pt-2 ${repSections.generators === false ? 'opacity-65' : ''}`}>
                           <div>
-                            <h3 className="text-base font-semibold text-slate-900">Генераторы (справочно)</h3>
+                            <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                              Генераторы (справочно)
+                              {repSections.generators === false && (
+                                <Badge variant="default">раздел скрыт из экспорта</Badge>
+                              )}
+                            </h3>
                             <p className="text-xs text-slate-500">
                               Накопленные за весь тест значения k6; для оценки SLA не используются.
                             </p>
@@ -2181,6 +3041,144 @@ export function RunDetailPage() {
           </Card>
         </div>
       )}
+
+      {/* Полноэкранный просмотр графика отчёта (Lightbox) */}
+      {lightboxIdx != null && allReportCharts[lightboxIdx] && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-xs flex flex-col items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setLightboxIdx(null);
+          }}
+        >
+          <div className="w-full max-w-[96vw] flex items-center justify-between gap-3 text-white mb-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs font-mono text-slate-400">
+                {lightboxIdx + 1} / {allReportCharts.length}
+              </span>
+              <span className="font-semibold text-sm truncate">{allReportCharts[lightboxIdx].title}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {allReportCharts.length > 1 && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    className="bg-slate-900/80 border-slate-700 text-slate-200 hover:bg-slate-800"
+                    onClick={() =>
+                      setLightboxIdx((lightboxIdx - 1 + allReportCharts.length) % allReportCharts.length)
+                    }
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    Пред.
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    className="bg-slate-900/80 border-slate-700 text-slate-200 hover:bg-slate-800"
+                    onClick={() => setLightboxIdx((lightboxIdx + 1) % allReportCharts.length)}
+                  >
+                    След.
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                </>
+              )}
+              <Button
+                variant="outline"
+                size="xs"
+                className="bg-slate-900/80 border-slate-700 text-slate-200 hover:bg-slate-800"
+                onClick={() =>
+                  downloadDataUriPng(allReportCharts[lightboxIdx].dataUri, allReportCharts[lightboxIdx].title)
+                }
+              >
+                <Download className="h-3.5 w-3.5" />
+                PNG
+              </Button>
+              <button
+                type="button"
+                onClick={() => setLightboxIdx(null)}
+                className="inline-flex items-center justify-center h-7 w-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                aria-label="Закрыть"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <img
+            src={allReportCharts[lightboxIdx].dataUri}
+            alt={allReportCharts[lightboxIdx].title}
+            onClick={() => setLightboxIdx(null)}
+            className="max-w-[96vw] max-h-[86vh] rounded-xl shadow-2xl cursor-zoom-out"
+          />
+        </div>
+      )}
+
+      {/* Интерактивный предпросмотр печатного HTML-отчёта */}
+      <Modal
+        open={reportPreviewOpen}
+        onClose={() => setReportPreviewOpen(false)}
+        title={`Предпросмотр отчёта · ${repCustomTitle.trim() || resData?.defaultTitle || `Запуск #${run.id}`}`}
+        maxWidth="max-w-7xl"
+      >
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+            <span className="text-xs text-slate-500">
+              Точный вид самодостаточного отчёта с учётом выбранных разделов, скрытых графиков и вывода инженера.
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  const frame = document.getElementById('run-report-preview-frame') as HTMLIFrameElement | null;
+                  frame?.contentWindow?.print();
+                }}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Печать
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => window.open(buildReportHref(`/runs/${run.id}/report.html`), '_blank', 'noopener')}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />В новой вкладке
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() =>
+                  handleExportAction(buildReportHref(`/runs/${run.id}/report.html`, 'download=true'), 'download')
+                }
+              >
+                <FileCode className="h-3.5 w-3.5" />
+                Скачать HTML
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.pdf`), 'download')}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                PDF
+              </Button>
+              <Button
+                variant="primary"
+                size="xs"
+                onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.docx`), 'download')}
+              >
+                <Download className="h-3.5 w-3.5" />
+                Word (.docx)
+              </Button>
+            </div>
+          </div>
+          <iframe
+            id="run-report-preview-frame"
+            title="Предпросмотр отчёта"
+            src={reportPreviewOpen ? buildReportHref(`/runs/${run.id}/report.html`) : 'about:blank'}
+            className="w-full h-[74vh] rounded-lg border border-slate-200 bg-white"
+          />
+        </div>
+      </Modal>
     </div>
   );
 }
