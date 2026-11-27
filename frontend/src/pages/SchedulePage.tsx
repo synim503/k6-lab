@@ -1408,31 +1408,7 @@ export function SchedulePage() {
               }
             }}
           >
-            {/* Готовые шаблоны PromQL для Guard */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-medium text-slate-500">Шаблоны:</span>
-              {GUARD_PRESETS.map((pr) => (
-                <button
-                  key={pr.key}
-                  type="button"
-                  onClick={() =>
-                    setGuardModal({
-                      ...guardModal,
-                      name: guardModal.name || pr.name,
-                      promql: pr.promql,
-                      cmp: pr.cmp,
-                      threshold: pr.threshold,
-                      unit: pr.unit,
-                    })
-                  }
-                  className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer"
-                >
-                  + {pr.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block font-medium text-slate-700 mb-1">Название *</label>
                 <Input
@@ -1450,6 +1426,31 @@ export function SchedulePage() {
                   <option value="BEFORE_START">Перед стартом теста</option>
                   <option value="AFTER_RUN">После завершения теста</option>
                   <option value="BOTH">До и после теста</option>
+                </Select>
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Шаблон метрики</label>
+                <Select
+                  value=""
+                  onChange={(e) => {
+                    const pr = GUARD_PRESETS.find((p) => p.key === e.target.value);
+                    if (!pr) return;
+                    setGuardModal({
+                      ...guardModal,
+                      name: guardModal.name || pr.name,
+                      promql: pr.promql,
+                      cmp: pr.cmp,
+                      threshold: pr.threshold,
+                      unit: pr.unit,
+                    });
+                  }}
+                >
+                  <option value="">+ Из шаблона…</option>
+                  {GUARD_PRESETS.map((pr) => (
+                    <option key={pr.key} value={pr.key}>
+                      {pr.label}
+                    </option>
+                  ))}
                 </Select>
               </div>
             </div>

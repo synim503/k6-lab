@@ -33,7 +33,6 @@ import {
   Eye,
   FileCode2,
   GripVertical,
-  HelpCircle,
   Maximize2,
   Palette,
   Plus,
@@ -60,17 +59,6 @@ const BUILTIN_VARS = new Set([
 ]);
 
 const VAR_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[^}]*)?}|\$([A-Za-z_][A-Za-z0-9_]*)|\[\[([A-Za-z_][A-Za-z0-9_]*)(?::\w+)?]]/g;
-
-const UNIT_PRESETS = [
-  { val: '', label: 'без ед.' },
-  { val: '%', label: '%' },
-  { val: 'мс', label: 'мс' },
-  { val: 'с', label: 'с' },
-  { val: 'оп/с', label: 'оп/с' },
-  { val: 'Б', label: 'Б' },
-  { val: 'Б/с', label: 'Б/с' },
-  { val: 'шт', label: 'шт' },
-];
 
 const CHART_PRESETS = [
   {
@@ -201,20 +189,6 @@ const CHART_PRESETS = [
   },
 ];
 
-const PROMQL_SNIPPETS: { label: string; wrap: (s: string) => string }[] = [
-  { label: 'rate(…[{range}])', wrap: (s) => `rate(${s || 'metric_name'}[{range}])` },
-  { label: 'increase(…[{range}])', wrap: (s) => `increase(${s || 'metric_name'}[{range}])` },
-  { label: 'sum by (instance) (…)', wrap: (s) => `sum by (instance) (${s || 'metric_name'})` },
-  { label: 'avg by (instance) (…)', wrap: (s) => `avg by (instance) (${s || 'metric_name'})` },
-  {
-    label: 'histogram_quantile(0.95, …)',
-    wrap: (s) => `histogram_quantile(0.95, sum by (le) (rate(${s || 'metric_bucket'}[{range}])))`,
-  },
-  { label: 'topk(10, …)', wrap: (s) => `topk(10, ${s || 'metric_name'})` },
-];
-
-const DEFAULT_LEGEND_LABELS = ['instance', 'job', 'scenario', 'status', 'device'];
-
 function extractVarRefs(texts: string[]): string[] {
   const found = new Set<string>();
   texts.forEach((txt) => {
@@ -272,7 +246,6 @@ export function ChartsStudioPage() {
   const [chartVarRows, setChartVarRows] = useState<{ name: string; value: string }[]>([]);
   const [baselineJson, setBaselineJson] = useState('');
   const [saving, setSaving] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
 
   const queryTaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
 
@@ -658,24 +631,6 @@ export function ChartsStudioPage() {
     if (idx < 0 || nextIdx < 0 || nextIdx >= ids.length) return;
     [ids[idx], ids[nextIdx]] = [ids[nextIdx], ids[idx]];
     reorderTemplates(ids);
-  };
-
-  const wrapQueryWithSnippet = (qIdx: number, wrapFn: (s: string) => string) => {
-    const ta = queryTaRefs.current[qIdx];
-    setQueries((prev) =>
-      prev.map((item, i) => {
-        if (i !== qIdx) return item;
-        if (ta && ta.selectionStart !== ta.selectionEnd) {
-          const sel = item.promql.slice(ta.selectionStart, ta.selectionEnd);
-          const wrapped = wrapFn(sel);
-          return {
-            ...item,
-            promql: item.promql.slice(0, ta.selectionStart) + wrapped + item.promql.slice(ta.selectionEnd),
-          };
-        }
-        return { ...item, promql: wrapFn(item.promql.trim()) };
-      })
-    );
   };
 
   if (isLoading || !data) return <Spinner label="Загрузка студии графиков отчёта…" />;
@@ -1162,11 +1117,6 @@ export function ChartsStudioPage() {
                 ))}
               </Select>
 
-              <Button variant="ghost" size="xs" onClick={() => setHelpOpen((v) => !v)}>
-                <HelpCircle className="h-3.5 w-3.5" />
-                Шпаргалка
-              </Button>
-
               {isDirty && (
                 <Button
                   variant="outline"
@@ -1223,25 +1173,6 @@ export function ChartsStudioPage() {
           </CardHeader>
 
           <CardBody className="space-y-4 text-xs">
-            {/* Шпаргалка по макросам и подстановкам */}
-            {helpOpen && (
-              <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-1.5 text-[11px] text-slate-700">
-                <div className="font-semibold text-indigo-950">Макросы и переменные в PromQL и легенде:</div>
-                <div>
-                  • <code>{'{run_id}'}</code> — ID прогона (для метрик k6: <code>{'test_run_id="{run_id}"'}</code>)
-                </div>
-                <div>
-                  • <code>{'{range}'}</code> — адаптивное окно для <code>rate()</code> / <code>irate()</code> (подбирается по длине теста, минимум <code>1m</code>)
-                </div>
-                <div>
-                  • <code>$instance</code>, <code>{'${job}'}</code> — переменные графика или общие переменные скрипта (поддерживается regex <code>app-1|app-2</code>)
-                </div>
-                <div>
-                  • <code>{'{{instance}}'}</code>, <code>{'{{status}}'}</code> — подстановка лейблов временного ряда в подпись легенды
-                </div>
-              </div>
-            )}
-
             <form onSubmit={handleSaveChart} className="space-y-4">
               {/* Заголовок, единица измерения, включение */}
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-start">
@@ -1263,26 +1194,20 @@ export function ChartsStudioPage() {
                 <div className="sm:col-span-4 space-y-1">
                   <label className="block text-slate-600 font-medium">Единица измерения</label>
                   <Input
+                    list="chart-unit-options"
                     value={unit}
                     onChange={(e) => setUnit(e.target.value)}
                     placeholder="%, мс, оп/с, Б/с"
                   />
-                  <div className="flex flex-wrap gap-1">
-                    {UNIT_PRESETS.map((up) => (
-                      <button
-                        key={up.label}
-                        type="button"
-                        onClick={() => setUnit(up.val)}
-                        className={`rounded border px-1.5 py-0 text-[10px] cursor-pointer ${
-                          unit === up.val
-                            ? 'border-indigo-400 bg-indigo-50 text-indigo-700 font-semibold'
-                            : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
-                        }`}
-                      >
-                        {up.label}
-                      </button>
-                    ))}
-                  </div>
+                  <datalist id="chart-unit-options">
+                    <option value="%" />
+                    <option value="мс" />
+                    <option value="с" />
+                    <option value="оп/с" />
+                    <option value="Б" />
+                    <option value="Б/с" />
+                    <option value="шт" />
+                  </datalist>
                 </div>
 
                 <div className="sm:col-span-2 pt-6">
@@ -1297,14 +1222,9 @@ export function ChartsStudioPage() {
               {/* Локальные переменные этого графика + автообнаружение $var */}
               <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-semibold text-slate-700">
-                      Локальные переменные графика ({chartVarRows.filter((r) => r.name.trim()).length})
-                    </span>
-                    <span className="text-[11px] text-slate-400">
-                      перекрывают общие переменные скрипта только для этого графика
-                    </span>
-                  </div>
+                  <span className="font-semibold text-slate-700">
+                    Локальные переменные графика ({chartVarRows.filter((r) => r.name.trim()).length})
+                  </span>
                   <Button
                     type="button"
                     variant="outline"
@@ -1392,7 +1312,6 @@ export function ChartsStudioPage() {
                 {queries.map((qItem, qIdx) => {
                   const letter = String.fromCharCode(65 + (qIdx % 26));
                   const diag = queryDiags[qIdx];
-                  const dynamicLabels = diag?.labelKeys?.length ? diag.labelKeys : DEFAULT_LEGEND_LABELS;
 
                   return (
                     <div key={qIdx} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
@@ -1426,24 +1345,7 @@ export function ChartsStudioPage() {
                           </>
                         )}
 
-                        {/* Обёртки функций PromQL */}
-                        <Select
-                          value=""
-                          onChange={(e) => {
-                            const sn = PROMQL_SNIPPETS[Number(e.target.value)];
-                            if (sn) wrapQueryWithSnippet(qIdx, sn.wrap);
-                          }}
-                          className="h-7 text-[11px] w-44 bg-white ml-auto"
-                        >
-                          <option value="">ƒ Обернуть в функцию…</option>
-                          {PROMQL_SNIPPETS.map((sn, sIdx) => (
-                            <option key={sn.label} value={sIdx}>
-                              {sn.label}
-                            </option>
-                          ))}
-                        </Select>
-
-                        <div className="flex items-center gap-0.5">
+                        <div className="flex items-center gap-0.5 ml-auto">
                           <button
                             type="button"
                             disabled={qIdx === 0}
@@ -1524,8 +1426,8 @@ export function ChartsStudioPage() {
                         placeholder="100 - (avg by (instance) (rate(node_cpu_seconds_total{mode='idle'}[{range}])) * 100)"
                       />
 
-                      {/* Легенда + кликабельные {{label}} */}
-                      <div className="flex flex-wrap items-center gap-2">
+                      {/* Легенда */}
+                      <div className="flex items-center gap-2">
                         <span className="text-[11px] text-slate-500">Легенда:</span>
                         <Input
                           value={qItem.legend}
@@ -1535,33 +1437,8 @@ export function ChartsStudioPage() {
                             )
                           }
                           placeholder="{{instance}}"
-                          className="h-7 w-60 font-mono text-xs bg-white"
+                          className="h-7 w-64 font-mono text-xs bg-white"
                         />
-                        <div className="flex flex-wrap items-center gap-1 text-[11px]">
-                          {dynamicLabels.slice(0, 8).map((lk) => (
-                            <button
-                              key={lk}
-                              type="button"
-                              onClick={() =>
-                                setQueries((prev) =>
-                                  prev.map((it, i) =>
-                                    i === qIdx
-                                      ? {
-                                          ...it,
-                                          legend: it.legend
-                                            ? `${it.legend} {{${lk}}}`
-                                            : `{{${lk}}}`,
-                                        }
-                                      : it
-                                  )
-                                )
-                              }
-                              className="rounded border border-slate-200 bg-white px-1.5 py-0 font-mono text-[10px] text-slate-600 hover:border-indigo-300 hover:text-indigo-700 cursor-pointer"
-                            >
-                              {`{{${lk}}}`}
-                            </button>
-                          ))}
-                        </div>
                       </div>
 
                       {diag?.error && (

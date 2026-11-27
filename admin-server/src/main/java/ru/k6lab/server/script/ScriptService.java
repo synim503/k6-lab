@@ -378,6 +378,18 @@ public class ScriptService {
         }
     }
 
+    /** Привязывает скрипт к репозиторию и ветке Git (используется при выгрузке кода скрипта в Git). */
+    @org.springframework.transaction.annotation.Transactional
+    public Script bindGit(Long scriptId, Long repoId, String branch, String entrypoint) {
+        Script s = get(scriptId);
+        s.setGitRepoId(repoId);
+        s.setGitBranch(branch != null && !branch.isBlank() ? branch.trim() : "main");
+        if (entrypoint != null && !entrypoint.isBlank()) {
+            s.setGitEntrypoint(entrypoint.trim());
+        }
+        return scripts.save(s);
+    }
+
     /** «Последняя версия ветки Git» с фиксацией коммита (используется при запуске сценария). */
     public ScriptVersion importLatestOfBranch(Long scriptId) throws IOException {
         Script s = get(scriptId);

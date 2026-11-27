@@ -31,6 +31,42 @@ export function fmtShortDate(val?: string | number | null): string {
   });
 }
 
+export function fmtClockTime(val?: string | number | null): string {
+  if (!val) return '—';
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function fmtDayHeading(val?: string | number | null): { key: string; label: string } {
+  if (!val) return { key: 'unknown', label: 'Без даты' };
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return { key: 'unknown', label: 'Без даты' };
+  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const yestKey = `${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, '0')}-${String(yest.getDate()).padStart(2, '0')}`;
+
+  const full = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+  if (key === todayKey) return { key, label: `Сегодня, ${full}` };
+  if (key === yestKey) return { key, label: `Вчера, ${full}` };
+  return { key, label: full };
+}
+
+export function conclusionVariant(conclusion?: string | null): BadgeVariant {
+  if (!conclusion) return 'default';
+  const c = conclusion.trim().toLowerCase();
+  if (c === 'pass' || c.includes('выдерживается') || c.includes('успеш')) return 'success';
+  if (c === 'fail' || c.includes('деградац') || c.includes('провал') || c.includes('ошибк')) return 'danger';
+  if (c.includes('недостовер')) return 'neutral';
+  if (c.includes('нарушен') || c.includes('sla') || c.includes('превыш')) return 'warning';
+  return 'info';
+}
+
 export function fmtDurationSec(sec?: number | null): string {
   if (sec == null || sec < 0 || Number.isNaN(sec)) return '—';
   const s = Math.round(sec);
@@ -89,7 +125,8 @@ export function runStatusMeta(status?: string, thresholdsFailed?: boolean): { la
         : { label: 'Завершён', variant: 'success', active: false };
     case 'STOPPED':
     case 'CANCELLED':
-      return { label: 'Остановлен', variant: 'default', active: false };
+    case 'ABORTED':
+      return { label: 'Прерван', variant: 'default', active: false };
     case 'FAILED':
       return { label: 'Ошибка', variant: 'danger', active: false };
     default:

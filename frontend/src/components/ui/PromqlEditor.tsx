@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { AlertCircle, CheckCircle2, Play, Sparkles, X } from 'lucide-react';
+import { AlertCircle, Play, X } from 'lucide-react';
 
 interface SuggestionItem {
   value: string;
@@ -109,16 +109,6 @@ const BUILTIN_LABELS: { name: string; detail: string }[] = [
   { name: 'device', detail: 'Устройство диска или сети' },
   { name: 'le', detail: 'Верхняя граница корзины гистограммы' },
   { name: 'phase', detail: 'Фаза нагрузки (warmup)' },
-];
-
-const WRAP_SNIPPETS: { label: string; wrap: (q: string, rangeTok: string) => string }[] = [
-  { label: 'rate(…[окно])', wrap: (q, r) => `rate(${q}[${r}])` },
-  { label: 'irate(…[окно])', wrap: (q, r) => `irate(${q}[${r}])` },
-  { label: 'increase(…[окно])', wrap: (q, r) => `increase(${q}[${r}])` },
-  { label: 'sum by (instance) (…)', wrap: (q) => `sum by (instance) (${q})` },
-  { label: 'avg by (instance) (…)', wrap: (q) => `avg by (instance) (${q})` },
-  { label: 'max by (instance) (…)', wrap: (q) => `max by (instance) (${q})` },
-  { label: 'histogram_quantile(0.95, …)', wrap: (q) => `histogram_quantile(0.95, sum by (le) (${q}))` },
 ];
 
 function checkBrackets(expr: string): string | null {
@@ -445,21 +435,6 @@ export function PromqlEditor({
     });
   };
 
-  const insertToken = (tok: string, cursorBack = 0) => {
-    const el = innerRef.current;
-    const start = el?.selectionStart ?? value.length;
-    const end = el?.selectionEnd ?? value.length;
-    const next = value.slice(0, start) + tok + value.slice(end);
-    onChange(next);
-    const pos = start + tok.length - cursorBack;
-    requestAnimationFrame(() => {
-      if (innerRef.current) {
-        innerRef.current.focus();
-        innerRef.current.setSelectionRange(pos, pos);
-      }
-    });
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Ctrl+Space принудительно открывает подсказки
     if ((e.ctrlKey || e.metaKey) && e.code === 'Space') {
@@ -538,8 +513,6 @@ export function PromqlEditor({
     }
   };
 
-  const rangeTok = allowMacros ? '{range}' : '1m';
-
   return (
     <div className={cn('space-y-1.5', className)}>
       <div className="relative">
@@ -579,24 +552,17 @@ export function PromqlEditor({
             setCtx(analyzeCursor(next, pos, allowMacros));
           }}
           className={cn(
-            'w-full rounded-lg border bg-white px-3 py-2 font-mono text-xs text-slate-900 placeholder:text-slate-400 transition-colors focus:outline-none focus:ring-2 resize-y',
+            'w-full rounded-lg border bg-white dark:bg-[#0b0f17] px-3 py-2 font-mono text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-colors focus:outline-none focus:ring-2 resize-y',
             bracketError
               ? 'border-amber-400 focus:border-amber-500 focus:ring-amber-500/20'
-              : 'border-slate-300 focus:border-indigo-500 focus:ring-indigo-500/20',
-            disabled && 'bg-slate-100 opacity-60 cursor-not-allowed'
+              : 'border-slate-300 dark:border-[#323d56] focus:border-indigo-500 dark:focus:border-indigo-400 focus:ring-indigo-500/20',
+            disabled && 'bg-slate-100 dark:bg-slate-900 opacity-60 cursor-not-allowed'
           )}
         />
 
         {/* Выпадающее меню автодополнения */}
         {suggestions.length > 0 && (
-          <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl divide-y divide-slate-100">
-            <div className="sticky top-0 z-10 flex items-center justify-between bg-slate-50/95 backdrop-blur px-2.5 py-1 text-[10px] text-slate-500 border-b border-slate-100">
-              <span className="flex items-center gap-1">
-                <Sparkles className="h-3 w-3 text-indigo-500" />
-                Автодополнение PromQL ({suggestions.length})
-              </span>
-              <span>↑↓ выбор · Tab/Enter вставить · Esc скрыть</span>
-            </div>
+          <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-[#2e3850] bg-white dark:bg-[#151a28] shadow-xl divide-y divide-slate-100 dark:divide-[#232b3e]">
             {suggestions.map((s, idx) => (
               <button
                 key={`${s.kind}-${s.value}`}
@@ -608,7 +574,9 @@ export function PromqlEditor({
                 onMouseEnter={() => setActiveIdx(idx)}
                 className={cn(
                   'flex w-full items-center justify-between gap-3 px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer',
-                  idx === activeIdx ? 'bg-indigo-50 text-indigo-900' : 'text-slate-800 hover:bg-slate-50'
+                  idx === activeIdx
+                    ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-900 dark:text-indigo-200'
+                    : 'text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#1d2436]'
                 )}
               >
                 <div className="flex items-center gap-2 min-w-0">
@@ -622,76 +590,26 @@ export function PromqlEditor({
         )}
       </div>
 
-      {/* Нижняя панель быстрых вставок, проверки скобок и теста запроса */}
-      {showToolbar && !disabled && (
-        <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
-          <div className="flex flex-wrap items-center gap-1">
-            <span className="text-slate-400 mr-0.5">Вставить:</span>
-            {(allowMacros ? ['{run_id}', '{range}'] : ['[1m]', '[5m]']).map((tok) => (
-              <button
-                key={tok}
-                type="button"
-                onClick={() => insertToken(tok)}
-                className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer"
-              >
-                {tok}
-              </button>
-            ))}
-            {variables.slice(0, 6).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => insertToken(`$${v}`)}
-                className="rounded border border-emerald-200 bg-emerald-50/70 px-1.5 py-0.5 font-mono text-emerald-800 hover:bg-emerald-100 cursor-pointer"
-              >
-                ${v}
-              </button>
-            ))}
-            <select
-              value=""
-              onChange={(e) => {
-                const sn = WRAP_SNIPPETS[Number(e.target.value)];
-                if (!sn) return;
-                const trimmed = value.trim();
-                onChange(trimmed ? sn.wrap(trimmed, rangeTok) : sn.wrap('metric_name', rangeTok));
-              }}
-              className="h-6 rounded border border-slate-200 bg-white px-1.5 text-[11px] text-slate-700 hover:border-indigo-300 focus:outline-none cursor-pointer"
+      {/* Лаконичная строка ошибки скобок и живой проверки без панели вставок и подсказок */}
+      {showToolbar && !disabled && (bracketError || (showTestButton && value.trim())) && (
+        <div className="flex flex-wrap items-center justify-end gap-2 text-[11px]">
+          {bracketError && (
+            <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 mr-auto">
+              <AlertCircle className="h-3 w-3 shrink-0" />
+              {bracketError}
+            </span>
+          )}
+          {showTestButton && value.trim() && (
+            <button
+              type="button"
+              disabled={testing}
+              onClick={handleTestQuery}
+              className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50/80 px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 cursor-pointer"
             >
-              <option value="">ƒ Обернуть…</option>
-              {WRAP_SNIPPETS.map((sn, idx) => (
-                <option key={sn.label} value={idx}>
-                  {sn.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {value.trim() && (
-              bracketError ? (
-                <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                  <AlertCircle className="h-3 w-3 shrink-0" />
-                  {bracketError}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-emerald-700">
-                  <CheckCircle2 className="h-3 w-3 shrink-0" />
-                  скобки ок
-                </span>
-              )
-            )}
-            {showTestButton && (
-              <button
-                type="button"
-                disabled={!value.trim() || testing}
-                onClick={handleTestQuery}
-                className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50/80 px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 cursor-pointer"
-              >
-                <Play className="h-2.5 w-2.5 fill-current" />
-                {testing ? 'Запрос…' : 'Проверить PromQL'}
-              </button>
-            )}
-          </div>
+              <Play className="h-2.5 w-2.5 fill-current" />
+              {testing ? 'Запрос…' : 'Проверить PromQL'}
+            </button>
+          )}
         </div>
       )}
 

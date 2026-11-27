@@ -102,8 +102,8 @@ export function AppLayout() {
   const filteredCmd = allEntries.filter((e) => e.label.toLowerCase().includes(cmdkQuery.trim().toLowerCase()));
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-[#0b1120] text-slate-900 dark:text-slate-100 transition-colors">
-      <header className="sticky top-0 z-40 bg-slate-900 dark:bg-[#070b14] text-slate-100 border-b border-slate-800 shadow-xs">
+    <div className="min-h-screen flex flex-col bg-slate-100/70 dark:bg-[#080b11] text-slate-900 dark:text-slate-100 transition-colors">
+      <header className="sticky top-0 z-40 bg-slate-900 dark:bg-[#111726] text-slate-100 border-b border-slate-800 dark:border-[#2a3652] shadow-sm">
         <div className="mx-auto flex h-14 max-w-[1600px] items-center justify-between px-4 gap-3">
           <div className="flex items-center gap-5 min-w-0">
             <Link to="/" className="flex items-center gap-2 font-bold text-white tracking-tight shrink-0">
@@ -122,7 +122,9 @@ export function AppLayout() {
                   className={({ isActive }) =>
                     cn(
                       'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors',
-                      isActive ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
+                      isActive
+                        ? 'bg-indigo-600/25 text-white ring-1 ring-inset ring-indigo-400/45 shadow-2xs'
+                        : 'text-slate-300 hover:bg-slate-800/80 dark:hover:bg-[#1d263b] hover:text-white'
                     )
                   }
                 >
@@ -137,7 +139,9 @@ export function AppLayout() {
                   onClick={() => setMoreOpen((v) => !v)}
                   className={cn(
                     'flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors cursor-pointer',
-                    moreOpen ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
+                    moreOpen
+                      ? 'bg-indigo-600/25 text-white ring-1 ring-inset ring-indigo-400/45'
+                      : 'text-slate-300 hover:bg-slate-800/80 dark:hover:bg-[#1d263b] hover:text-white'
                   )}
                 >
                   <Activity className="h-4 w-4" />
@@ -145,7 +149,7 @@ export function AppLayout() {
                   <ChevronDown className="h-3.5 w-3.5 opacity-70" />
                 </button>
                 {moreOpen && (
-                  <div className="absolute left-0 mt-1.5 w-56 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 py-1.5 text-slate-800 dark:text-slate-100 shadow-lg z-50">
+                  <div className="absolute left-0 mt-1.5 w-56 rounded-xl border border-slate-200 dark:border-[#32405f] bg-white dark:bg-[#161d2c] py-1.5 text-slate-800 dark:text-slate-100 shadow-2xl z-50">
                     {['Интеграции', 'Инфраструктура', 'Система'].map((grp) => {
                       const items = visibleMore.filter((i) => i.group === grp);
                       if (items.length === 0) return null;
@@ -295,10 +299,10 @@ export function AppLayout() {
           onMouseDown={() => setCmdkOpen(false)}
         >
           <div
-            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
+            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-[#32405f] bg-white dark:bg-[#161d2c] shadow-2xl overflow-hidden"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-2.5 border-b border-slate-100 dark:border-slate-800 px-4 py-3">
+            <div className="flex items-center gap-2.5 border-b border-slate-100 dark:border-[#2c3955] bg-slate-50/40 dark:bg-[#1d2639] px-4 py-3">
               <Search className="h-4 w-4 text-slate-400" />
               <input
                 autoFocus

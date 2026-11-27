@@ -23,7 +23,6 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  CloudUpload,
   Code2,
   Download,
   FileUp,
@@ -135,26 +134,6 @@ export function ScriptDetailPage() {
     onError: (err: any) => toast.error(err.message),
   });
 
-  const { data: bkData } = useQuery({
-    queryKey: ['git-backup'],
-    queryFn: () => apiFetch('/api/v1/git-backup'),
-  });
-
-  const pushScriptBackupMut = useMutation({
-    mutationFn: () => apiFetch(`/api/v1/git-backup/push-script/${id}`, { method: 'POST' }),
-    onSuccess: (res: any) => {
-      qc.invalidateQueries({ queryKey: ['git-backup'] });
-      toast.success(res?.outcome?.message || 'Скрипт выгружен в Git-бэкап');
-    },
-    onError: (err: any) => {
-      if (err?.data?.hostKeyRequired) {
-        setHostKeyPrompt(err.data);
-      } else {
-        toast.error(err.message);
-      }
-    },
-  });
-
   const fetchRefsForRepo = async (ridStr: string) => {
     if (!ridStr) return;
     setLoadingGitRefs(true);
@@ -196,17 +175,6 @@ export function ScriptDetailPage() {
         script={script}
         rightActions={
           <div className="flex flex-wrap items-center gap-2">
-            {bkData?.config?.repoId && latestVersion && (
-              <Button
-                variant="outline"
-                size="sm"
-                loading={pushScriptBackupMut.isPending}
-                onClick={() => pushScriptBackupMut.mutate()}
-                title={`Сохранить скрипт, профили и графики в Git-бэкап (${bkData.config.branch || 'main'})`}
-              >
-                <CloudUpload className="h-3.5 w-3.5 text-indigo-600" />В Git-бэкап
-              </Button>
-            )}
             {latestVersion && (
               <Link to={`/scripts/${script.id}/versions/${latestVersion.id}/edit`}>
                 <Button variant="outline" size="sm">
@@ -448,7 +416,7 @@ export function ScriptDetailPage() {
                 <option value="QUEUED">В очереди</option>
                 <option value="FINISHED">Завершён</option>
                 <option value="FAILED">Ошибка</option>
-                <option value="STOPPED">Остановлен</option>
+                <option value="ABORTED">Прерван</option>
               </Select>
               <Select
                 value={String(size)}

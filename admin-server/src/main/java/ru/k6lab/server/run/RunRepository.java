@@ -1,13 +1,14 @@
 package ru.k6lab.server.run;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import ru.k6lab.core.runstate.RunStatus;
 
 import java.util.Collection;
 import java.util.List;
 
-public interface RunRepository extends JpaRepository<Run, Long> {
+public interface RunRepository extends JpaRepository<Run, Long>, JpaSpecificationExecutor<Run> {
 
     List<Run> findByStatusOrderByQueuedAtAsc(RunStatus status);
 

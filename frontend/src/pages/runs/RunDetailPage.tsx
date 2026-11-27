@@ -43,6 +43,7 @@ import {
   Maximize2,
   OctagonX,
   Pause,
+  Pencil,
   Play,
   Printer,
   RefreshCw,
@@ -59,7 +60,7 @@ import {
 import { apiFetch } from '@/lib/api';
 import { Badge, Button, Card, CardBody, CardHeader, Input, Modal, Select, Spinner, Textarea } from '@/components/ui/primitives';
 import { useConfirm } from '@/components/ui/ConfirmContext';
-import { runStatusMeta } from '@/lib/utils';
+import { conclusionVariant, runStatusMeta } from '@/lib/utils';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -359,10 +360,12 @@ export function RunDetailPage() {
   const [repSortDir, setRepSortDir] = useState<'' | 'DESC' | 'ASC'>('');
   const [conclusion, setConclusion] = useState('');
   const [comment, setComment] = useState('');
-  const [commentPreview, setCommentPreview] = useState(false);
   const [savedReportSnap, setSavedReportSnap] = useState('');
   const [reportSettingsOpen, setReportSettingsOpen] = useState(false);
   const [reportPreviewOpen, setReportPreviewOpen] = useState(false);
+  const [resultsSubTab, setResultsSubTab] = useState<'summary' | 'charts' | 'generators'>('summary');
+  const [editingConclusion, setEditingConclusion] = useState(false);
+  const [expandedStepNos, setExpandedStepNos] = useState<number[] | null>(null);
   const [chartCatFilter, setChartCatFilter] = useState<'all' | 'k6' | 'steps' | 'custom' | 'sla'>('all');
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const [refreshingResults, setRefreshingResults] = useState(false);
@@ -499,6 +502,8 @@ export function RunDetailPage() {
       setRepWarmup(wMode);
       setRepSortBy(sBy);
       setRepSortDir(sDir);
+      setEditingConclusion(false);
+      setExpandedStepNos(null);
       setSavedReportSnap(makeReportSnap(conc, comm, cTitle, secs, excl, tAxis, wMode, sBy, sDir));
     }
   }, [resData, id]);
@@ -605,7 +610,10 @@ export function RunDetailPage() {
       }).then((res) => ({ res, silent })),
     onSuccess: ({ silent }) => {
       setSavedReportSnap(currentReportSnap);
-      if (!silent) toast.success('Вывод инженера и настройки отчёта сохранены');
+      if (!silent) {
+        setEditingConclusion(false);
+        toast.success('Вывод инженера и настройки отчёта сохранены');
+      }
     },
     onError: (err: any) => toast.error(err.message),
   });
@@ -680,15 +688,6 @@ export function RunDetailPage() {
       a.href = url;
       a.click();
     }
-  };
-
-  const insertConclusionSnippet = (snippet: string) => {
-    setCommentPreview(false);
-    setComment((prev) => {
-      const base = prev.trimEnd();
-      return base ? `${base}\n\n${snippet}` : snippet;
-    });
-    setTimeout(() => commentTaRef.current?.focus(), 20);
   };
 
   const handleGenerateDraft = async () => {
@@ -776,7 +775,7 @@ export function RunDetailPage() {
       lines.push('Рекомендации:\n• Проанализировать узкие места СУБД / сервисов на ступени деградации.\n• Повторить контрольный прогон после оптимизации.');
     }
 
-    setCommentPreview(false);
+    setEditingConclusion(true);
     setComment(lines.join('\n\n'));
     toast.success('Черновик вывода сформирован по метрикам прогона');
   };
@@ -1743,795 +1742,754 @@ export function RunDetailPage() {
         </div>
       )}
 
-      {/* ==================== Вкладка 3: Результаты (как в runs/_results.html, без авто-дёрганья) ==================== */}
+      {/* ==================== Вкладка 3: Результаты и отчёт (разгруженный вид с подвкладками и аккордеонами) ==================== */}
       {tab === 'results' && (
         <div className="space-y-4">
           {!resData ? (
             <Spinner label="Загрузка результатов…" />
           ) : (
-            <>
-              {!resData.terminal && !resData.livePreview && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-                  Тест ещё не запущен — предварительные итоги по ступеням появятся сразу после начала нагрузки.
-                </div>
-              )}
+            (() => {
+              const resultSteps: any[] = resData.data?.steps || [];
+              const resultGens: any[] = resData.data?.generators || [];
+              const executedSteps = resultSteps.filter((s) => s.status !== 'NOT_RUN');
+              const passedSteps = executedSteps.filter((s) => s.status === 'SUCCESS');
+              const failedSteps = executedSteps.filter((s) => s.status !== 'SUCCESS');
 
-              {/* Предварительные итоги при идущем тесте */}
-              {resData.livePreview && (
-                <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-sky-950">
-                  <span className="h-2.5 w-2.5 rounded-full bg-indigo-600 animate-pulse shrink-0" />
-                  <div className="flex-1">
-                    <strong>Предварительные итоги</strong> — тест ещё выполняется. Показаны уже пройденные ступени и
-                    текущая ступень
-                    {resData.data?.computedAt ? ` (обновлено в ${fmtTimeOnly(resData.data.computedAt)})` : ''}.
-                    Окончательный отчёт, экспорт и вывод инженера будут доступны после завершения запуска.
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    loading={refreshingResults}
-                    onClick={handleManualRefreshResults}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    Обновить
-                  </Button>
-                </div>
-              )}
+              const defaultOpenNos: number[] =
+                resultSteps.length <= 1
+                  ? resultSteps.map((s) => s.stepNo)
+                  : failedSteps.length > 0
+                    ? [failedSteps[0].stepNo]
+                    : resData.maxSummary?.confirmedStepNo != null
+                      ? [resData.maxSummary.confirmedStepNo]
+                      : resultSteps.length > 0
+                        ? [resultSteps[0].stepNo]
+                        : [];
 
-              {/* Студия отчёта и панель экспорта для завершённого теста */}
-              {resData.terminal && (
-                <Card className="overflow-hidden border-indigo-200/80 shadow-xs">
-                  <div className="flex flex-wrap items-center gap-2 bg-gradient-to-r from-slate-50 via-white to-indigo-50/40 px-4 py-2.5 border-b border-slate-200/80">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.html`), 'preview')}
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      Предпросмотр отчёта
-                    </Button>
+              const openStepSet = new Set(expandedStepNos ?? defaultOpenNos);
+              const allStepsExpanded =
+                resultSteps.length > 0 && resultSteps.every((s) => openStepSet.has(s.stepNo));
 
-                    <div className="inline-flex rounded-lg border border-indigo-200 bg-white overflow-hidden shadow-2xs">
-                      <button
-                        type="button"
-                        onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.html`), 'tab')}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-100 cursor-pointer"
-                        title="Открыть самодостаточный HTML-отчёт в новой вкладке"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        HTML
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleExportAction(buildReportHref(`/runs/${run.id}/report.html`, 'download=true'), 'download')
-                        }
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-100 cursor-pointer"
-                        title="Скачать автономный HTML-файл со всеми графиками внутри"
-                      >
-                        <FileCode className="h-3.5 w-3.5" />
-                        .html
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.pdf`), 'download')}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 border-r border-indigo-100 cursor-pointer"
-                        title="Скачать PDF-отчёт (A4 альбомный)"
-                      >
-                        <FileText className="h-3.5 w-3.5" />
-                        PDF
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.docx`), 'download')}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 cursor-pointer"
-                        title="Скачать редактируемый документ Word (.docx)"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        Word (.docx)
-                      </button>
-                    </div>
+              const toggleStepOpen = (stepNo: number) => {
+                const next = new Set(openStepSet);
+                if (next.has(stepNo)) next.delete(stepNo);
+                else next.add(stepNo);
+                setExpandedStepNos(Array.from(next));
+              };
 
-                    <Button
-                      variant={reportSettingsOpen ? 'secondary' : 'outline'}
-                      size="sm"
-                      onClick={() => setReportSettingsOpen((v) => !v)}
-                    >
-                      <SlidersHorizontal className="h-3.5 w-3.5" />
-                      Структура и графики
-                      {(repCustomTitle.trim() ||
-                        Object.values(repSections).some((v) => v === false) ||
-                        repExcludedCharts.length > 0) && (
-                        <span className="ml-0.5 rounded-full bg-indigo-600 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none">
-                          настроено
-                        </span>
-                      )}
-                    </Button>
+              const worstErrorPct = executedSteps.reduce((acc, s) => {
+                const stepMax = (s.ops || []).reduce(
+                  (m: number, o: any) => Math.max(m, Number(o.errorPct) || 0),
+                  0
+                );
+                return Math.max(acc, stepMax);
+              }, 0);
 
-                    <div className="sm:ml-auto flex flex-wrap items-center gap-2">
-                      {fetchingResults && !refreshingResults && (
-                        <span className="text-[11px] text-indigo-600 animate-pulse">Обновление графиков…</span>
-                      )}
-                      {run.scriptId != null && (
-                        <Link to={`/scripts/${run.scriptId}/charts`}>
-                          <Button variant="ghost" size="sm" title="Перейти в конструктор кастомных PromQL-графиков скрипта">
-                            <BarChart3 className="h-3.5 w-3.5 text-indigo-600" />
-                            Конструктор графиков
-                          </Button>
-                        </Link>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        loading={refreshingResults}
-                        onClick={handleManualRefreshResults}
-                        title="Пересчитать агрегаты по ступеням и перестроить графики из Prometheus"
-                      >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                        Пересчитать итоги
-                      </Button>
-                    </div>
-                  </div>
+              const peakGenCpu = Math.max(
+                0,
+                ...executedSteps.map((s) => Number(s.genCpuMax) || 0),
+                ...resultGens.map((g) => Number(g.cpuMax) || 0)
+              );
 
-                  {/* Компактная полоса быстрых переключателей графиков + раскрываемая настройка структуры */}
-                  <div className="px-4 py-2.5 bg-white space-y-3">
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="text-slate-500 font-medium flex items-center gap-1">
-                        <LayoutList className="h-3.5 w-3.5 text-slate-400" />
-                        Разделы отчёта:
-                      </span>
-                      {(
-                        [
-                          ['summary', 'Итог'],
-                          ['config', 'Конфигурация'],
-                          ['env', 'Переменные'],
-                          ['steps', 'Ступени'],
-                          [
-                            'charts',
-                            allReportCharts.length > 0
-                              ? `Графики (${includedChartsCount}/${allReportCharts.length})`
-                              : 'Графики',
-                          ],
-                          ['generators', 'Генераторы'],
-                        ] as const
-                      ).map(([sKey, sLabel]) => {
-                        const active = repSections[sKey] !== false;
-                        return (
-                          <button
-                            key={sKey}
-                            type="button"
-                            onClick={() => handleToggleReportSection(sKey)}
-                            title={
-                              active
-                                ? `Раздел «${sLabel}» включён в HTML/PDF/Word (нажмите, чтобы скрыть)`
-                                : `Раздел «${sLabel}» исключён из экспорта (нажмите, чтобы вернуть)`
-                            }
-                            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors cursor-pointer border ${
-                              active
-                                ? 'bg-indigo-50/80 border-indigo-200 text-indigo-800 hover:bg-indigo-100/70'
-                                : 'bg-slate-50 border-slate-200 text-slate-400 line-through hover:text-slate-600'
-                            }`}
-                          >
-                            {active ? <Check className="h-3 w-3 text-indigo-600" /> : <EyeOff className="h-3 w-3" />}
-                            {sLabel}
-                          </button>
-                        );
-                      })}
+              const peakActualRps = executedSteps.reduce((acc, s) => {
+                const sumAct = (s.ops || []).reduce((a: number, o: any) => a + (Number(o.actualRate) || 0), 0);
+                return Math.max(acc, sumAct);
+              }, 0);
 
-                      <div className="lg:ml-auto flex flex-wrap items-center gap-1.5">
-                        <Select
-                          value={repTimeAxis}
-                          onChange={(e) => setRepTimeAxis(e.target.value as any)}
-                          className="w-auto h-7 text-xs"
-                          title="Ось X на временных графиках отчёта"
-                        >
-                          <option value="">Ось X: по умолч.</option>
-                          <option value="rel">Ось X: минуты от старта</option>
-                          <option value="abs">Ось X: часы (абс.)</option>
-                        </Select>
-                        <Select
-                          value={repWarmup}
-                          onChange={(e) => setRepWarmup(e.target.value as any)}
-                          className="w-auto h-7 text-xs"
-                          title="Отображение участка прогрева на графиках"
-                        >
-                          <option value="">Прогрев: по умолч.</option>
-                          <option value="include">Прогрев: с начала теста</option>
-                          <option value="skip">
-                            Прогрев: без прогрева
-                            {resData.warmupSec > 0 ? ` (−${Math.round(resData.warmupSec / 6) / 10} мин)` : ''}
-                          </option>
-                        </Select>
-                        <Select
-                          value={repSortBy}
-                          onChange={(e) => setRepSortBy(e.target.value as any)}
-                          className="w-auto h-7 text-xs"
-                          title="Сортировка рядов в легенде графиков"
-                        >
-                          <option value="">Легенда: по умолч.</option>
-                          <option value="NONE">Легенда: как в запросе</option>
-                          <option value="MAX">Легенда: по Max</option>
-                          <option value="MEAN">Легенда: по Mean</option>
-                          <option value="LAST">Легенда: по Last</option>
-                        </Select>
-                        {repSortBy && repSortBy !== 'NONE' && (
-                          <Select
-                            value={repSortDir || 'DESC'}
-                            onChange={(e) => setRepSortDir(e.target.value as any)}
-                            className="w-auto h-7 text-xs"
-                            title="Направление сортировки легенды"
-                          >
-                            <option value="DESC">↓ по убыв.</option>
-                            <option value="ASC">↑ по возр.</option>
-                          </Select>
-                        )}
-                      </div>
-                    </div>
+              const peakTargetRps = executedSteps.reduce((acc, s) => {
+                const sumPlan = (s.ops || []).reduce((a: number, o: any) => a + (Number(o.targetRate) || 0), 0);
+                return Math.max(acc, sumPlan);
+              }, 0);
 
-                    {reportSettingsOpen && (
-                      <div className="pt-2.5 border-t border-slate-100 grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                        <div className="md:col-span-8">
-                          <label className="block text-xs font-medium text-slate-600 mb-1">
-                            Заголовок отчёта (для HTML, PDF и имени файла Word)
-                          </label>
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={repCustomTitle}
-                              onChange={(e) => setRepCustomTitle(e.target.value)}
-                              placeholder={resData.defaultTitle || run.scriptName}
-                              className="h-8 text-xs"
-                            />
-                            {repCustomTitle.trim() && (
-                              <Button
-                                variant="ghost"
-                                size="xs"
-                                onClick={() => setRepCustomTitle('')}
-                                title="Вернуть стандартный заголовок «Сценарий - Профиль»"
-                              >
-                                <RotateCcw className="h-3.5 w-3.5" />
-                                Сбросить
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="md:col-span-4 flex items-center justify-end gap-2">
-                          <Link
-                            to="/settings"
-                            className="text-xs text-indigo-600 hover:underline inline-flex items-center gap-1"
-                          >
-                            Глобальная тема и размер графиков →
-                          </Link>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </Card>
-              )}
+              const isCustomReportSetup = Boolean(
+                repCustomTitle.trim() ||
+                  Object.values(repSections).some((v) => v === false) ||
+                  repExcludedCharts.length > 0
+              );
 
-              {!resData.data ? (
-                <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-                  {resData.livePreview
-                    ? 'Данные по ступеням ещё собираются. Нажмите «Обновить» через несколько секунд.'
-                    : 'Итоги ещё не рассчитаны (метрики поступают в Prometheus с задержкой). Нажмите «Пересчитать итоги» через несколько секунд.'}
-                </div>
-              ) : (
+              return (
                 <>
-                  {!resData.data.prometheusOk && resData.data.error && (
-                    <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-900">
-                      {resData.data.error}
+                  {!resData.terminal && !resData.livePreview && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                      Тест ещё не запущен — предварительные итоги по ступеням появятся сразу после начала нагрузки.
                     </div>
                   )}
 
-                  {/* Расширенный редактор вывода инженера (для завершённого теста) */}
-                  {resData.terminal && (
-                    <Card className={repSections.summary === false ? 'opacity-65 border-dashed' : ''}>
-                      <CardHeader className="py-2.5 bg-slate-50/70">
+                  {resData.livePreview && (
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs text-sky-950">
+                      <span className="h-2.5 w-2.5 rounded-full bg-indigo-600 animate-pulse shrink-0" />
+                      <div className="flex-1">
+                        <strong>Предварительные итоги</strong> — тест ещё выполняется
+                        {resData.data?.computedAt ? ` (обновлено в ${fmtTimeOnly(resData.data.computedAt)})` : ''}.
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        loading={refreshingResults}
+                        onClick={handleManualRefreshResults}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Обновить
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Единая лаконичная шапка: переключатель режимов просмотра + экспорт отчёта */}
+                  {(resData.terminal || resData.livePreview) && (
+                    <Card className="p-2.5 flex flex-wrap items-center justify-between gap-2.5">
+                      <div className="inline-flex flex-wrap items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5 gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setResultsSubTab('summary')}
+                          className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                            resultsSubTab === 'summary'
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>Сводка и ступени</span>
+                          {resultSteps.length > 0 && (
+                            <span className="opacity-75 font-mono text-[10px]">{resultSteps.length}</span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setResultsSubTab('charts')}
+                          className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                            resultsSubTab === 'charts'
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                          }`}
+                        >
+                          <BarChart3 className="h-3.5 w-3.5" />
+                          <span>Графики отчёта</span>
+                          <span className="opacity-75 font-mono text-[10px]">{allReportCharts.length}</span>
+                        </button>
+                        {resData.terminal && resultGens.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setResultsSubTab('generators')}
+                            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                              resultsSubTab === 'generators'
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                            }`}
+                          >
+                            <Cpu className="h-3.5 w-3.5" />
+                            <span>Генераторы</span>
+                            <span className="opacity-75 font-mono text-[10px]">{resultGens.length}</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {resData.terminal && (
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold text-slate-900">Вывод инженера и резюме прогона</span>
-                          {repSections.summary === false && (
-                            <Badge variant="default">скрыто из экспорта</Badge>
+                          {fetchingResults && !refreshingResults && (
+                            <span className="text-[11px] text-indigo-600 animate-pulse">Обновление…</span>
                           )}
-                          {isReportDirty && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
-                              ● Есть несохранённые изменения
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1.5">
+
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.html`), 'preview')}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            Предпросмотр
+                          </Button>
+
+                          <div className="inline-flex rounded-lg border border-slate-300 bg-white overflow-hidden text-xs">
+                            <button
+                              type="button"
+                              onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.pdf`), 'download')}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 border-r border-slate-200 cursor-pointer"
+                              title="Скачать PDF-отчёт (A4 альбомный)"
+                            >
+                              <FileText className="h-3.5 w-3.5 text-indigo-600" />
+                              PDF
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleExportAction(buildReportHref(`/runs/${run.id}/report.docx`), 'download')}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 border-r border-slate-200 cursor-pointer"
+                              title="Скачать редактируемый документ Word (.docx)"
+                            >
+                              <Download className="h-3.5 w-3.5 text-indigo-600" />
+                              Word
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleExportAction(buildReportHref(`/runs/${run.id}/report.html`, 'download=true'), 'download')
+                              }
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-slate-100 cursor-pointer"
+                              title="Скачать автономный HTML-файл"
+                            >
+                              <FileCode className="h-3.5 w-3.5 text-indigo-600" />
+                              HTML
+                            </button>
+                          </div>
+
+                          <Button variant="outline" size="sm" onClick={() => setReportSettingsOpen(true)}>
+                            <SlidersHorizontal className="h-3.5 w-3.5" />
+                            Настройки
+                            {isCustomReportSetup && (
+                              <span className="h-2 w-2 rounded-full bg-indigo-500" title="Заданы пользовательские настройки отчёта" />
+                            )}
+                          </Button>
+
                           <Button
                             variant="outline"
-                            size="xs"
-                            onClick={handleGenerateDraft}
-                            title="Автоматически собрать структурированный вывод по фактическим ступеням, SLA и генераторам"
+                            size="icon"
+                            loading={refreshingResults}
+                            onClick={handleManualRefreshResults}
+                            title="Пересчитать итоги и графики из Prometheus"
                           >
-                            <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
-                            Сформировать по итогам
+                            <RefreshCw className="h-3.5 w-3.5" />
                           </Button>
-                          <div className="inline-flex rounded-md border border-slate-200 bg-white overflow-hidden text-xs">
-                            <button
-                              type="button"
-                              onClick={() => setCommentPreview(false)}
-                              className={`px-2.5 py-1 font-medium cursor-pointer ${
-                                !commentPreview ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'
-                              }`}
-                            >
-                              Редактор
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setCommentPreview(true)}
-                              className={`px-2.5 py-1 font-medium cursor-pointer ${
-                                commentPreview ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'
-                              }`}
-                            >
-                              Как в отчёте
-                            </button>
-                          </div>
                         </div>
-                      </CardHeader>
-                      <CardBody className="space-y-3">
-                        {/* Визуальные плашки вердикта */}
-                        <div className="space-y-1.5">
-                          <label className="block text-xs font-medium text-slate-600">Итоговый вердикт</label>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {(
-                              [
-                                {
-                                  val: 'Нагрузка выдерживается',
-                                  cls: 'border-emerald-300 bg-emerald-50 text-emerald-900 ring-emerald-500',
-                                  dot: 'bg-emerald-500',
-                                },
-                                {
-                                  val: 'Есть нарушения SLA',
-                                  cls: 'border-amber-300 bg-amber-50 text-amber-900 ring-amber-500',
-                                  dot: 'bg-amber-500',
-                                },
-                                {
-                                  val: 'Деградация',
-                                  cls: 'border-rose-300 bg-rose-50 text-rose-900 ring-rose-500',
-                                  dot: 'bg-rose-500',
-                                },
-                                {
-                                  val: 'Результат недостоверен',
-                                  cls: 'border-slate-400 bg-slate-100 text-slate-800 ring-slate-500',
-                                  dot: 'bg-slate-500',
-                                },
-                              ] as const
-                            ).map((opt) => {
-                              const selected = conclusion === opt.val;
-                              return (
-                                <button
-                                  key={opt.val}
-                                  type="button"
-                                  onClick={() => setConclusion(selected ? '' : opt.val)}
-                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
-                                    selected
-                                      ? `${opt.cls} ring-2 ring-offset-1 font-semibold`
-                                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                                  }`}
-                                >
-                                  <span className={`h-2 w-2 rounded-full ${opt.dot}`} />
-                                  {opt.val}
-                                </button>
-                              );
-                            })}
-                            <Input
-                              value={
-                                [
-                                  'Нагрузка выдерживается',
-                                  'Есть нарушения SLA',
-                                  'Деградация',
-                                  'Результат недостоверен',
-                                ].includes(conclusion)
-                                  ? ''
-                                  : conclusion
-                              }
-                              onChange={(e) => setConclusion(e.target.value)}
-                              placeholder="Или свой вердикт…"
-                              className="h-8 w-48 text-xs"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Быстрые шаблоны блоков */}
-                        {!commentPreview && (
-                          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                            <span className="text-slate-400 mr-0.5">Добавить блок:</span>
-                            {(
-                              [
-                                ['+ Цель теста', 'Цель теста:\n• Проверить производительность сценария под целевой нагрузкой.'],
-                                ['+ Предел мощности', 'Найденный предел:\n• Максимальная подтверждённая ступень — __% (__ оп/с).'],
-                                ['+ Узкие места', 'Узкие места и наблюдения:\n• Рост латентности на операции __ из-за __.'],
-                                ['+ Рекомендации', 'Рекомендации:\n• Оптимизировать __ и провести повторный прогон.'],
-                                ['+ Артефакты / Задача', 'Ссылки:\n• Задача в трекере: \n• Дашборд Grafana: '],
-                              ] as const
-                            ).map(([btnLabel, tpl]) => (
-                              <button
-                                key={btnLabel}
-                                type="button"
-                                onClick={() => insertConclusionSnippet(tpl)}
-                                className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600 hover:border-indigo-300 hover:text-indigo-700 hover:bg-indigo-50/50 cursor-pointer"
-                              >
-                                {btnLabel}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-
-                        {commentPreview ? (
-                          <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3.5 text-xs text-slate-800 space-y-1.5 min-h-[110px]">
-                            {conclusion ? (
-                              <div>
-                                <strong className="text-slate-900">Вывод инженера:</strong> {conclusion}
-                              </div>
-                            ) : (
-                              <div className="text-slate-400 italic">Вердикт не выбран</div>
-                            )}
-                            {comment.trim() ? (
-                              <div className="whitespace-pre-line leading-relaxed pt-1">{comment}</div>
-                            ) : (
-                              <div className="text-slate-400 italic">Текст комментария пуст</div>
-                            )}
-                          </div>
-                        ) : (
-                          <Textarea
-                            ref={commentTaRef}
-                            rows={6}
-                            value={comment}
-                            onChange={(e) => setComment(e.target.value)}
-                            onKeyDown={(e) => {
-                              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                                e.preventDefault();
-                                saveConclusionMut.mutate(false);
-                              }
-                            }}
-                            placeholder="Подробный инженерный вывод: найденный предел RPS, деградировавшие операции и сервисы, рекомендации к релизу… (абзацы и списки сохраняются в HTML, PDF и Word)"
-                            className="text-xs leading-relaxed"
-                          />
-                        )}
-
-                        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
-                          <span className="text-[11px] text-slate-400">
-                            Ctrl+Enter — сохранить · при экспорте или предпросмотре изменения сохраняются автоматически
-                          </span>
-                          <div className="flex items-center gap-2">
-                            {comment.trim() && (
-                              <Button
-                                variant="ghost"
-                                size="xs"
-                                onClick={async () => {
-                                  const ok = await confirm({
-                                    title: 'Очистить текст вывода?',
-                                    message: 'Поле комментария инженера будет очищено.',
-                                    confirmText: 'Очистить',
-                                  });
-                                  if (ok) setComment('');
-                                }}
-                              >
-                                <Eraser className="h-3.5 w-3.5" />
-                                Очистить
-                              </Button>
-                            )}
-                            <Button
-                              size="sm"
-                              loading={saveConclusionMut.isPending}
-                              onClick={() => saveConclusionMut.mutate(false)}
-                            >
-                              <Check className="h-3.5 w-3.5" />
-                              Сохранить в отчёт
-                            </Button>
-                          </div>
-                        </div>
-                      </CardBody>
+                      )}
                     </Card>
                   )}
 
-                  {/* Ступени и операции (как в reports/_steps.html) */}
-                  {(resData.terminal || resData.data.prometheusOk) && (
-                    <div className="space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-                            {resData.livePreview ? 'Ступени и операции (предварительно)' : 'Ступени и операции'}
-                            {resData.terminal && repSections.steps === false && (
-                              <Badge variant="default">раздел скрыт из экспорта</Badge>
-                            )}
-                          </h3>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            Перцентили — histogram_quantile по гистограммам, просуммированным по всем генераторам. Окно
-                            ступени — удержание без первых секунд выхода на режим.
-                          </p>
+                  {!resData.data ? (
+                    <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                      {resData.livePreview
+                        ? 'Данные по ступеням ещё собираются. Нажмите «Обновить» через несколько секунд.'
+                        : 'Итоги ещё не рассчитаны (метрики поступают в Prometheus с задержкой). Нажмите кнопку пересчёта через несколько секунд.'}
+                    </div>
+                  ) : (
+                    <>
+                      {!resData.data.prometheusOk && resData.data.error && (
+                        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-900">
+                          {resData.data.error}
                         </div>
-                      </div>
+                      )}
 
-                      {/* Поиск максимума + Сводка по ступеням */}
-                      {resData.data.stepTest && resData.maxSummary && (
-                        <div className="space-y-3">
-                          <div
-                            className={`rounded-xl border p-3.5 ${
-                              resData.maxSummary.confirmedStepNo != null
-                                ? 'border-emerald-300 bg-emerald-50/70'
-                                : 'border-rose-300 bg-rose-50/70'
-                            }`}
-                          >
-                            <div className="flex flex-wrap items-center gap-2 text-sm">
-                              <Badge variant={resData.maxSummary.confirmedStepNo != null ? 'success' : 'danger'}>
-                                {resData.maxSummary.confirmedStepNo != null
-                                  ? 'Поиск максимума'
-                                  : 'Максимум не подтверждён'}
-                              </Badge>
-                              <strong className="text-slate-900">{resData.maxSummary.headline}</strong>
-                            </div>
-                            {resData.maxSummary.detail && (
-                              <div className="text-xs text-slate-700 mt-1">{resData.maxSummary.detail}</div>
-                            )}
+                      {/* ==================== Подвкладка 1: СВОДКА И СТУПЕНИ ==================== */}
+                      {resultsSubTab === 'summary' && (
+                        <div className="space-y-4">
+                          {/* 4 ключевые KPI-плитки прогона */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            <Card className="p-3.5 flex flex-col justify-between">
+                              <div className="text-[11px] font-medium text-slate-500">Итоговая оценка</div>
+                              <div className="mt-1.5 flex items-center gap-2">
+                                {conclusion ? (
+                                  <Badge variant={conclusionVariant(conclusion)} className="text-xs px-2.5 py-1">
+                                    {conclusion}
+                                  </Badge>
+                                ) : failedSteps.length === 0 && passedSteps.length > 0 ? (
+                                  <Badge variant="success" className="text-xs px-2.5 py-1">
+                                    SLA выполнен
+                                  </Badge>
+                                ) : failedSteps.length > 0 ? (
+                                  <Badge variant="danger" className="text-xs px-2.5 py-1">
+                                    Есть отклонения SLA
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="default" className="text-xs px-2.5 py-1">
+                                    Без оценки
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-400 mt-1.5 truncate">
+                                {run.stopReason ? `Стоп: ${run.stopReason}` : conclusion ? 'Вердикт инженера' : 'Автооценка по порогам'}
+                              </div>
+                            </Card>
+
+                            <Card className="p-3.5 flex flex-col justify-between">
+                              <div className="text-[11px] font-medium text-slate-500">
+                                {resData.maxSummary ? 'Поиск максимума' : 'Интенсивность (пик)'}
+                              </div>
+                              <div className="mt-1 text-sm font-bold text-slate-900 leading-snug">
+                                {resData.maxSummary
+                                  ? resData.maxSummary.headline
+                                  : `${fmtNum(peakActualRps, 1)} оп/с`}
+                              </div>
+                              <div className="text-[11px] text-slate-400 mt-1 truncate">
+                                {resData.maxSummary?.detail || `план до ${fmtNum(peakTargetRps, 1)} оп/с`}
+                              </div>
+                            </Card>
+
+                            <Card className="p-3.5 flex flex-col justify-between">
+                              <div className="flex items-center justify-between text-[11px] font-medium text-slate-500">
+                                <span>Ступени нагрузки</span>
+                                <span className="font-mono">
+                                  {passedSteps.length}/{executedSteps.length || resultSteps.length} ок
+                                </span>
+                              </div>
+                              <div className="mt-1.5 text-sm font-bold text-slate-900">
+                                {failedSteps.length > 0
+                                  ? `Нарушения на ${failedSteps.length} ступ.`
+                                  : passedSteps.length > 0
+                                    ? 'Все ступени в норме'
+                                    : 'Нет завершённых ступеней'}
+                              </div>
+                              {resultSteps.length > 0 && (
+                                <div className="mt-2 flex items-center gap-1">
+                                  {resultSteps.map((s: any) => {
+                                    const barColor =
+                                      s.status === 'SUCCESS'
+                                        ? 'bg-emerald-500'
+                                        : s.status === 'NOT_RUN'
+                                          ? 'bg-slate-300'
+                                          : 'bg-rose-500';
+                                    return (
+                                      <button
+                                        key={s.stepNo}
+                                        type="button"
+                                        title={`Ступень ${s.stepNo} (${fmtNum(s.levelPct, 0)}%): ${stepStatusMeta(s.status).label}`}
+                                        onClick={() => {
+                                          if (!openStepSet.has(s.stepNo)) toggleStepOpen(s.stepNo);
+                                          document.getElementById(`step-${s.stepNo}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                        }}
+                                        className={`h-2 flex-1 rounded-full ${barColor} hover:opacity-80 cursor-pointer`}
+                                      />
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </Card>
+
+                            <Card className="p-3.5 flex flex-col justify-between">
+                              <div className="text-[11px] font-medium text-slate-500">Ошибки и ресурсы</div>
+                              <div className="mt-1 text-sm font-bold text-slate-900 font-mono">
+                                ош. до {fmtNum(worstErrorPct, 2)}%
+                              </div>
+                              <div className="text-[11px] text-slate-400 mt-1">
+                                CPU генераторов макс.: <b className={peakGenCpu >= 80 ? 'text-rose-600' : 'text-slate-700'}>{fmtNum(peakGenCpu, 0)}%</b>
+                              </div>
+                            </Card>
                           </div>
 
-                          <Card className="overflow-hidden">
-                            <CardHeader className="py-2">
-                              <span className="text-xs font-semibold text-slate-900">Сводка по ступеням</span>
-                            </CardHeader>
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-xs">
-                                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
-                                  <tr>
-                                    <th className="px-3.5 py-2 text-left font-medium">Ступень</th>
-                                    <th className="px-3 py-2 text-right font-medium">Уровень</th>
-                                    <th className="px-3 py-2 text-left font-medium">Окно расчёта</th>
-                                    <th className="px-3 py-2 text-right font-medium">План сумм., оп/с</th>
-                                    <th className="px-3 py-2 text-right font-medium">Факт сумм., оп/с</th>
-                                    <th className="px-3 py-2 text-left font-medium">Причины / SLA</th>
-                                    <th className="px-3 py-2 text-right font-medium">Ошибки макс., %</th>
-                                    <th className="px-3 py-2 text-right font-medium">CPU ген., %</th>
-                                    <th className="px-3.5 py-2 text-left font-medium">Статус</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                  {(resData.data.steps || []).map((s: any) => {
-                                    const isMax = resData.maxSummary?.confirmedStepNo === s.stepNo;
-                                    const planSum = (s.ops || []).reduce(
-                                      (a: number, o: any) => a + (o.targetRate || 0),
-                                      0
-                                    );
-                                    const actSum = (s.ops || []).reduce(
-                                      (a: number, o: any) => a + (o.actualRate || 0),
-                                      0
-                                    );
-                                    const maxErr = (s.ops || []).reduce(
-                                      (a: number, o: any) => Math.max(a, o.errorPct || 0),
-                                      0
-                                    );
-                                    const sm = stepStatusMeta(s.status);
-                                    return (
-                                      <tr
-                                        key={s.stepNo}
-                                        className={
-                                          s.status === 'FAILED' || s.status === 'UNRELIABLE'
-                                            ? 'bg-rose-50/50'
-                                            : isMax
-                                              ? 'bg-emerald-50/60'
-                                              : ''
-                                        }
-                                      >
-                                        <td className="px-3.5 py-2 whitespace-nowrap">
-                                          <a
-                                            href={`#step-${s.stepNo}`}
-                                            className="font-semibold text-indigo-600 hover:underline"
+                          {/* Лаконичная карточка «Вывод инженера» (чтение по умолчанию, форма раскрывается по кнопке) */}
+                          {resData.terminal && (
+                            <Card className={repSections.summary === false ? 'opacity-65 border-dashed' : ''}>
+                              <CardHeader className="py-2.5">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-sm font-semibold text-slate-900">Вывод инженера</span>
+                                  {conclusion && <Badge variant={conclusionVariant(conclusion)}>{conclusion}</Badge>}
+                                  {repSections.summary === false && (
+                                    <Badge variant="default">скрыто из экспорта</Badge>
+                                  )}
+                                  {isReportDirty && (
+                                    <Badge variant="warning">● не сохранено</Badge>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    onClick={handleGenerateDraft}
+                                    title="Автоматически собрать структурированный вывод по ступеням, SLA и генераторам"
+                                  >
+                                    <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+                                    Автовывод
+                                  </Button>
+                                  <Button
+                                    variant={editingConclusion ? 'secondary' : 'outline'}
+                                    size="xs"
+                                    onClick={() => setEditingConclusion((v) => !v)}
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                    {editingConclusion ? 'Свернуть редактор' : 'Редактировать'}
+                                  </Button>
+                                </div>
+                              </CardHeader>
+
+                              <CardBody className="space-y-3">
+                                {!editingConclusion ? (
+                                  comment.trim() ? (
+                                    <div className="text-xs text-slate-800 whitespace-pre-line leading-relaxed">
+                                      {comment}
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-slate-400">
+                                      Комментарий инженера пока не заполнен — нажмите «Автовывод» для генерации резюме по метрикам или «Редактировать».
+                                    </div>
+                                  )
+                                ) : (
+                                  <div className="space-y-3">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      {(
+                                        [
+                                          { val: 'Нагрузка выдерживается', dot: 'bg-emerald-500' },
+                                          { val: 'Есть нарушения SLA', dot: 'bg-amber-500' },
+                                          { val: 'Деградация', dot: 'bg-rose-500' },
+                                          { val: 'Результат недостоверен', dot: 'bg-slate-400' },
+                                        ] as const
+                                      ).map((opt) => {
+                                        const selected = conclusion === opt.val;
+                                        return (
+                                          <button
+                                            key={opt.val}
+                                            type="button"
+                                            onClick={() => setConclusion(selected ? '' : opt.val)}
+                                            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
+                                              selected
+                                                ? 'border-indigo-500 bg-indigo-50 text-indigo-900 font-semibold ring-1 ring-indigo-500/40'
+                                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                            }`}
                                           >
-                                            Ступень {s.stepNo}
-                                          </a>
-                                          {isMax && (
-                                            <Badge variant="success" className="ml-1.5">
-                                              макс.
-                                            </Badge>
-                                          )}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-mono">{fmtNum(s.levelPct, 1)}%</td>
-                                        <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">
-                                          {s.status === 'NOT_RUN'
-                                            ? '—'
-                                            : `${fmtTimeOnly(s.windowStart)} – ${fmtTimeOnly(s.windowEnd)}`}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-mono">{fmtNum(planSum, 1)}</td>
-                                        <td className="px-3 py-2 text-right font-mono">{fmtNum(actSum, 1)}</td>
-                                        <td className="px-3 py-2 text-slate-600">
-                                          {s.reasons?.length > 0 ? s.reasons.join(' · ') : 'в норме'}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-mono">{fmtNum(maxErr, 2)}</td>
-                                        <td
-                                          className={`px-3 py-2 text-right font-mono ${
-                                            s.genOverloaded ? 'text-rose-600 font-bold' : ''
-                                          }`}
+                                            <span className={`h-2 w-2 rounded-full ${opt.dot}`} />
+                                            {opt.val}
+                                          </button>
+                                        );
+                                      })}
+                                      <Input
+                                        value={
+                                          [
+                                            'Нагрузка выдерживается',
+                                            'Есть нарушения SLA',
+                                            'Деградация',
+                                            'Результат недостоверен',
+                                          ].includes(conclusion)
+                                            ? ''
+                                            : conclusion
+                                        }
+                                        onChange={(e) => setConclusion(e.target.value)}
+                                        placeholder="Или свой вердикт…"
+                                        className="h-7 w-44 text-xs"
+                                      />
+                                    </div>
+
+                                    <Textarea
+                                      ref={commentTaRef}
+                                      rows={5}
+                                      value={comment}
+                                      onChange={(e) => setComment(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                                          e.preventDefault();
+                                          saveConclusionMut.mutate(false);
+                                        }
+                                      }}
+                                      placeholder="Инженерное резюме: подтверждённый предел RPS, узкие места и рекомендации…"
+                                      className="text-xs leading-relaxed"
+                                    />
+
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-[11px] text-slate-400">Ctrl+Enter — сохранить</span>
+                                      <div className="flex items-center gap-2">
+                                        {comment.trim() && (
+                                          <Button
+                                            variant="ghost"
+                                            size="xs"
+                                            onClick={() => setComment('')}
+                                          >
+                                            <Eraser className="h-3.5 w-3.5" />
+                                            Очистить
+                                          </Button>
+                                        )}
+                                        <Button
+                                          size="sm"
+                                          loading={saveConclusionMut.isPending}
+                                          onClick={() => saveConclusionMut.mutate(false)}
                                         >
-                                          {fmtNum(s.genCpuMax, 0)}
-                                        </td>
-                                        <td className="px-3.5 py-2">
+                                          <Check className="h-3.5 w-3.5" />
+                                          Сохранить вывод
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </CardBody>
+                            </Card>
+                          )}
+
+                          {/* Сводная таблица и аккордеоны ступеней */}
+                          {(resData.terminal || resData.data.prometheusOk) && resultSteps.length > 0 && (
+                            <div className="space-y-3">
+                              {resultSteps.length > 1 && (
+                                <Card className="overflow-hidden">
+                                  <CardHeader className="py-2.5">
+                                    <span className="text-xs font-semibold text-slate-900">Сводная матрица ступеней</span>
+                                    <span className="text-[11px] text-slate-400">клик по строке раскрывает детали ступени</span>
+                                  </CardHeader>
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-xs">
+                                      <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                                        <tr>
+                                          <th className="px-3.5 py-2 text-left font-medium">Ступень</th>
+                                          <th className="px-3 py-2 text-right font-medium">Уровень</th>
+                                          <th className="px-3 py-2 text-left font-medium">Окно</th>
+                                          <th className="px-3 py-2 text-right font-medium">План, оп/с</th>
+                                          <th className="px-3 py-2 text-right font-medium">Факт, оп/с</th>
+                                          <th className="px-3 py-2 text-left font-medium">Причины / SLA</th>
+                                          <th className="px-3 py-2 text-right font-medium">Ошибки, %</th>
+                                          <th className="px-3.5 py-2 text-left font-medium">Статус</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {resultSteps.map((s: any) => {
+                                          const isMax = resData.maxSummary?.confirmedStepNo === s.stepNo;
+                                          const planSum = (s.ops || []).reduce(
+                                            (a: number, o: any) => a + (o.targetRate || 0),
+                                            0
+                                          );
+                                          const actSum = (s.ops || []).reduce(
+                                            (a: number, o: any) => a + (o.actualRate || 0),
+                                            0
+                                          );
+                                          const maxErr = (s.ops || []).reduce(
+                                            (a: number, o: any) => Math.max(a, o.errorPct || 0),
+                                            0
+                                          );
+                                          const sm = stepStatusMeta(s.status);
+                                          return (
+                                            <tr
+                                              key={s.stepNo}
+                                              onClick={() => {
+                                                if (!openStepSet.has(s.stepNo)) toggleStepOpen(s.stepNo);
+                                                document
+                                                  .getElementById(`step-${s.stepNo}`)
+                                                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                              }}
+                                              className={`cursor-pointer ${
+                                                s.status === 'FAILED' || s.status === 'UNRELIABLE'
+                                                  ? 'bg-rose-50/50'
+                                                  : isMax
+                                                    ? 'bg-emerald-50/60'
+                                                    : ''
+                                              }`}
+                                            >
+                                              <td className="px-3.5 py-2 whitespace-nowrap font-semibold text-indigo-600">
+                                                Ступень {s.stepNo}
+                                                {isMax && (
+                                                  <Badge variant="success" className="ml-1.5">
+                                                    макс.
+                                                  </Badge>
+                                                )}
+                                              </td>
+                                              <td className="px-3 py-2 text-right font-mono">{fmtNum(s.levelPct, 1)}%</td>
+                                              <td className="px-3 py-2 font-mono text-slate-600 whitespace-nowrap">
+                                                {s.status === 'NOT_RUN'
+                                                  ? '—'
+                                                  : `${fmtTimeOnly(s.windowStart)} – ${fmtTimeOnly(s.windowEnd)}`}
+                                              </td>
+                                              <td className="px-3 py-2 text-right font-mono">{fmtNum(planSum, 1)}</td>
+                                              <td className="px-3 py-2 text-right font-mono">{fmtNum(actSum, 1)}</td>
+                                              <td className="px-3 py-2 text-slate-600 max-w-xs truncate" title={s.reasons?.join(' · ')}>
+                                                {s.reasons?.length > 0 ? s.reasons.join(' · ') : 'в норме'}
+                                              </td>
+                                              <td className="px-3 py-2 text-right font-mono">{fmtNum(maxErr, 2)}</td>
+                                              <td className="px-3.5 py-2">
+                                                <span
+                                                  className={`inline-flex rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${sm.cls}`}
+                                                >
+                                                  {sm.label}
+                                                </span>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </Card>
+                              )}
+
+                              <div className="flex items-center justify-between pt-1">
+                                <span className="text-sm font-semibold text-slate-900">
+                                  Детализация по операциям ({resultSteps.length})
+                                </span>
+                                {resultSteps.length > 1 && (
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={() =>
+                                      setExpandedStepNos(
+                                        allStepsExpanded ? [] : resultSteps.map((s) => s.stepNo)
+                                      )
+                                    }
+                                  >
+                                    {allStepsExpanded ? 'Свернуть все ступени' : 'Развернуть все ступени'}
+                                  </Button>
+                                )}
+                              </div>
+
+                              <div className="space-y-2.5">
+                                {resultSteps.map((s: any) => {
+                                  const sm = stepStatusMeta(s.status);
+                                  const isOpen = openStepSet.has(s.stepNo);
+                                  const actSum = (s.ops || []).reduce(
+                                    (a: number, o: any) => a + (o.actualRate || 0),
+                                    0
+                                  );
+                                  const planSum = (s.ops || []).reduce(
+                                    (a: number, o: any) => a + (o.targetRate || 0),
+                                    0
+                                  );
+                                  return (
+                                    <Card key={s.stepNo} id={`step-${s.stepNo}`} className="overflow-hidden scroll-mt-16">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleStepOpen(s.stepNo)}
+                                        className="w-full flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-left hover:bg-slate-50/80 transition-colors cursor-pointer"
+                                      >
+                                        <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900 min-w-0">
+                                          {isOpen ? (
+                                            <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />
+                                          ) : (
+                                            <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                                          )}
+                                          <span>
+                                            Ступень {s.stepNo} — {fmtNum(s.levelPct, 1)}%
+                                          </span>
                                           <span
                                             className={`inline-flex rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${sm.cls}`}
                                           >
                                             {sm.label}
                                           </span>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
+                                          {!isOpen && s.reasons?.length > 0 && (
+                                            <span className="text-xs font-normal text-rose-600 truncate max-w-md">
+                                              · {s.reasons[0]}
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {s.status !== 'NOT_RUN' && (
+                                          <div className="flex items-center gap-3 text-xs text-slate-500 font-mono">
+                                            <span>
+                                              {fmtNum(actSum, 1)} / {fmtNum(planSum, 1)} оп/с
+                                            </span>
+                                            <span>
+                                              {fmtTimeOnly(s.windowStart)} – {fmtTimeOnly(s.windowEnd)}
+                                            </span>
+                                            {s.genCpuMax != null && (
+                                              <span className={s.genOverloaded ? 'text-rose-600 font-semibold' : ''}>
+                                                CPU {fmtNum(s.genCpuMax, 0)}%
+                                              </span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </button>
+
+                                      {isOpen && (
+                                        <div className="border-t border-slate-100">
+                                          {s.reasons?.length > 0 && (
+                                            <ul className="px-4 py-2 bg-rose-50/60 border-b border-rose-100 text-xs text-rose-800 list-disc list-inside space-y-0.5">
+                                              {s.reasons.map((r: string, idx: number) => (
+                                                <li key={idx}>{r}</li>
+                                              ))}
+                                            </ul>
+                                          )}
+
+                                          {s.ops?.length > 0 && (
+                                            <div className="overflow-x-auto">
+                                              <table className="w-full text-xs">
+                                                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                                                  <tr>
+                                                    <th className="px-3.5 py-2 text-left font-medium">Операция</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">План, оп/с</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">Факт, оп/с</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">Откл., %</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">p50, мс</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">p90, мс</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">p95, мс</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">p99, мс</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">SLA</th>
+                                                    <th className="px-2.5 py-2 text-right font-medium">Ошибки, %</th>
+                                                    <th className="px-3.5 py-2 text-right font-medium">Dropped</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                  {s.ops.map((o: any) => (
+                                                    <tr key={o.operation} className={o.ok ? '' : 'bg-rose-50/60'}>
+                                                      <td className="px-3.5 py-2 font-medium text-slate-900">{o.operation}</td>
+                                                      <td className="px-2.5 py-2 text-right font-mono">{fmtNum(o.targetRate, 2)}</td>
+                                                      <td className="px-2.5 py-2 text-right font-mono">{fmtNum(o.actualRate, 2)}</td>
+                                                      <td className="px-2.5 py-2 text-right font-mono">
+                                                        {fmtNum(o.deviationPct, 1)}
+                                                      </td>
+                                                      <td className="px-2.5 py-2 text-right font-mono">{fmtNum(o.p50, 0)}</td>
+                                                      <td
+                                                        className={`px-2.5 py-2 text-right font-mono ${
+                                                          o.slaPercentile === 90 ? 'font-bold bg-indigo-50/40' : ''
+                                                        }`}
+                                                      >
+                                                        {fmtNum(o.p90, 0)}
+                                                      </td>
+                                                      <td
+                                                        className={`px-2.5 py-2 text-right font-mono ${
+                                                          o.slaPercentile === 95 ? 'font-bold bg-indigo-50/40' : ''
+                                                        }`}
+                                                      >
+                                                        {fmtNum(o.p95, 0)}
+                                                      </td>
+                                                      <td
+                                                        className={`px-2.5 py-2 text-right font-mono ${
+                                                          o.slaPercentile === 99 ? 'font-bold bg-indigo-50/40' : ''
+                                                        }`}
+                                                      >
+                                                        {fmtNum(o.p99, 0)}
+                                                      </td>
+                                                      <td className="px-2.5 py-2 text-right font-mono whitespace-nowrap">
+                                                        p{o.slaPercentile} ≤ {Math.round(o.slaMs)}
+                                                      </td>
+                                                      <td className="px-2.5 py-2 text-right font-mono whitespace-nowrap">
+                                                        {fmtNum(o.errorPct, 2)} / {fmtNum(o.maxErrorPct, 2)}
+                                                      </td>
+                                                      <td className="px-3.5 py-2 text-right font-mono">{fmtNum(o.dropped, 0)}</td>
+                                                    </tr>
+                                                  ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          )}
+
+                                          {s.customChecks?.length > 0 && (
+                                            <div className="overflow-x-auto border-t border-slate-200">
+                                              <table className="w-full text-xs">
+                                                <thead className="bg-slate-50 text-slate-500 border-b border-slate-100">
+                                                  <tr>
+                                                    <th className="px-3.5 py-2 text-left font-medium">
+                                                      Метрика Prometheus
+                                                    </th>
+                                                    <th className="px-3 py-2 text-right font-medium">Факт (худшее)</th>
+                                                    <th className="px-3 py-2 text-right font-medium">Порог SLA</th>
+                                                    <th className="px-3 py-2 text-left font-medium">Серия / хост</th>
+                                                    <th className="px-3.5 py-2 text-left font-medium">Статус</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                  {s.customChecks.map((cm: any, idx: number) => (
+                                                    <tr key={idx} className={cm.ok ? '' : 'bg-rose-50/60'}>
+                                                      <td className="px-3.5 py-2 font-medium text-slate-900">{cm.name}</td>
+                                                      <td className="px-3 py-2 text-right font-mono">
+                                                        {cm.value == null
+                                                          ? 'нет данных'
+                                                          : `${fmtNum(cm.value, 1)}${cm.unit ? ` ${cm.unit}` : ''}`}
+                                                      </td>
+                                                      <td className="px-3 py-2 text-right font-mono">
+                                                        {cm.thresholdText || `${cm.cmp || ''} ${cm.threshold ?? ''}`}
+                                                      </td>
+                                                      <td className="px-3 py-2 text-slate-600">{cm.worstSeries || '—'}</td>
+                                                      <td className="px-3.5 py-2">
+                                                        <Badge variant={cm.dataMissing ? 'warning' : cm.ok ? 'success' : 'danger'}>
+                                                          {cm.dataMissing ? 'нет данных' : cm.ok ? 'в норме' : 'нарушение'}
+                                                        </Badge>
+                                                      </td>
+                                                    </tr>
+                                                  ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </Card>
+                                  );
+                                })}
+                              </div>
                             </div>
-                          </Card>
+                          )}
                         </div>
                       )}
 
-                      {/* Детальные таблицы по каждой ступени */}
-                      {(resData.data.steps || []).map((s: any) => {
-                        const sm = stepStatusMeta(s.status);
-                        return (
-                          <Card key={s.stepNo} id={`step-${s.stepNo}`} className="overflow-hidden">
-                            <CardHeader className="flex-wrap">
-                              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
-                                <span>
-                                  Ступень {s.stepNo} — {fmtNum(s.levelPct, 1)}% от модели
-                                </span>
-                                <span
-                                  className={`inline-flex rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${sm.cls}`}
-                                >
-                                  {sm.label}
-                                </span>
-                              </div>
-                              {s.status !== 'NOT_RUN' && (
-                                <span className="text-xs text-slate-500">
-                                  окно расчёта {fmtTimeOnly(s.windowStart)} – {fmtTimeOnly(s.windowEnd)}
-                                  {s.genCpuMax != null && (
-                                    <span className={s.genOverloaded ? 'text-rose-600 font-semibold' : ''}>
-                                      {' '}
-                                      · CPU генераторов макс. {fmtNum(s.genCpuMax, 0)}%
-                                    </span>
-                                  )}
-                                </span>
-                              )}
-                            </CardHeader>
-
-                            {s.reasons?.length > 0 && (
-                              <ul className="px-4 py-2 bg-rose-50/60 border-b border-rose-100 text-xs text-rose-800 list-disc list-inside space-y-0.5">
-                                {s.reasons.map((r: string, idx: number) => (
-                                  <li key={idx}>{r}</li>
-                                ))}
-                              </ul>
-                            )}
-
-                            {s.ops?.length > 0 && (
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-xs">
-                                  <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
-                                    <tr>
-                                      <th className="px-3.5 py-2 text-left font-medium">Операция</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">План, оп/с</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">Факт, оп/с</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">Откл., %</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">p50, мс</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">p90, мс</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">p95, мс</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">p99, мс</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">SLA</th>
-                                      <th className="px-2.5 py-2 text-right font-medium">Ошибки, %</th>
-                                      <th className="px-3.5 py-2 text-right font-medium">Dropped</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100">
-                                    {s.ops.map((o: any) => (
-                                      <tr key={o.operation} className={o.ok ? '' : 'bg-rose-50/60'}>
-                                        <td className="px-3.5 py-2 font-medium text-slate-900">{o.operation}</td>
-                                        <td className="px-2.5 py-2 text-right font-mono">{fmtNum(o.targetRate, 2)}</td>
-                                        <td className="px-2.5 py-2 text-right font-mono">{fmtNum(o.actualRate, 2)}</td>
-                                        <td className="px-2.5 py-2 text-right font-mono">
-                                          {fmtNum(o.deviationPct, 1)}
-                                        </td>
-                                        <td className="px-2.5 py-2 text-right font-mono">{fmtNum(o.p50, 0)}</td>
-                                        <td
-                                          className={`px-2.5 py-2 text-right font-mono ${
-                                            o.slaPercentile === 90 ? 'font-bold bg-indigo-50/40' : ''
-                                          }`}
-                                        >
-                                          {fmtNum(o.p90, 0)}
-                                        </td>
-                                        <td
-                                          className={`px-2.5 py-2 text-right font-mono ${
-                                            o.slaPercentile === 95 ? 'font-bold bg-indigo-50/40' : ''
-                                          }`}
-                                        >
-                                          {fmtNum(o.p95, 0)}
-                                        </td>
-                                        <td
-                                          className={`px-2.5 py-2 text-right font-mono ${
-                                            o.slaPercentile === 99 ? 'font-bold bg-indigo-50/40' : ''
-                                          }`}
-                                        >
-                                          {fmtNum(o.p99, 0)}
-                                        </td>
-                                        <td className="px-2.5 py-2 text-right font-mono whitespace-nowrap">
-                                          p{o.slaPercentile} ≤ {Math.round(o.slaMs)}
-                                        </td>
-                                        <td className="px-2.5 py-2 text-right font-mono whitespace-nowrap">
-                                          {fmtNum(o.errorPct, 2)} / {fmtNum(o.maxErrorPct, 2)}
-                                        </td>
-                                        <td className="px-3.5 py-2 text-right font-mono">{fmtNum(o.dropped, 0)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-
-                            {s.customChecks?.length > 0 && (
-                              <div className="overflow-x-auto border-t border-slate-200">
-                                <table className="w-full text-xs">
-                                  <thead className="bg-slate-50 text-slate-500 border-b border-slate-100">
-                                    <tr>
-                                      <th className="px-3.5 py-2 text-left font-medium">
-                                        Кастомная метрика Prometheus
-                                      </th>
-                                      <th className="px-3 py-2 text-right font-medium">Факт (худшее за ступень)</th>
-                                      <th className="px-3 py-2 text-right font-medium">Порог SLA</th>
-                                      <th className="px-3 py-2 text-left font-medium">Серия / хост</th>
-                                      <th className="px-3 py-2 text-left font-medium">Контроль</th>
-                                      <th className="px-3.5 py-2 text-left font-medium">Статус</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100">
-                                    {s.customChecks.map((cm: any, idx: number) => (
-                                      <tr key={idx} className={cm.ok ? '' : 'bg-rose-50/60'}>
-                                        <td className="px-3.5 py-2 font-medium text-slate-900">{cm.name}</td>
-                                        <td className="px-3 py-2 text-right font-mono">
-                                          {cm.value == null
-                                            ? 'нет данных'
-                                            : `${fmtNum(cm.value, 1)}${cm.unit ? ` ${cm.unit}` : ''}`}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-mono">
-                                          {cm.thresholdText || `${cm.cmp || ''} ${cm.threshold ?? ''}`}
-                                        </td>
-                                        <td className="px-3 py-2 text-slate-600">{cm.worstSeries || '—'}</td>
-                                        <td className="px-3 py-2">
-                                          {cm.stepSla && cm.autoStop
-                                            ? 'SLA + Автостоп'
-                                            : cm.stepSla
-                                              ? 'SLA ступени'
-                                              : 'Автостоп'}
-                                        </td>
-                                        <td className="px-3.5 py-2">
-                                          <Badge variant={cm.dataMissing ? 'warning' : cm.ok ? 'success' : 'danger'}>
-                                            {cm.dataMissing ? 'нет данных' : cm.ok ? 'в норме' : 'нарушение'}
-                                          </Badge>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </Card>
-                        );
-                      })}
-
-                      {/* Все графики отчёта (k6, по ступеням, кастомные скрипта, SLA Prometheus) */}
-                      {allReportCharts.length > 0 && (
-                        <div className="space-y-3 pt-2">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-                                Графики отчёта
-                                <Badge variant="info">
-                                  в отчёте {includedChartsCount} из {allReportCharts.length}
-                                </Badge>
-                                {resData.terminal && repSections.charts === false && (
-                                  <Badge variant="default">раздел скрыт из экспорта</Badge>
-                                )}
-                              </h3>
-                              <p className="text-xs text-slate-500 mt-0.5">
-                                Клик по графику открывает полноэкранный просмотр (← / →). Любой график можно скрыть из
-                                экспорта HTML/PDF/Word без удаления шаблона.
-                              </p>
-                            </div>
-
+                      {/* ==================== Подвкладка 2: ГРАФИКИ ОТЧЁТА ==================== */}
+                      {resultsSubTab === 'charts' && (
+                        <div className="space-y-3">
+                          <Card className="p-3 flex flex-wrap items-center justify-between gap-2.5">
                             <div className="flex flex-wrap items-center gap-1.5">
                               {(
                                 [
@@ -2566,169 +2524,219 @@ export function RunDetailPage() {
                                     onClick={() => setChartCatFilter(catKey)}
                                     className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium cursor-pointer transition-colors ${
                                       chartCatFilter === catKey
-                                        ? 'bg-slate-800 text-white'
-                                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100'
                                     }`}
                                   >
                                     <span>{catLabel}</span>
-                                    <span className="opacity-70 text-[10px]">{cnt}</span>
+                                    <span className="opacity-75 font-mono text-[10px]">{cnt}</span>
                                   </button>
                                 ))}
 
                               {resData.terminal && repExcludedCharts.length > 0 && (
                                 <Button
-                                  variant="outline"
+                                  variant="ghost"
                                   size="xs"
                                   onClick={() => {
                                     setRepExcludedCharts([]);
                                     saveReportConfigQuick(repSections, []);
                                   }}
                                 >
-                                  Вернуть все в отчёт
+                                  Вернуть скрытые ({repExcludedCharts.length})
                                 </Button>
                               )}
                             </div>
-                          </div>
 
-                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                            {filteredReportCharts.map((ch: any, idx: number) => {
-                              const globalIdx = allReportCharts.indexOf(ch);
-                              const isIncluded = !excludedSet.has(ch.title);
-                              const catMeta =
-                                ch.category === 'k6'
-                                  ? { label: 'k6', variant: 'info' as const }
-                                  : ch.category === 'steps'
-                                    ? { label: 'Ступени', variant: 'default' as const }
-                                    : ch.category === 'sla'
-                                      ? { label: 'SLA', variant: 'warning' as const }
-                                      : { label: 'Скрипт', variant: 'success' as const };
-                              return (
-                                <Card
-                                  key={`${ch.category || 'c'}-${ch.title}-${idx}`}
-                                  className={`overflow-hidden transition-opacity ${
-                                    !isIncluded ? 'opacity-55 border-dashed bg-slate-50/50' : ''
-                                  }`}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Select
+                                value={repTimeAxis}
+                                onChange={(e) => setRepTimeAxis(e.target.value as any)}
+                                className="w-auto h-7 text-xs"
+                                title="Ось X на временных графиках"
+                              >
+                                <option value="">Ось X: по умолч.</option>
+                                <option value="rel">Минуты от старта</option>
+                                <option value="abs">Часы (абс.)</option>
+                              </Select>
+                              <Select
+                                value={repWarmup}
+                                onChange={(e) => setRepWarmup(e.target.value as any)}
+                                className="w-auto h-7 text-xs"
+                                title="Участок прогрева на графиках"
+                              >
+                                <option value="">Прогрев: по умолч.</option>
+                                <option value="include">С начала теста</option>
+                                <option value="skip">
+                                  Без прогрева
+                                  {resData.warmupSec > 0 ? ` (−${Math.round(resData.warmupSec / 6) / 10} мин)` : ''}
+                                </option>
+                              </Select>
+                              <Select
+                                value={repSortBy}
+                                onChange={(e) => setRepSortBy(e.target.value as any)}
+                                className="w-auto h-7 text-xs"
+                                title="Сортировка рядов в легенде"
+                              >
+                                <option value="">Легенда: по умолч.</option>
+                                <option value="NONE">Как в запросе</option>
+                                <option value="MAX">По Max</option>
+                                <option value="MEAN">По Mean</option>
+                                <option value="LAST">По Last</option>
+                              </Select>
+                              {repSortBy && repSortBy !== 'NONE' && (
+                                <Select
+                                  value={repSortDir || 'DESC'}
+                                  onChange={(e) => setRepSortDir(e.target.value as any)}
+                                  className="w-auto h-7 text-xs"
                                 >
-                                  <CardHeader className="py-2 gap-2">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      <Badge variant={catMeta.variant}>{catMeta.label}</Badge>
-                                      <span className="font-semibold text-xs text-slate-900 truncate" title={ch.title}>
-                                        {ch.title}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-1 shrink-0">
-                                      {resData.terminal && (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleToggleChartIncluded(ch.title)}
-                                          title={
-                                            isIncluded
-                                              ? 'График включён в экспорт отчёта (нажмите, чтобы исключить)'
-                                              : 'График исключён из экспорта отчёта (нажмите, чтобы включить)'
-                                          }
-                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium border cursor-pointer ${
-                                            isIncluded
-                                              ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                                              : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
-                                          }`}
-                                        >
-                                          {isIncluded ? (
-                                            <>
-                                              <Eye className="h-3 w-3" />В отчёте
-                                            </>
-                                          ) : (
-                                            <>
-                                              <EyeOff className="h-3 w-3" />
-                                              Скрыт
-                                            </>
-                                          )}
-                                        </button>
-                                      )}
-                                      <button
-                                        type="button"
-                                        onClick={() => downloadDataUriPng(ch.dataUri, ch.title)}
-                                        title="Скачать PNG графика"
-                                        className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 cursor-pointer"
-                                      >
-                                        <Download className="h-3 w-3" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setLightboxIdx(globalIdx >= 0 ? globalIdx : 0)}
-                                        title="Развернуть на весь экран"
-                                        className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:border-indigo-200 cursor-pointer"
-                                      >
-                                        <Maximize2 className="h-3 w-3" />
-                                      </button>
-                                    </div>
-                                  </CardHeader>
-                                  <CardBody className="p-2">
-                                    <img
-                                      src={ch.dataUri}
-                                      alt={ch.title}
-                                      onClick={() => setLightboxIdx(globalIdx >= 0 ? globalIdx : 0)}
-                                      title="Нажмите, чтобы увеличить"
-                                      className="w-full h-auto rounded-lg cursor-zoom-in hover:ring-2 hover:ring-indigo-300 transition-shadow"
-                                    />
-                                  </CardBody>
-                                </Card>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Генераторы (справочно) для завершённого теста */}
-                      {resData.terminal && resData.data.generators?.length > 0 && (
-                        <div className={`space-y-2 pt-2 ${repSections.generators === false ? 'opacity-65' : ''}`}>
-                          <div>
-                            <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-                              Генераторы (справочно)
-                              {repSections.generators === false && (
-                                <Badge variant="default">раздел скрыт из экспорта</Badge>
+                                  <option value="DESC">↓ убыв.</option>
+                                  <option value="ASC">↑ возр.</option>
+                                </Select>
                               )}
-                            </h3>
-                            <p className="text-xs text-slate-500">
-                              Накопленные за весь тест значения k6; для оценки SLA не используются.
-                            </p>
-                          </div>
-                          <Card className="overflow-hidden">
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-xs">
-                                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
-                                  <tr>
-                                    <th className="px-3.5 py-2 text-left font-medium">Генератор</th>
-                                    <th className="px-3 py-2 text-left font-medium">Статус</th>
-                                    <th className="px-3 py-2 text-left font-medium">Код k6</th>
-                                    <th className="px-3 py-2 text-right font-medium">CPU макс., %</th>
-                                    <th className="px-3 py-2 text-right font-medium">Итераций</th>
-                                    <th className="px-3 py-2 text-right font-medium">Dropped</th>
-                                    <th className="px-3.5 py-2 text-right font-medium">HTTP-запросов</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                  {resData.data.generators.map((g: any, idx: number) => (
-                                    <tr key={idx}>
-                                      <td className="px-3.5 py-2 font-semibold text-slate-900">{g.generator}</td>
-                                      <td className="px-3 py-2">{g.status}</td>
-                                      <td className="px-3 py-2 font-mono">{g.exitCode ?? '—'}</td>
-                                      <td className="px-3 py-2 text-right font-mono">{fmtNum(g.cpuMax, 0)}</td>
-                                      <td className="px-3 py-2 text-right font-mono">{fmtNum(g.iterations, 0)}</td>
-                                      <td className="px-3 py-2 text-right font-mono">{fmtNum(g.dropped, 0)}</td>
-                                      <td className="px-3.5 py-2 text-right font-mono">{fmtNum(g.httpReqs, 0)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                              {run.scriptId != null && (
+                                <Link to={`/scripts/${run.scriptId}/charts`}>
+                                  <Button variant="outline" size="xs">
+                                    Конструктор графиков →
+                                  </Button>
+                                </Link>
+                              )}
                             </div>
                           </Card>
+
+                          {allReportCharts.length === 0 ? (
+                            <Card className="p-8 text-center text-xs text-slate-500">
+                              Графики отчёта для этого запуска не построены.
+                            </Card>
+                          ) : (
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                              {filteredReportCharts.map((ch: any, idx: number) => {
+                                const globalIdx = allReportCharts.indexOf(ch);
+                                const isIncluded = !excludedSet.has(ch.title);
+                                const catMeta =
+                                  ch.category === 'k6'
+                                    ? { label: 'k6', variant: 'info' as const }
+                                    : ch.category === 'steps'
+                                      ? { label: 'Ступени', variant: 'default' as const }
+                                      : ch.category === 'sla'
+                                        ? { label: 'SLA', variant: 'warning' as const }
+                                        : { label: 'Скрипт', variant: 'success' as const };
+                                return (
+                                  <Card
+                                    key={`${ch.category || 'c'}-${ch.title}-${idx}`}
+                                    className={`overflow-hidden transition-opacity ${
+                                      !isIncluded ? 'opacity-55 border-dashed' : ''
+                                    }`}
+                                  >
+                                    <CardHeader className="py-2 gap-2">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <Badge variant={catMeta.variant}>{catMeta.label}</Badge>
+                                        <span className="font-semibold text-xs text-slate-900 truncate" title={ch.title}>
+                                          {ch.title}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        {resData.terminal && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleToggleChartIncluded(ch.title)}
+                                            className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium border cursor-pointer ${
+                                              isIncluded
+                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                                                : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                                            }`}
+                                          >
+                                            {isIncluded ? (
+                                              <>
+                                                <Eye className="h-3 w-3" />В отчёте
+                                              </>
+                                            ) : (
+                                              <>
+                                                <EyeOff className="h-3 w-3" />
+                                                Скрыт
+                                              </>
+                                            )}
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => downloadDataUriPng(ch.dataUri, ch.title)}
+                                          title="Скачать PNG"
+                                          className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200 bg-slate-50 text-slate-600 hover:text-indigo-600 cursor-pointer"
+                                        >
+                                          <Download className="h-3 w-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setLightboxIdx(globalIdx >= 0 ? globalIdx : 0)}
+                                          title="Развернуть"
+                                          className="inline-flex items-center justify-center h-6 w-6 rounded-md border border-slate-200 bg-slate-50 text-slate-600 hover:text-indigo-600 cursor-pointer"
+                                        >
+                                          <Maximize2 className="h-3 w-3" />
+                                        </button>
+                                      </div>
+                                    </CardHeader>
+                                    <CardBody className="p-2">
+                                      <img
+                                        src={ch.dataUri}
+                                        alt={ch.title}
+                                        onClick={() => setLightboxIdx(globalIdx >= 0 ? globalIdx : 0)}
+                                        className="w-full h-auto rounded-lg cursor-zoom-in hover:ring-2 hover:ring-indigo-300 transition-shadow"
+                                      />
+                                    </CardBody>
+                                  </Card>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       )}
-                    </div>
+
+                      {/* ==================== Подвкладка 3: ГЕНЕРАТОРЫ (СПРАВОЧНО) ==================== */}
+                      {resultsSubTab === 'generators' && resData.terminal && (
+                        <Card className="overflow-hidden">
+                          <CardHeader className="py-2.5">
+                            <span className="text-xs font-semibold text-slate-900">
+                              Суммарные показатели генераторов за весь тест
+                            </span>
+                            {repSections.generators === false && (
+                              <Badge variant="default">раздел скрыт из экспорта</Badge>
+                            )}
+                          </CardHeader>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                                <tr>
+                                  <th className="px-3.5 py-2 text-left font-medium">Генератор</th>
+                                  <th className="px-3 py-2 text-left font-medium">Статус</th>
+                                  <th className="px-3 py-2 text-left font-medium">Код k6</th>
+                                  <th className="px-3 py-2 text-right font-medium">CPU макс., %</th>
+                                  <th className="px-3 py-2 text-right font-medium">Итераций</th>
+                                  <th className="px-3 py-2 text-right font-medium">Dropped</th>
+                                  <th className="px-3.5 py-2 text-right font-medium">HTTP-запросов</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {resultGens.map((g: any, idx: number) => (
+                                  <tr key={idx}>
+                                    <td className="px-3.5 py-2 font-semibold text-slate-900">{g.generator}</td>
+                                    <td className="px-3 py-2">{g.status}</td>
+                                    <td className="px-3 py-2 font-mono">{g.exitCode ?? '—'}</td>
+                                    <td className="px-3 py-2 text-right font-mono">{fmtNum(g.cpuMax, 0)}</td>
+                                    <td className="px-3 py-2 text-right font-mono">{fmtNum(g.iterations, 0)}</td>
+                                    <td className="px-3 py-2 text-right font-mono">{fmtNum(g.dropped, 0)}</td>
+                                    <td className="px-3.5 py-2 text-right font-mono">{fmtNum(g.httpReqs, 0)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </Card>
+                      )}
+                    </>
                   )}
                 </>
-              )}
-            </>
+              );
+            })()
           )}
         </div>
       )}
@@ -3111,6 +3119,109 @@ export function RunDetailPage() {
           />
         </div>
       )}
+
+      {/* Настройки структуры и заголовка экспортируемого отчёта */}
+      <Modal
+        open={reportSettingsOpen}
+        onClose={() => setReportSettingsOpen(false)}
+        title={
+          <span className="flex items-center gap-2">
+            <LayoutList className="h-4 w-4 text-indigo-600" />
+            Настройки экспорта отчёта
+          </span>
+        }
+        footer={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setReportSettingsOpen(false)}>
+              Закрыть
+            </Button>
+            <Button
+              size="sm"
+              loading={saveConclusionMut.isPending}
+              onClick={async () => {
+                await saveConclusionMut.mutateAsync(false);
+                setReportSettingsOpen(false);
+              }}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Сохранить настройки
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4 text-xs">
+          <div>
+            <label className="block font-medium text-slate-700 mb-1">
+              Заголовок отчёта (для HTML, PDF и имени файла Word)
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                value={repCustomTitle}
+                onChange={(e) => setRepCustomTitle(e.target.value)}
+                placeholder={resData?.defaultTitle || run.scriptName}
+                className="h-8 text-xs"
+              />
+              {repCustomTitle.trim() && (
+                <Button variant="ghost" size="xs" onClick={() => setRepCustomTitle('')}>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Сбросить
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-medium text-slate-700 mb-1.5">Разделы в HTML / PDF / Word</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  ['summary', 'Итог и вывод инженера'],
+                  ['config', 'Конфигурация запуска'],
+                  ['env', 'Переменные запуска'],
+                  ['steps', 'Ступени и SLA'],
+                  [
+                    'charts',
+                    allReportCharts.length > 0
+                      ? `Графики (${includedChartsCount}/${allReportCharts.length})`
+                      : 'Графики отчёта',
+                  ],
+                  ['generators', 'Генераторы нагрузки'],
+                ] as const
+              ).map(([sKey, sLabel]) => {
+                const active = repSections[sKey] !== false;
+                return (
+                  <label
+                    key={sKey}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
+                      active
+                        ? 'border-indigo-300 bg-indigo-50/70 text-slate-900 font-medium'
+                        : 'border-slate-200 bg-slate-50 text-slate-500'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={() => handleToggleReportSection(sKey)}
+                    />
+                    <span>{sLabel}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <span className="text-slate-500">Глобальная тема и размер PNG-графиков отчёта</span>
+            <Link
+              to="/settings"
+              onClick={() => setReportSettingsOpen(false)}
+              className="text-indigo-600 hover:underline font-medium"
+            >
+              Открыть настройки системы →
+            </Link>
+          </div>
+        </div>
+      </Modal>
 
       {/* Интерактивный предпросмотр печатного HTML-отчёта */}
       <Modal

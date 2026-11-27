@@ -11,13 +11,16 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'primary', size = 'md', loading, disabled, children, type = 'button', ...props }, ref) => {
     const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
-      primary: 'bg-indigo-600 text-white hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 shadow-xs',
-      secondary: 'bg-slate-100 text-slate-800 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700',
+      primary:
+        'bg-indigo-600 text-white hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.18)] shadow-xs',
+      secondary:
+        'bg-slate-100 text-slate-800 hover:bg-slate-200 dark:bg-[#25314a] dark:text-slate-100 dark:border dark:border-[#3b4b6e] dark:hover:bg-[#303f5e]',
       outline:
-        'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-white',
-      ghost: 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white',
-      danger: 'bg-rose-600 text-white hover:bg-rose-700 shadow-xs',
-      success: 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-xs',
+        'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-[#3a4868] dark:bg-[#1e273b] dark:text-slate-100 dark:hover:bg-[#293550] dark:hover:border-indigo-400/60 dark:hover:text-white',
+      ghost:
+        'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-[#222d44] dark:hover:text-white',
+      danger: 'bg-rose-600 text-white hover:bg-rose-700 dark:bg-rose-600 dark:hover:bg-rose-500 shadow-xs',
+      success: 'bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500 shadow-xs',
       warning: 'bg-amber-500 text-white hover:bg-amber-600 shadow-xs',
     };
     const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
@@ -52,7 +55,7 @@ export function Card({ className, children, ...props }: React.HTMLAttributes<HTM
   return (
     <div
       className={cn(
-        'rounded-xl border border-slate-200/90 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-2xs',
+        'rounded-xl border border-slate-200/90 bg-white shadow-2xs dark:border-[#2c3854] dark:bg-[#141a27] dark:shadow-[0_3px_12px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.04)]',
         className
       )}
       {...props}
@@ -66,7 +69,7 @@ export function CardHeader({ className, children, ...props }: React.HTMLAttribut
   return (
     <div
       className={cn(
-        'flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 px-4 py-3',
+        'flex items-center justify-between gap-3 rounded-t-xl border-b border-slate-100 bg-slate-50/40 px-4 py-3 dark:border-[#2b3752] dark:bg-[#1b2335]',
         className
       )}
       {...props}
@@ -93,13 +96,13 @@ export function Badge({
   variant?: BadgeVariant;
 }) {
   const styles: Record<BadgeVariant, string> = {
-    default: 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700',
-    neutral: 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700',
-    success: 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/35',
-    warning: 'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/35',
-    danger: 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-300 dark:ring-rose-500/35',
-    info: 'bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/35',
-    purple: 'bg-purple-50 text-purple-700 ring-purple-200 dark:bg-purple-500/15 dark:text-purple-300 dark:ring-purple-500/35',
+    default: 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-[#242f47] dark:text-slate-200 dark:ring-[#3b4a6b]',
+    neutral: 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-[#242f47] dark:text-slate-200 dark:ring-[#3b4a6b]',
+    success: 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:ring-emerald-400/45',
+    warning: 'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/20 dark:text-amber-200 dark:ring-amber-400/45',
+    danger: 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-500/20 dark:text-rose-200 dark:ring-rose-400/45',
+    info: 'bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-500/22 dark:text-indigo-200 dark:ring-indigo-400/45',
+    purple: 'bg-purple-50 text-purple-700 ring-purple-200 dark:bg-purple-500/22 dark:text-purple-200 dark:ring-purple-400/45',
   };
   return (
     <span
@@ -120,7 +123,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900',
+        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-[#354261] dark:bg-[#0a0e16] dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-indigo-400 dark:disabled:bg-[#111623]',
         className
       )}
       {...props}
@@ -134,7 +137,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
     <textarea
       ref={ref}
       className={cn(
-        'flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900',
+        'flex w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-[#354261] dark:bg-[#0a0e16] dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-indigo-400 dark:disabled:bg-[#111623]',
         className
       )}
       {...props}
@@ -148,7 +151,7 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
     <select
       ref={ref}
       className={cn(
-        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-100 dark:disabled:bg-slate-900',
+        'flex h-9 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 dark:border-[#354261] dark:bg-[#0a0e16] dark:text-slate-100 dark:focus:border-indigo-400 dark:disabled:bg-[#111623]',
         className
       )}
       {...props}
@@ -223,20 +226,20 @@ export function Modal({
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-black/70 backdrop-blur-[1px]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-black/75 backdrop-blur-[2px]" onMouseDown={onClose}>
       <div
         className={cn(
-          'w-full rounded-2xl bg-white dark:bg-slate-900 shadow-xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[90vh]',
+          'w-full rounded-2xl bg-white dark:bg-[#161d2c] shadow-2xl border border-slate-200 dark:border-[#32405f] flex flex-col max-h-[90vh]',
           maxWidth
         )}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 px-5 py-3.5 shrink-0">
+        <div className="flex items-center justify-between gap-3 rounded-t-2xl border-b border-slate-100 dark:border-[#2c3955] bg-slate-50/50 dark:bg-[#1d2639] px-5 py-3.5 shrink-0">
           <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">{title}</div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-[#2a3650] dark:hover:text-slate-100 cursor-pointer"
             aria-label="Закрыть"
           >
             <X className="h-4 w-4" />
@@ -244,7 +247,7 @@ export function Modal({
         </div>
         <div className="p-5 overflow-y-auto flex-1 text-slate-800 dark:text-slate-200">{children}</div>
         {footer && (
-          <div className="flex items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800 px-5 py-3 shrink-0">
+          <div className="flex items-center justify-end gap-2 rounded-b-2xl border-t border-slate-100 dark:border-[#2c3955] bg-slate-50/40 dark:bg-[#192132] px-5 py-3 shrink-0">
             {footer}
           </div>
         )}

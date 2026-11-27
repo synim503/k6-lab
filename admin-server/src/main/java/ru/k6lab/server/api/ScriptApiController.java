@@ -44,16 +44,19 @@ public class ScriptApiController {
 
     private final ScriptService scripts;
     private final GitRepoService gitRepos;
+    private final ru.k6lab.server.git.GitBackupService gitBackup;
     private final LoadService load;
     private final LoadProfileStore profiles;
     private final RunService runs;
     private final ru.k6lab.server.run.RunOrchestrator orchestrator;
 
     public ScriptApiController(ScriptService scripts, GitRepoService gitRepos,
+                               ru.k6lab.server.git.GitBackupService gitBackup,
                                LoadService load, LoadProfileStore profiles, RunService runs,
                                ru.k6lab.server.run.RunOrchestrator orchestrator) {
         this.scripts = scripts;
         this.gitRepos = gitRepos;
+        this.gitBackup = gitBackup;
         this.load = load;
         this.profiles = profiles;
         this.runs = runs;
@@ -64,6 +67,9 @@ public class ScriptApiController {
     }
 
     public record GitImportRequest(Long repoId, String ref, String entrypoint, String comment) {
+    }
+
+    public record GitPushScriptRequest(Long repoId, String branch, String subdir, String mode, String commitMessage, Boolean bindScript) {
     }
 
     public record OpRequest(String name) {
@@ -279,6 +285,33 @@ public class ScriptApiController {
         } catch (GitClient.GitHostKeyException e) {
             Script s = scripts.get(id);
             return GitRepoApiController.hostKeyResponse(e, s.getGitRepoId());
+        }
+    }
+
+    @PostMapping("/{id}/push-git")
+    public ResponseEntity<Map<String, Object>> pushGit(@PathVariable Long id,
+                                                       @RequestBody GitPushScriptRequest req,
+                                                       org.springframework.security.core.Authentication auth) throws IOException {
+        try {
+            var outcome = gitBackup.pushScriptToTarget(
+                    id,
+                    req.repoId(),
+                    req.branch(),
+                    req.subdir(),
+                    req.mode(),
+                    req.commitMessage(),
+                    req.bindScript(),
+                    auth != null ? auth.getName() : "admin"
+            );
+            Script updated = scripts.get(id);
+            GitRepo repo = updated.getGitRepoId() != null ? safeRepo(updated.getGitRepoId()) : null;
+            return ResponseEntity.ok(Map.of(
+                    "ok", true,
+                    "outcome", outcome,
+                    "script", toScriptDto(updated, repo)
+            ));
+        } catch (GitClient.GitHostKeyException e) {
+            return GitRepoApiController.hostKeyResponse(e, req.repoId());
         }
     }
 

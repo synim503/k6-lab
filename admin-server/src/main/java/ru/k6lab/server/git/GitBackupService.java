@@ -234,35 +234,88 @@ public class GitBackupService {
         if (cfg.repoId() == null) {
             throw new IllegalArgumentException("Хранилище Git-бэкапа ещё не настроено (откройте раздел «Git-репозитории»)");
         }
+        return pushScriptToTarget(scriptId, cfg.repoId(), cfg.branch(), cfg.subdir(), "FULL_BACKUP", null, false, actor);
+    }
+
+    /**
+     * Выгружает один скрипт в указанный Git-репозиторий и ветку:
+     * - mode = "FULL_BACKUP": полный пакет scripts/<slug>/ (код + нагрузка + профили + графики отчёта)
+     * - mode = "CODE_ONLY": только файлы последней версии скрипта в каталог репозитория (с опциональной привязкой к ветке)
+     */
+    public SyncOutcome pushScriptToTarget(Long scriptId, Long repoId, String branchRaw, String subdirRaw,
+                                          String modeRaw, String customCommitMessage, Boolean bindScript,
+                                          String actor) throws IOException {
+        if (repoId == null) {
+            throw new IllegalArgumentException("Выберите Git-репозиторий");
+        }
         Script script = scripts.get(scriptId);
-        GitRepo repo = gitRepos.get(cfg.repoId());
-        String branch = cfg.branch();
-        String basePrefix = effectivePrefix(repo, cfg.subdir());
+        GitRepo repo = gitRepos.get(repoId);
+        String branch = GitClient.normalizeBranchName(branchRaw != null && !branchRaw.isBlank() ? branchRaw : "main");
+        String normSubdir = GitClient.normalizeSubdir(subdirRaw);
+        String basePrefix = effectivePrefix(repo, normSubdir);
+        boolean codeOnly = "CODE_ONLY".equalsIgnoreCase(modeRaw);
 
         syncLock.lock();
         try {
-            String slug = computeUniqueSlug(script, scripts.list());
-            String scriptDir = joinPath(basePrefix, "scripts/" + slug);
             Map<String, byte[]> files = new TreeMap<>();
-            exportOneScript(script, slug, basePrefix, files);
-            if (files.isEmpty()) {
-                throw new IllegalArgumentException("У скрипта «" + script.getName() + "» нет доступных файлов версии для выгрузки");
+            String replaceScope;
+            String defaultCommitMsg;
+
+            if (codeOnly) {
+                ScriptVersion lv = scripts.latest(script.getId())
+                        .orElseThrow(() -> new IllegalArgumentException("У скрипта «" + script.getName() + "» ещё нет версий"));
+                if (!scripts.hasFiles(lv)) {
+                    throw new IllegalArgumentException("Архив файлов версии v" + lv.getNumber() + " отсутствует на диске");
+                }
+                Map<String, byte[]> rawFiles = ZipUtil.readAll(new ByteArrayInputStream(scripts.zipBytes(lv)));
+                if (rawFiles.isEmpty()) {
+                    throw new IllegalArgumentException("В версии v" + lv.getNumber() + " нет файлов для выгрузки");
+                }
+                for (var entry : rawFiles.entrySet()) {
+                    files.put(joinPath(basePrefix, entry.getKey()), entry.getValue());
+                }
+                replaceScope = basePrefix.isBlank() ? null : basePrefix;
+                defaultCommitMsg = "feat(script): " + script.getName() + " v" + lv.getNumber();
+
+                if (bindScript == null || bindScript) {
+                    String relEntrypoint = joinPath(normSubdir, lv.getEntrypoint());
+                    scripts.bindGit(script.getId(), repo.getId(), branch, relEntrypoint);
+                }
+            } else {
+                String slug = computeUniqueSlug(script, scripts.list());
+                String scriptDir = joinPath(basePrefix, "scripts/" + slug);
+                exportOneScript(script, slug, basePrefix, files);
+                if (files.isEmpty()) {
+                    throw new IllegalArgumentException("У скрипта «" + script.getName() + "» нет доступных файлов версии для выгрузки");
+                }
+                replaceScope = scriptDir;
+                defaultCommitMsg = "backup(script): " + script.getName() + " (k6-lab)";
             }
-            String commitMsg = "backup(script): " + script.getName() + " (k6-lab)";
+
+            String commitMsg = (customCommitMessage != null && !customCommitMessage.isBlank())
+                    ? customCommitMessage.trim()
+                    : defaultCommitMsg;
+
             GitClient.PushResult pr = git.commitAndPush(
                     repo.getId(), repo.getUrl(), gitRepos.authFor(repo),
-                    branch, scriptDir, files, Set.of(), actor, commitMsg
+                    branch, replaceScope, files, Set.of(), actor, commitMsg
             );
             String nowIso = Instant.now().toString();
             String msg = pr.changed()
-                    ? "Скрипт «" + script.getName() + "» выгружен в ветку " + branch + " (" + pr.commit().substring(0, 8) + ")"
-                    : "Скрипт «" + script.getName() + "» в Git уже актуален (" + pr.commit().substring(0, 8) + ")";
-            persistConfig(new BackupConfig(
-                    cfg.repoId(), cfg.branch(), cfg.subdir(), cfg.autoSync(), cfg.pruneDeleted(),
-                    nowIso, pr.commit(), pr.changed() ? "OK" : "UP_TO_DATE", msg, scripts.list().size()
-            ));
-            audit.record("git_backup.push_script", "script", scriptId,
-                    Map.of("repo", repo.getName(), "branch", branch, "commit", pr.commit(), "changed", pr.changed()));
+                    ? "Скрипт «" + script.getName() + "» отправлен в " + repo.getName() + ":" + branch + " (" + pr.commit().substring(0, 8) + ")"
+                    : "В " + repo.getName() + ":" + branch + " уже актуальная версия скрипта (" + pr.commit().substring(0, 8) + ")";
+
+            BackupConfig cfg = getConfig();
+            if (!codeOnly && repoId.equals(cfg.repoId()) && branch.equals(cfg.branch())) {
+                persistConfig(new BackupConfig(
+                        cfg.repoId(), cfg.branch(), cfg.subdir(), cfg.autoSync(), cfg.pruneDeleted(),
+                        nowIso, pr.commit(), pr.changed() ? "OK" : "UP_TO_DATE", msg, scripts.list().size()
+                ));
+            }
+
+            audit.record("script.push_git", "script", scriptId,
+                    Map.of("repo", repo.getName(), "branch", branch, "mode", codeOnly ? "CODE_ONLY" : "FULL_BACKUP",
+                            "commit", pr.commit(), "changed", pr.changed()));
             return new SyncOutcome(true, pr.changed(), pr.commit(), branch, 1, nowIso, msg);
         } finally {
             syncLock.unlock();

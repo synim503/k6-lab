@@ -2405,11 +2405,40 @@ export function LoadStudioPage() {
                 <div className="font-bold text-sm text-slate-900">
                   Инфраструктурные и прикладные метрики Prometheus
                 </div>
-                <div className="text-[11px] text-slate-600">
-                  Контроль CPU, RAM, БД, JVM и бизнес-метрик для вердикта по ступеням (SLA) и автостопа
-                </div>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
+                <Select
+                  value=""
+                  onChange={(e) => {
+                    const pr = CC_PRESETS.find((p) => p.key === e.target.value);
+                    if (!pr) return;
+                    setStop({
+                      ...stop,
+                      customChecks: [
+                        ...(stop.customChecks || []),
+                        {
+                          name: pr.name,
+                          promql: pr.promql,
+                          cmp: pr.cmp,
+                          threshold: pr.threshold,
+                          unit: pr.unit,
+                          stepSla: pr.stepSla,
+                          autoStop: pr.autoStop,
+                        },
+                      ],
+                    });
+                    setDirty(true);
+                  }}
+                  className="h-8 text-xs w-44 bg-white"
+                >
+                  <option value="">+ Из шаблона…</option>
+                  {CC_PRESETS.map((pr) => (
+                    <option key={pr.key} value={pr.key}>
+                      {pr.label} ({pr.cmp === 'LTE' ? '≤' : ''}{pr.threshold}{pr.unit})
+                    </option>
+                  ))}
+                </Select>
+
                 {scriptCharts.length > 0 && (
                   <Select
                     value=""
@@ -2465,47 +2494,9 @@ export function LoadStudioPage() {
               </div>
             </div>
 
-            {/* Быстрые шаблоны в 1 клик */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-medium text-slate-600 mr-1">Шаблоны в 1 клик:</span>
-              {CC_PRESETS.map((pr) => (
-                <button
-                  key={pr.key}
-                  type="button"
-                  onClick={() => {
-                    setStop({
-                      ...stop,
-                      customChecks: [
-                        ...(stop.customChecks || []),
-                        {
-                          name: pr.name,
-                          promql: pr.promql,
-                          cmp: pr.cmp,
-                          threshold: pr.threshold,
-                          unit: pr.unit,
-                          stepSla: pr.stepSla,
-                          autoStop: pr.autoStop,
-                        },
-                      ],
-                    });
-                    setDirty(true);
-                  }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-800 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-800 transition-colors cursor-pointer shadow-2xs"
-                >
-                  <Plus className="h-3 w-3 text-indigo-600" />
-                  {pr.label}
-                  <span className="font-mono text-[10px] text-slate-500">
-                    ({pr.cmp === 'LTE' ? '≤' : ''}
-                    {pr.threshold}
-                    {pr.unit})
-                  </span>
-                </button>
-              ))}
-            </div>
-
             {(!stop.customChecks || stop.customChecks.length === 0) ? (
-              <div className="rounded-xl border border-dashed border-slate-300 bg-white/80 px-4 py-5 text-center text-xs text-slate-500">
-                Кастомные правила Prometheus пока не добавлены — нажмите на любой шаблон выше (CPU, RAM, JVM, БД) или создайте своё выражение PromQL с автокомплитом.
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white/80 px-4 py-4 text-center text-xs text-slate-500">
+                Правила Prometheus не заданы.
               </div>
             ) : (
               <div className="space-y-3">

@@ -323,13 +323,115 @@ public class RunService {
 
     /** Постраничный список запусков (для пагинации запусков на странице скрипта). */
     public org.springframework.data.domain.Page<Run> searchPage(Long scriptId, RunStatus status, int page, int size) {
+        return searchFiltered(scriptId, status, null, null, page, size);
+    }
+
+    /** Расширенный поиск запусков с группировкой по итогам (ACTIVE / OK / ISSUES / STOPPED) и текстовым поиском. */
+    public org.springframework.data.domain.Page<Run> searchFiltered(Long scriptId, RunStatus status,
+                                                                     String group, String query,
+                                                                     int page, int size) {
         int safeSize = Math.max(5, Math.min(size, 100));
         int safePage = Math.max(0, page);
-        var res = runs.searchPage(scriptId, status, PageRequest.of(safePage, safeSize));
+        org.springframework.data.jpa.domain.Specification<Run> spec = (root, cq, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> preds = new ArrayList<>();
+            if (scriptId != null) {
+                preds.add(cb.equal(root.get("scriptId"), scriptId));
+            }
+            if (status != null) {
+                preds.add(cb.equal(root.get("status"), status));
+            }
+            if (group != null && !group.isBlank()) {
+                switch (group.trim().toUpperCase()) {
+                    case "ACTIVE" -> preds.add(root.get("status").in(
+                            RunStatus.QUEUED, RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.STOPPING));
+                    case "OK" -> preds.add(cb.and(
+                            cb.equal(root.get("status"), RunStatus.FINISHED),
+                            cb.isFalse(root.get("thresholdsFailed")),
+                            cb.isFalse(root.get("degraded")),
+                            cb.isNull(root.get("stopReason"))
+                    ));
+                    case "ISSUES" -> preds.add(cb.or(
+                            cb.equal(root.get("status"), RunStatus.FAILED),
+                            cb.isTrue(root.get("thresholdsFailed")),
+                            cb.isTrue(root.get("degraded"))
+                    ));
+                    case "STOPPED" -> preds.add(cb.or(
+                            cb.equal(root.get("status"), RunStatus.ABORTED),
+                            cb.isNotNull(root.get("stopReason"))
+                    ));
+                    default -> {
+                    }
+                }
+            }
+            if (query != null && !query.isBlank()) {
+                String qNorm = query.trim().toLowerCase();
+                String pattern = "%" + qNorm + "%";
+                List<jakarta.persistence.criteria.Predicate> orPreds = new ArrayList<>();
+                String digits = qNorm.startsWith("#") ? qNorm.substring(1).trim() : qNorm;
+                if (!digits.isEmpty() && digits.chars().allMatch(Character::isDigit)) {
+                    try {
+                        orPreds.add(cb.equal(root.get("id"), Long.parseLong(digits)));
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                orPreds.add(cb.like(cb.lower(root.get("scriptName")), pattern));
+                orPreds.add(cb.like(cb.lower(cb.coalesce(root.get("createdBy"), "")), pattern));
+                orPreds.add(cb.like(cb.lower(cb.coalesce(root.get("conclusion"), "")), pattern));
+                orPreds.add(cb.like(cb.lower(cb.coalesce(root.get("stopReason"), "")), pattern));
+                orPreds.add(cb.like(cb.lower(cb.coalesce(root.get("error"), "")), pattern));
+                preds.add(cb.or(orPreds.toArray(jakarta.persistence.criteria.Predicate[]::new)));
+            }
+            return preds.isEmpty() ? cb.conjunction() : cb.and(preds.toArray(jakarta.persistence.criteria.Predicate[]::new));
+        };
+
+        var sort = org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id");
+        var res = runs.findAll(spec, PageRequest.of(safePage, safeSize, sort));
         if (res.getTotalPages() > 0 && safePage >= res.getTotalPages()) {
-            res = runs.searchPage(scriptId, status, PageRequest.of(res.getTotalPages() - 1, safeSize));
+            res = runs.findAll(spec, PageRequest.of(res.getTotalPages() - 1, safeSize, sort));
         }
         return res;
+    }
+
+    /** Быстрая агрегация счётчиков статусов без чтения тяжёлых JSON-колонок. */
+    public Map<String, Long> groupCounts(Long scriptId) {
+        long all = scriptId == null
+                ? runs.count()
+                : runs.count((root, cq, cb) -> cb.equal(root.get("scriptId"), scriptId));
+        long active = runs.count((root, cq, cb) -> {
+            var p = root.get("status").in(RunStatus.QUEUED, RunStatus.PREPARING, RunStatus.RUNNING, RunStatus.STOPPING);
+            return scriptId == null ? p : cb.and(cb.equal(root.get("scriptId"), scriptId), p);
+        });
+        long ok = runs.count((root, cq, cb) -> {
+            var p = cb.and(
+                    cb.equal(root.get("status"), RunStatus.FINISHED),
+                    cb.isFalse(root.get("thresholdsFailed")),
+                    cb.isFalse(root.get("degraded")),
+                    cb.isNull(root.get("stopReason"))
+            );
+            return scriptId == null ? p : cb.and(cb.equal(root.get("scriptId"), scriptId), p);
+        });
+        long issues = runs.count((root, cq, cb) -> {
+            var p = cb.or(
+                    cb.equal(root.get("status"), RunStatus.FAILED),
+                    cb.isTrue(root.get("thresholdsFailed")),
+                    cb.isTrue(root.get("degraded"))
+            );
+            return scriptId == null ? p : cb.and(cb.equal(root.get("scriptId"), scriptId), p);
+        });
+        long stopped = runs.count((root, cq, cb) -> {
+            var p = cb.or(
+                    cb.equal(root.get("status"), RunStatus.ABORTED),
+                    cb.isNotNull(root.get("stopReason"))
+            );
+            return scriptId == null ? p : cb.and(cb.equal(root.get("scriptId"), scriptId), p);
+        });
+        Map<String, Long> m = new LinkedHashMap<>();
+        m.put("all", all);
+        m.put("active", active);
+        m.put("ok", ok);
+        m.put("issues", issues);
+        m.put("stopped", stopped);
+        return m;
     }
 
     /** Run, занимающие генераторы (для восстановления после рестарта сервера). */

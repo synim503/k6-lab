@@ -257,17 +257,26 @@ public class RunApiController {
     @GetMapping("/runs")
     public Map<String, Object> listRuns(@RequestParam(required = false) Long scriptId,
                                         @RequestParam(required = false) RunStatus status,
+                                        @RequestParam(required = false) String group,
+                                        @RequestParam(required = false) String q,
                                         @RequestParam(defaultValue = "0") int page,
                                         @RequestParam(defaultValue = "30") int size) {
-        Page<Run> p = runs.searchPage(scriptId, status, Math.max(0, page), Math.min(100, Math.max(1, size)));
-        return Map.of(
-                "items", p.getContent().stream().map(DashboardApiController::toRunSummaryDto).toList(),
-                "page", p.getNumber(),
-                "size", p.getSize(),
-                "totalElements", p.getTotalElements(),
-                "totalPages", p.getTotalPages(),
-                "scripts", scripts.list().stream().map(s -> Map.of("id", s.getId(), "name", s.getName())).toList()
-        );
+        Page<Run> p = runs.searchFiltered(scriptId, status, group, q, Math.max(0, page), Math.min(100, Math.max(1, size)));
+        List<Map<String, Object>> activeDtos = runs.activeAndQueuedRuns().stream()
+                .filter(r -> scriptId == null || scriptId.equals(r.getScriptId()))
+                .sorted(Comparator.comparing(Run::getId).reversed())
+                .map(r -> DashboardApiController.toRunViewDto(runViews.view(r.getId())))
+                .toList();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("items", p.getContent().stream().map(DashboardApiController::toRunSummaryDto).toList());
+        out.put("activeRuns", activeDtos);
+        out.put("counts", runs.groupCounts(scriptId));
+        out.put("page", p.getNumber());
+        out.put("size", p.getSize());
+        out.put("totalElements", p.getTotalElements());
+        out.put("totalPages", p.getTotalPages());
+        out.put("scripts", scripts.list().stream().map(s -> Map.of("id", s.getId(), "name", s.getName())).toList());
+        return out;
     }
 
     @GetMapping("/runs/{id}")
