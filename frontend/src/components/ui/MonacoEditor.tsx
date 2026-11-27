@@ -106,6 +106,7 @@ export interface MonacoEditorProps {
   readOnly?: boolean;
   height?: string;
   onSaveShortcut?: () => void;
+  onRunShortcut?: () => void;
 }
 
 export function MonacoEditor({
@@ -115,17 +116,20 @@ export function MonacoEditor({
   readOnly = false,
   height = '65vh',
   onSaveShortcut,
+  onRunShortcut,
 }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<any>(null);
   const suppressRef = useRef(false);
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSaveShortcut);
+  const onRunRef = useRef(onRunShortcut);
   const [fallback, setFallback] = useState(false);
   const [ready, setReady] = useState(false);
 
   onChangeRef.current = onChange;
   onSaveRef.current = onSaveShortcut;
+  onRunRef.current = onRunShortcut;
 
   useEffect(() => {
     let cancelled = false;
@@ -150,6 +154,9 @@ export function MonacoEditor({
         });
         ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
           onSaveRef.current?.();
+        });
+        ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+          onRunRef.current?.();
         });
         setReady(true);
       })
