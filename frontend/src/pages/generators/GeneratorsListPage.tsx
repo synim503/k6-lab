@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -94,6 +94,7 @@ type SortKey = 'name' | 'status' | 'cpu' | 'mem' | 'load' | 'disk';
 export function GeneratorsListPage() {
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
 
   const [search, setSearch] = useState('');
@@ -154,6 +155,13 @@ export function GeneratorsListPage() {
     if (!aCredId && firstCred) setACredId(firstCred);
     setAddOpen(true);
   };
+
+  useEffect(() => {
+    if (isAdmin && data && searchParams.get('add') === '1') {
+      openAddModal();
+      setSearchParams({}, { replace: true });
+    }
+  }, [isAdmin, data, searchParams]);
 
   const updateAllMut = useMutation({
     mutationFn: (force: boolean) => apiFetch(`/api/v1/generators/update-all?force=${force}`, { method: 'POST' }),

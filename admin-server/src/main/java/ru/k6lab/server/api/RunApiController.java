@@ -69,13 +69,15 @@ public class RunApiController {
     private final LoadProfileStore profileStore;
     private final StepResultService results;
     private final CustomChartService customCharts;
+    private final ru.k6lab.server.settings.SettingsService settings;
 
     public RunApiController(RunService runs, RunViewService runViews, RunOrchestrator orchestrator,
                             RunLogService runLogs, RunPlanner planner, ScriptService scripts,
                             GitRepoService gitRepos, GeneratorRepository generators,
                             ScheduledRunService schedule, LoadService load,
                             LoadProfileStore profileStore, StepResultService results,
-                            CustomChartService customCharts) {
+                            CustomChartService customCharts,
+                            ru.k6lab.server.settings.SettingsService settings) {
         this.runs = runs;
         this.runViews = runViews;
         this.orchestrator = orchestrator;
@@ -89,6 +91,7 @@ public class RunApiController {
         this.profileStore = profileStore;
         this.results = results;
         this.customCharts = customCharts;
+        this.settings = settings;
     }
 
     public record StartRunPayload(Long profileId, Integer count, List<Long> generatorIds,
@@ -264,33 +267,83 @@ public class RunApiController {
     public Map<String, Object> runDetail(@PathVariable Long id) {
         RunViewService.RunView rv = runViews.view(id);
         Run r = rv.run();
+        Map<String, Object> runDto = DashboardApiController.toRunViewDto(rv);
+        runDto.put("initSec", r.getInitSec());
+        runDto.put("k6Flags", r.getRequest() != null ? r.getRequest().get("k6Flags") : null);
+
+        String grafanaUrl = null;
+        String tpl = settings.get(ru.k6lab.server.settings.SettingsService.GRAFANA_URL_TPL, "");
+        if (!tpl.isBlank() && r.getStartedAt() != null) {
+            Instant end = r.getFinishedAt() != null ? r.getFinishedAt() : Instant.now().plusSeconds(60);
+            grafanaUrl = ru.k6lab.core.util.PromQlTemplate.renderUrl(tpl, r.getStartedAt(), end, r.getId());
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("run", DashboardApiController.toRunViewDto(rv));
+        out.put("run", runDto);
         out.put("snapshot", rv.snapshot());
         out.put("steps", rv.steps());
         out.put("k6Config", r.getK6Config());
         out.put("conclusion", r.getConclusion());
         out.put("conclusionComment", r.getConclusionComment());
         out.put("failurePolicyTitle", r.getFailurePolicy().getTitle());
+        out.put("grafanaUrl", grafanaUrl);
+        out.put("envRows", ru.k6lab.server.result.ReportFormat.envRows(rv.snapshot().env(), r.getK6Config()));
+        out.put("customChecksConfig", results.getEffectiveCustomChecks(r, rv.snapshot()).stream().map(cc -> {
+            Map<String, Object> cm = new LinkedHashMap<>();
+            cm.put("name", cc.name());
+            cm.put("promql", cc.promql());
+            cm.put("thresholdText", cc.formatThreshold());
+            cm.put("stepSla", cc.stepSla());
+            cm.put("autoStop", cc.autoStop());
+            return cm;
+        }).toList());
         out.put("generators", rv.generators().stream().map(gv -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", gv.rg().getId());
             m.put("generatorId", gv.rg().getGeneratorId());
             m.put("generatorName", gv.rg().getGeneratorName());
             m.put("status", gv.rg().getStatus().name());
+            m.put("k6Status", gv.live() != null ? gv.live().k6Status() : null);
             m.put("exitCode", gv.rg().getExitCode());
             m.put("segment", gv.rg().segment());
+            m.put("weight", gv.rg().getWeight());
+            m.put("droppedLogLines", gv.rg().getDroppedLogLines());
             m.put("cpu", gv.cpu());
             m.put("memPct", gv.memPct());
             m.put("cpuHot", gv.cpuHot());
             m.put("offline", gv.offline());
             m.put("vus", gv.live() != null ? gv.live().vus() : gv.rg().getLastVus());
+            m.put("vusMax", gv.live() != null ? gv.live().vusMax() : null);
             m.put("iterations", gv.live() != null ? gv.live().iterations() : gv.rg().getLastIterations());
             m.put("dropped", gv.live() != null ? gv.live().dropped() : gv.rg().getLastDropped());
             m.put("prepareError", gv.rg().getPrepareError());
             return m;
         }).toList());
         return out;
+    }
+
+    @PostMapping("/runs/{id}/requeue")
+    public Map<String, Object> requeueRun(@PathVariable Long id,
+                                          @RequestBody(required = false) Map<String, String> body,
+                                          Principal user) {
+        String posStr = body != null ? body.getOrDefault("position", "back") : "back";
+        ScheduledRunService.QueuePosition pos = "front".equalsIgnoreCase(posStr)
+                ? ScheduledRunService.QueuePosition.FRONT
+                : ScheduledRunService.QueuePosition.BACK;
+        var res = schedule.requeueRun(id, pos, user != null ? user.getName() : "system");
+        String where = pos == ScheduledRunService.QueuePosition.FRONT
+                ? "в начало очереди (после текущего запуска)"
+                : "в конец очереди";
+        String shifted = res.shiftedCount() > 0 ? ", сдвинуто ожидающих записей: " + res.shiftedCount() : "";
+        String msg = "Прогон #" + id + " («" + res.title() + "») добавлен " + where
+                + " (#" + res.scheduleId() + " · старт " + new ru.k6lab.server.result.ReportFormat().dt(res.runAt()) + shifted + ")";
+        return Map.of(
+                "ok", true,
+                "scheduleId", res.scheduleId(),
+                "runAt", res.runAt(),
+                "shiftedCount", res.shiftedCount(),
+                "message", msg
+        );
     }
 
     @GetMapping("/runs/{id}/logs")

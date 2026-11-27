@@ -45,12 +45,14 @@ public class ScheduleApiController {
     private final LoadProfileStore profiles;
     private final GeneratorRepository generators;
     private final SshCredentialService sshCreds;
+    private final ru.k6lab.server.run.RunService runService;
 
     public ScheduleApiController(ScheduledRunService schedule, ScheduleTimelineService timeline,
                                  ScheduleImportService scheduleImport, ProfileImportService profileImport,
                                  ScheduleGuardService guards, ScriptService scripts,
                                  LoadProfileStore profiles, GeneratorRepository generators,
-                                 SshCredentialService sshCreds) {
+                                 SshCredentialService sshCreds,
+                                 ru.k6lab.server.run.RunService runService) {
         this.schedule = schedule;
         this.timeline = timeline;
         this.scheduleImport = scheduleImport;
@@ -60,6 +62,7 @@ public class ScheduleApiController {
         this.profiles = profiles;
         this.generators = generators;
         this.sshCreds = sshCreds;
+        this.runService = runService;
     }
 
     public record IdsReq(List<Long> ids, String position) {
@@ -112,6 +115,7 @@ public class ScheduleApiController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("paused", schedule.paused());
         out.put("pauseReason", schedule.pauseReason());
+        out.put("activeRuns", runService.activeRuns().stream().map(DashboardApiController::toRunSummaryDto).toList());
         out.put("items", items);
         out.put("timeline", timeline.overview());
         out.put("guards", guards.list().stream().map(ScheduleApiController::toGuardDto).toList());
@@ -127,7 +131,8 @@ public class ScheduleApiController {
                 "host", g.getHost(),
                 "sshPort", g.getSshPort(),
                 "status", g.getStatus().name(),
-                "busy", g.isBusy()
+                "busy", g.isBusy(),
+                "availableForRuns", g.isAvailableForRuns()
         )).toList());
         out.put("sshCredentials", sshCreds.list().stream().map(c -> Map.of(
                 "id", c.getId(),

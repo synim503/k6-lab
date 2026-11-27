@@ -1,22 +1,46 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, apiUpload } from '@/lib/api';
-import { Badge, Button, Card, CardBody, CardHeader, EmptyState, Input, Modal, Select, Spinner, Switch, Textarea } from '@/components/ui/primitives';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  Input,
+  Modal,
+  Select,
+  Spinner,
+  Switch,
+  Textarea,
+} from '@/components/ui/primitives';
+import { ScheduleTimeline } from '@/components/schedule/ScheduleTimeline';
 import { useConfirm } from '@/components/ui/ConfirmContext';
 import { useAuth } from '@/context/AuthContext';
-import { fmtDurationSec, fmtShortDate } from '@/lib/utils';
+import { fmtDateTime } from '@/lib/utils';
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   CalendarClock,
   ChevronsDown,
   ChevronsUp,
+  Clock,
+  FastForward,
+  Filter,
+  Hourglass,
+  Layers,
   Pause,
   Pencil,
+  Pin,
   Play,
+  PlayCircle,
   Plus,
   RotateCcw,
+  Search,
+  Server,
   ShieldAlert,
   Terminal,
   Trash2,
@@ -25,14 +49,28 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+function fmtCountdown(runAt?: string | null): string {
+  if (!runAt) return 'скоро';
+  const diffSec = Math.floor((new Date(runAt).getTime() - Date.now()) / 1000);
+  if (Number.isNaN(diffSec) || diffSec <= 5) return 'сейчас';
+  if (diffSec < 60) return `через ${diffSec} с`;
+  const m = Math.floor(diffSec / 60);
+  if (m < 60) return `через ${m} мин`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `через ${h} ч ${rm} мин` : `через ${h} ч`;
+}
+
 export function SchedulePage() {
   const { isAdmin } = useAuth();
   const confirm = useConfirm();
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  const [filter, setFilter] = useState<'all' | 'pending' | 'history'>('all');
+  const [filter, setFilter] = useState<'all' | 'pending' | 'started' | 'other'>('all');
+  const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [highlightId, setHighlightId] = useState<number | null>(null);
 
   // Quick add modal
   const [quickOpen, setQuickOpen] = useState(false);
@@ -41,9 +79,16 @@ export function SchedulePage() {
   const [qmCount, setQmCount] = useState(1);
   const [qmPos, setQmPos] = useState<'auto' | 'front' | 'back'>('auto');
 
-  // Import schedule modal
+  // Import schedule tests modal
   const [impOpen, setImpOpen] = useState(false);
   const [impJson, setImpJson] = useState('');
+  const [impGapMin, setImpGapMin] = useState(5);
+
+  // Import profiles modal
+  const [impProfOpen, setImpProfOpen] = useState(false);
+  const [impProfJson, setImpProfJson] = useState('');
+  const [impProfSeq, setImpProfSeq] = useState(false);
+  const [impProfGap, setImpProfGap] = useState(5);
 
   // Guard modal
   const [guardModal, setGuardModal] = useState<any | null>(null);
@@ -57,7 +102,10 @@ export function SchedulePage() {
     refetchInterval: 5000,
   });
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ['schedule'] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['schedule'] });
+    qc.invalidateQueries({ queryKey: ['schedule-timeline'] });
+  };
 
   const actionMut = useMutation({
     mutationFn: ({ url, body }: { url: string; body?: any }) =>
@@ -74,27 +122,117 @@ export function SchedulePage() {
     onError: (err: any) => toast.error(err.message),
   });
 
+  const items: any[] = data?.items || [];
+  const activeRuns: any[] = data?.activeRuns || [];
+  const guards: any[] = data?.guards || [];
+  const scripts: any[] = data?.scripts || [];
+  const sshCredentials: any[] = data?.sshCredentials || [];
+  const generators: any[] = data?.generators || [];
+
+  const pendingSorted = useMemo(
+    () =>
+      items
+        .filter((i) => i.pending)
+        .slice()
+        .sort((a, b) => new Date(a.runAt).getTime() - new Date(b.runAt).getTime()),
+    [items]
+  );
+
+  const queueOrderById = useMemo(() => {
+    const map = new Map<number, number>();
+    pendingSorted.forEach((it, idx) => map.set(it.id, idx + 1));
+    return map;
+  }, [pendingSorted]);
+
+  const startedItems = useMemo(
+    () => items.filter((i) => i.status === 'STARTED' || i.status === 'STARTING'),
+    [items]
+  );
+  const failedItems = useMemo(() => items.filter((i) => i.status === 'FAILED'), [items]);
+  const otherItems = useMemo(
+    () => items.filter((i) => i.status === 'FAILED' || i.status === 'CANCELLED'),
+    [items]
+  );
+  const historyCount = startedItems.length + otherItems.length;
+
+  const totalQueueMin = useMemo(() => {
+    if (pendingSorted.length === 0) return 0;
+    const sumMin = pendingSorted.reduce(
+      (acc, it) => acc + Math.max(1, Math.round((it.durationSec || 300) / 60)),
+      0
+    );
+    return sumMin + Math.max(0, pendingSorted.length - 1) * 5;
+  }, [pendingSorted]);
+
+  const queueFinishAt = useMemo(() => {
+    if (pendingSorted.length === 0) return null;
+    let maxMs = 0;
+    for (const it of pendingSorted) {
+      const durMin = Math.max(1, Math.round((it.durationSec || 300) / 60));
+      const fin = new Date(it.runAt).getTime() + durMin * 60_000;
+      if (fin > maxMs) maxMs = fin;
+    }
+    return maxMs > 0 ? new Date(maxMs).toISOString() : null;
+  }, [pendingSorted]);
+
+  const freeGenCount = generators.filter((g) => g.availableForRuns).length;
+  const onlineGenCount = generators.filter((g) => g.status === 'ONLINE').length;
+
+  const visibleItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return items.filter((it) => {
+      if (filter === 'pending' && !it.pending) return false;
+      if (filter === 'started' && it.status !== 'STARTED' && it.status !== 'STARTING') return false;
+      if (filter === 'other' && it.status !== 'FAILED' && it.status !== 'CANCELLED') return false;
+      if (q) {
+        const hay = `${it.id} ${it.scriptName} ${it.profileName || ''} ${(it.generatorNames || []).join(' ')} ${
+          it.createdBy || ''
+        }`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [items, filter, search]);
+
+  const handleJumpToRow = (scheduleId: number) => {
+    setFilter('all');
+    setSearch('');
+    setHighlightId(scheduleId);
+    setTimeout(() => {
+      const el = document.getElementById(`sch-row-${scheduleId}`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+  };
+
   if (isLoading || !data) return <Spinner label="Загрузка расписания…" />;
 
-  const { paused, items = [], guards = [], scripts = [], sshCredentials = [], generators = [] } = data;
-  const pendingItems = items.filter((i: any) => i.pending);
-  const historyItems = items.filter((i: any) => !i.pending);
-  const visibleItems =
-    filter === 'pending' ? pendingItems : filter === 'history' ? historyItems : items;
-
+  const { paused, pauseReason, timeline } = data;
   const selectedScriptObj = scripts.find((s: any) => String(s.id) === qmScriptId);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+      {/* Шапка: как в schedule/index.html */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Расписание и очередь тестов</h1>
-          <p className="text-xs text-slate-500">Управление очередью прогонов и автопроверками метрик Prometheus</p>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100">
+              <CalendarClock className="h-4.5 w-4.5" />
+            </span>
+            <h1 className="text-xl font-bold text-slate-900">Расписание запусков</h1>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-xs font-medium text-slate-700">
+              <span className={`h-2 w-2 rounded-full ${paused ? 'bg-rose-500' : 'bg-emerald-500'}`} />
+              {paused ? 'На паузе' : 'Активен'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Автоматический запуск тестов по расписанию с бронированием генераторов и контролем очереди.
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
+            disabled={scripts.length === 0}
             onClick={() => {
               const first = scripts[0];
               if (first) {
@@ -105,71 +243,271 @@ export function SchedulePage() {
             }}
           >
             <Plus className="h-4 w-4" />
-            Поставить в очередь
+            Запланировать тест
           </Button>
           <Button variant="outline" size="sm" onClick={() => setImpOpen(true)}>
             <Upload className="h-3.5 w-3.5" />
-            Импорт JSON
+            Импорт списка тестов
           </Button>
-          {paused ? (
-            <Button
-              variant="success"
-              size="sm"
-              onClick={() => actionMut.mutate({ url: '/api/v1/schedule/resume' })}
-            >
-              <Play className="h-3.5 w-3.5 fill-current" />
-              Возобновить очередь
-            </Button>
-          ) : (
+          <Button variant="outline" size="sm" onClick={() => setImpProfOpen(true)}>
+            <Layers className="h-3.5 w-3.5" />
+            Импорт профилей нагрузки
+          </Button>
+          {!paused && (
             <Button
               variant="warning"
               size="sm"
               onClick={() => actionMut.mutate({ url: '/api/v1/schedule/pause' })}
             >
               <Pause className="h-3.5 w-3.5" />
-              На паузу
+              Поставить на паузу
             </Button>
           )}
         </div>
       </div>
 
+      {/* Баннер паузы */}
       {paused && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3.5 flex items-center justify-between gap-3 text-sm text-amber-900">
-          <div>
-            <b>Планировщик на паузе.</b> Новые прогоны из очереди не стартуют, пока пауза не снята.
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm text-amber-950">
+          <div className="space-y-0.5">
+            <div>
+              <strong>Планировщик на паузе.</strong> Новые запуски по расписанию не стартуют, записи ждут.{' '}
+              {activeRuns.length > 0 ? (
+                <span>
+                  Идёт тест (
+                  {activeRuns.map((r: any, idx: number) => (
+                    <React.Fragment key={r.id}>
+                      {idx > 0 && ', '}
+                      <Link to={`/runs/${r.id}`} className="underline font-semibold">
+                        #{r.id}
+                      </Link>
+                    </React.Fragment>
+                  ))}
+                  ): он закончится сам.
+                </span>
+              ) : (
+                <span>При снятии паузы первый тест из очереди запустится сразу, а остальные сдвинутся следом.</span>
+              )}
+            </div>
+            {pauseReason && <div className="text-xs font-semibold text-rose-700">Причина: {pauseReason}</div>}
           </div>
-          <Button variant="success" size="xs" onClick={() => actionMut.mutate({ url: '/api/v1/schedule/resume' })}>
-            Возобновить
+          <Button
+            variant="success"
+            size="sm"
+            onClick={() => actionMut.mutate({ url: '/api/v1/schedule/resume' })}
+          >
+            <Play className="h-3.5 w-3.5 fill-current" />
+            Снять с паузы
           </Button>
         </div>
       )}
 
-      {/* Очередь прогонов */}
-      <Card className="overflow-hidden">
-        <CardHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs">
-              {[
-                { id: 'all', label: `Все (${items.length})` },
-                { id: 'pending', label: `Ожидают (${pendingItems.length})` },
-                { id: 'history', label: `История (${historyItems.length})` },
-              ].map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setFilter(t.id as any)}
-                  className={`rounded-md px-2.5 py-1 font-medium cursor-pointer ${
-                    filter === t.id ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
-                  }`}
+      {/* Сводка KPI (4 карточки, клик фильтрует таблицу ниже) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <Card
+          onClick={() => setFilter('pending')}
+          className={`p-3.5 cursor-pointer transition-all hover:border-indigo-300 ${
+            filter === 'pending' ? 'ring-2 ring-indigo-500/30 border-indigo-400' : ''
+          }`}
+        >
+          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Hourglass className="h-3.5 w-3.5 text-indigo-600" />
+            <span>Ожидают в очереди</span>
+            <Filter className="h-3 w-3 ml-auto opacity-50" />
+          </div>
+          <div className="mt-1.5 text-2xl font-bold text-slate-900">
+            {pendingSorted.length}{' '}
+            {pendingSorted.length > 0 && (
+              <span className="text-sm font-normal text-slate-500">(~{totalQueueMin} мин)</span>
+            )}
+          </div>
+          <div className="mt-1 text-xs text-slate-500 truncate">
+            {pendingSorted.length > 0 ? (
+              <>
+                ближайший <span className="font-semibold text-slate-700">{fmtCountdown(pendingSorted[0].runAt)}</span>
+                {queueFinishAt && <> · финиш {fmtDateTime(queueFinishAt)}</>}
+              </>
+            ) : (
+              'очередь пуста'
+            )}
+          </div>
+        </Card>
+
+        <Card className="p-3.5">
+          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <PlayCircle className="h-3.5 w-3.5 text-emerald-600" />
+            <span>Идут сейчас</span>
+          </div>
+          <div className="mt-1.5 text-2xl font-bold text-slate-900">{activeRuns.length}</div>
+          <div className="mt-1 text-xs text-slate-500 truncate">
+            {activeRuns.length > 0
+              ? activeRuns.map((r: any, idx: number) => (
+                  <React.Fragment key={r.id}>
+                    {idx > 0 && ', '}
+                    <Link to={`/runs/${r.id}`} className="text-indigo-600 hover:underline font-medium">
+                      #{r.id} {r.scriptName}
+                    </Link>
+                  </React.Fragment>
+                ))
+              : 'нет активных тестов'}
+          </div>
+        </Card>
+
+        <Link to="/generators" className="block group">
+          <Card className="h-full p-3.5 transition-all group-hover:border-indigo-300">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Server className="h-3.5 w-3.5 text-indigo-600" />
+              <span>Генераторы</span>
+              <ArrowRight className="h-3.5 w-3.5 ml-auto opacity-50" />
+            </div>
+            <div className="mt-1.5 text-2xl font-bold text-slate-900">
+              {freeGenCount} <span className="text-sm font-normal text-slate-500">свободно</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {onlineGenCount} из {generators.length} в сети
+            </div>
+          </Card>
+        </Link>
+
+        <Card
+          onClick={() => setFilter('started')}
+          className={`p-3.5 cursor-pointer transition-all hover:border-indigo-300 ${
+            filter === 'started' ? 'ring-2 ring-indigo-500/30 border-indigo-400' : ''
+          }`}
+        >
+          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Clock className="h-3.5 w-3.5 text-indigo-600" />
+            <span>История расписания</span>
+            <Filter className="h-3 w-3 ml-auto opacity-50" />
+          </div>
+          <div className="mt-1.5 text-2xl font-bold text-slate-900">{startedItems.length}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            запущено ·{' '}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFilter('other');
+              }}
+              className={`hover:underline cursor-pointer ${
+                failedItems.length > 0 ? 'text-rose-600 font-semibold' : ''
+              }`}
+            >
+              {failedItems.length} с ошибкой
+            </button>
+          </div>
+        </Card>
+      </div>
+
+      {/* Таймлайн занятости генераторов */}
+      <Card className="p-4">
+        <ScheduleTimeline
+          initialData={timeline}
+          defaultHours={12}
+          onJumpToScheduleRow={handleJumpToRow}
+        />
+      </Card>
+
+      {/* Очередь и история расписания */}
+      {items.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<CalendarClock className="h-6 w-6" />}
+            title="Запланированных запусков пока нет"
+            description="Назначьте запуск любого скрипта с нужным профилем или загрузите пакетный список из JSON."
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={scripts.length === 0}
+                  onClick={() => {
+                    const first = scripts[0];
+                    if (first) {
+                      setQmScriptId(String(first.id));
+                      setQmCount(first.generatorCount || 1);
+                    }
+                    setQuickOpen(true);
+                  }}
                 >
-                  {t.label}
-                </button>
-              ))}
+                  <Plus className="h-4 w-4" />
+                  Запланировать тест
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setImpOpen(true)}>
+                  <Upload className="h-3.5 w-3.5" />
+                  Импорт списка тестов
+                </Button>
+              </div>
+            }
+          />
+        </Card>
+      ) : (
+        <Card className="overflow-hidden">
+          <CardHeader className="flex-wrap">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs">
+                {[
+                  { id: 'all', label: `Все (${items.length})` },
+                  { id: 'pending', label: `Ожидают (${pendingSorted.length})` },
+                  { id: 'started', label: `Запущены (${startedItems.length})` },
+                  { id: 'other', label: `Ошибки / отмены (${otherItems.length})` },
+                ].map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setFilter(t.id as any)}
+                    className={`rounded-md px-2.5 py-1 font-medium cursor-pointer ${
+                      filter === t.id ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {selectedIds.size > 0 && (
-              <div className="flex items-center gap-1.5 ml-2">
-                <Badge variant="info">Выбрано: {selectedIds.size}</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-56">
+                <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Поиск по скрипту, профилю…"
+                  className="pl-8 h-8 text-xs"
+                />
+              </div>
+              {historyCount > 0 && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => actionMut.mutate({ url: '/api/v1/schedule/clear-history' })}
+                >
+                  Очистить историю ({historyCount})
+                </Button>
+              )}
+              {pendingSorted.length > 0 && (
+                <Button
+                  variant="danger"
+                  size="xs"
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: 'Отменить ВСЕ ожидающие запуски?',
+                      message: `Все ожидающие записи в расписании (${pendingSorted.length}) будут отменены.`,
+                      confirmText: 'Отменить все',
+                    });
+                    if (ok) actionMut.mutate({ url: '/api/v1/schedule/cancel-all-pending' });
+                  }}
+                >
+                  Отменить все ({pendingSorted.length})
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+
+          {/* Панель массовых операций */}
+          {selectedIds.size > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-indigo-50/70 border-b border-indigo-100 px-4 py-2 text-xs">
+              <span className="font-semibold text-indigo-950">Выбрано: {selectedIds.size}</span>
+              <div className="flex flex-wrap items-center gap-1.5">
                 <Button
                   variant="outline"
                   size="xs"
@@ -180,7 +518,8 @@ export function SchedulePage() {
                     })
                   }
                 >
-                  В начало
+                  <ChevronsUp className="h-3.5 w-3.5" />
+                  В начало (после текущего)
                 </Button>
                 <Button
                   variant="outline"
@@ -192,7 +531,8 @@ export function SchedulePage() {
                     })
                   }
                 >
-                  В конец
+                  <ChevronsDown className="h-3.5 w-3.5" />
+                  В конец очереди
                 </Button>
                 <Button
                   variant="danger"
@@ -205,188 +545,253 @@ export function SchedulePage() {
                     setSelectedIds(new Set());
                   }}
                 >
-                  Отменить выбранные
+                  <X className="h-3.5 w-3.5" />
+                  Отменить ожидающие
+                </Button>
+                <Button variant="ghost" size="xs" onClick={() => setSelectedIds(new Set())}>
+                  Снять выбор
                 </Button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          <div className="flex items-center gap-2">
-            {historyItems.length > 0 && (
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => actionMut.mutate({ url: '/api/v1/schedule/clear-history' })}
-              >
-                Очистить историю
-              </Button>
-            )}
-            {pendingItems.length > 0 && (
-              <Button
-                variant="danger"
-                size="xs"
-                onClick={async () => {
-                  const ok = await confirm({
-                    title: 'Отменить ВСЕ ожидающие запуски?',
-                    message: `Все ожидающие записи в расписании (${pendingItems.length}) будут отменены.`,
-                    confirmText: 'Отменить все',
-                  });
-                  if (ok) actionMut.mutate({ url: '/api/v1/schedule/cancel-all-pending' });
-                }}
-              >
-                Отменить все ({pendingItems.length})
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-
-        {visibleItems.length === 0 ? (
-          <EmptyState icon={<CalendarClock className="h-6 w-6" />} title="Записей в расписании нет" />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
-                <tr>
-                  <th className="w-8 px-3 py-2.5">
-                    <input
-                      type="checkbox"
-                      checked={visibleItems.length > 0 && visibleItems.every((i: any) => selectedIds.has(i.id))}
-                      onChange={(e) => {
-                        const next = new Set(selectedIds);
-                        visibleItems.forEach((i: any) => {
-                          if (e.target.checked) next.add(i.id);
-                          else next.delete(i.id);
-                        });
-                        setSelectedIds(next);
-                      }}
-                    />
-                  </th>
-                  <th className="text-left font-medium px-3 py-2.5">Время старта</th>
-                  <th className="text-left font-medium px-3 py-2.5">Скрипт / Профиль</th>
-                  <th className="text-left font-medium px-3 py-2.5">Генераторы / Длит.</th>
-                  <th className="text-left font-medium px-3 py-2.5">Статус</th>
-                  <th className="text-right font-medium px-4 py-2.5">Действия</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {visibleItems.map((it: any) => (
-                  <tr key={it.id} className="hover:bg-slate-50/70">
-                    <td className="px-3 py-2.5">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(it.id)}
-                        onChange={(e) => {
-                          const next = new Set(selectedIds);
-                          if (e.target.checked) next.add(it.id);
-                          else next.delete(it.id);
-                          setSelectedIds(next);
-                        }}
-                      />
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-xs font-mono text-slate-800">
-                      {fmtShortDate(it.runAt)}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <Link to={`/scripts/${it.scriptId}`} className="font-semibold text-slate-900 hover:text-indigo-600">
-                        {it.scriptName}
-                      </Link>
-                      {it.profileName && (
-                        <Badge variant="info" className="ml-2">
-                          {it.profileName}
-                        </Badge>
-                      )}
-                      {it.error && <div className="text-xs text-rose-600 mt-0.5">{it.error}</div>}
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-slate-600">
-                      {it.generatorNames?.length > 0
-                        ? it.generatorNames.join(', ')
-                        : `пул: ${it.generatorCount || 1}`}{' '}
-                      · {fmtDurationSec(it.durationSec)}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {it.status === 'PENDING' && <Badge variant="info">Ожидает</Badge>}
-                      {it.status === 'STARTED' && (
-                        <Link to={`/runs/${it.runId}`}>
-                          <Badge variant="success">Запущен #{it.runId}</Badge>
-                        </Link>
-                      )}
-                      {it.status === 'FAILED' && <Badge variant="danger">Ошибка</Badge>}
-                      {it.status === 'CANCELLED' && <Badge variant="default">Отменён</Badge>}
-                    </td>
-                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                      <div className="inline-flex items-center gap-1">
-                        {it.pending && (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="xs"
-                              title="Запустить прямо сейчас"
-                              onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/start-now` })}
-                            >
-                              <Play className="h-3.5 w-3.5 text-emerald-600 fill-emerald-600" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="Сдвинуть выше"
-                              onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/move`, body: { position: 'up' } })}
-                            >
-                              <ArrowUp className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="Сдвинуть ниже"
-                              onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/move`, body: { position: 'down' } })}
-                            >
-                              <ArrowDown className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="В начало очереди"
-                              onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/move`, body: { position: 'front' } })}
-                            >
-                              <ChevronsUp className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="В конец очереди"
-                              onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/move`, body: { position: 'back' } })}
-                            >
-                              <ChevronsDown className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title="Отменить"
-                              onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/cancel` })}
-                            >
-                              <X className="h-4 w-4 text-rose-600" />
-                            </Button>
-                          </>
-                        )}
-                        {!it.pending && (
-                          <Button
-                            variant="outline"
-                            size="xs"
-                            title="Повторить в конец очереди"
-                            onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/requeue`, body: { position: 'back' } })}
-                          >
-                            <RotateCcw className="h-3.5 w-3.5" />
-                            Повторить
-                          </Button>
-                        )}
+          {visibleItems.length === 0 ? (
+            <EmptyState icon={<CalendarClock className="h-6 w-6" />} title="Записей по выбранному фильтру нет" />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="w-20 px-3.5 py-2.5 text-left font-medium">
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={visibleItems.length > 0 && visibleItems.every((i: any) => selectedIds.has(i.id))}
+                          onChange={(e) => {
+                            const next = new Set(selectedIds);
+                            visibleItems.forEach((i: any) => {
+                              if (e.target.checked) next.add(i.id);
+                              else next.delete(i.id);
+                            });
+                            setSelectedIds(next);
+                          }}
+                        />
+                        <span>№</span>
                       </div>
-                    </td>
+                    </th>
+                    <th className="text-left font-medium px-3 py-2.5">Когда и длительность</th>
+                    <th className="text-left font-medium px-3 py-2.5">Скрипт и профиль</th>
+                    <th className="text-left font-medium px-3 py-2.5">Генераторы и параметры</th>
+                    <th className="text-left font-medium px-3 py-2.5">Статус</th>
+                    <th className="text-right font-medium px-4 py-2.5">Очередь и действия</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {visibleItems.map((it: any) => {
+                    const qPos = queueOrderById.get(it.id);
+                    const durMin = Math.max(1, Math.round((it.durationSec || 300) / 60));
+                    const isHighlighted = highlightId === it.id;
+                    return (
+                      <tr
+                        key={it.id}
+                        id={`sch-row-${it.id}`}
+                        className={`transition-colors ${
+                          isHighlighted ? 'bg-amber-50/90' : 'hover:bg-slate-50/70'
+                        }`}
+                      >
+                        <td className="px-3.5 py-2.5 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(it.id)}
+                              onChange={(e) => {
+                                const next = new Set(selectedIds);
+                                if (e.target.checked) next.add(it.id);
+                                else next.delete(it.id);
+                                setSelectedIds(next);
+                              }}
+                            />
+                            {qPos != null ? (
+                              <Badge variant="info" className="rounded-full">
+                                #{qPos}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-slate-400">#{it.id}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-slate-900">{fmtDateTime(it.runAt)}</span>
+                            <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">
+                              ~{durMin} мин
+                            </span>
+                          </div>
+                          {it.pending && (
+                            <div className="mt-1 flex items-center gap-2 text-[11px]">
+                              <span className="text-slate-500">{fmtCountdown(it.runAt)}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  actionMut.mutate({
+                                    url: `/api/v1/schedule/${it.id}/shift`,
+                                    body: { shiftForward: !it.shiftForward },
+                                  })
+                                }
+                                title={
+                                  it.shiftForward
+                                    ? 'Автосдвиг включён: если генераторы освободятся раньше, тест сдвинется вперёд'
+                                    : 'Время закреплено (нажмите, чтобы разрешить автосдвиг вперёд)'
+                                }
+                                className={`inline-flex items-center gap-0.5 cursor-pointer ${
+                                  it.shiftForward ? 'text-indigo-600 font-semibold' : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                              >
+                                {it.shiftForward ? <FastForward className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                                {it.shiftForward ? 'автосдвиг' : 'закреплён'}
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <Link
+                            to={`/scripts/${it.scriptId}`}
+                            className="font-semibold text-slate-900 hover:text-indigo-600"
+                          >
+                            {it.scriptName}
+                          </Link>
+                          {it.profileName && (
+                            <div className="mt-1">
+                              <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-700">
+                                <Layers className="h-3 w-3 text-indigo-600" />
+                                {it.profileName}
+                              </span>
+                            </div>
+                          )}
+                          {it.error && <div className="text-xs text-rose-600 mt-1">{it.error}</div>}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs text-slate-600">
+                          <div>
+                            {it.generatorNames?.length > 0
+                              ? it.generatorNames.join(', ')
+                              : `${it.generatorCount || 1} (свободные)`}
+                          </div>
+                          {it.createdBy && (
+                            <div className="text-[11px] text-slate-400 mt-0.5">назначил: {it.createdBy}</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {it.status === 'PENDING' && <Badge variant="info">Ожидает</Badge>}
+                          {it.status === 'STARTING' && <Badge variant="warning">Запускается</Badge>}
+                          {it.status === 'STARTED' && (
+                            <Link to={`/runs/${it.runId}`}>
+                              <Badge variant="success">Запущен #{it.runId}</Badge>
+                            </Link>
+                          )}
+                          {it.status === 'FAILED' && <Badge variant="danger">Ошибка</Badge>}
+                          {it.status === 'CANCELLED' && <Badge variant="default">Отменён</Badge>}
+                        </td>
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center gap-1">
+                            {it.pending && (
+                              <>
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  title="Запустить прямо сейчас"
+                                  onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/start-now` })}
+                                >
+                                  <Play className="h-3.5 w-3.5 text-emerald-600 fill-emerald-600" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Сдвинуть выше"
+                                  onClick={() =>
+                                    actionMut.mutate({
+                                      url: `/api/v1/schedule/${it.id}/move`,
+                                      body: { position: 'up' },
+                                    })
+                                  }
+                                >
+                                  <ArrowUp className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Сдвинуть ниже"
+                                  onClick={() =>
+                                    actionMut.mutate({
+                                      url: `/api/v1/schedule/${it.id}/move`,
+                                      body: { position: 'down' },
+                                    })
+                                  }
+                                >
+                                  <ArrowDown className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="В начало очереди"
+                                  onClick={() =>
+                                    actionMut.mutate({
+                                      url: `/api/v1/schedule/${it.id}/move`,
+                                      body: { position: 'front' },
+                                    })
+                                  }
+                                >
+                                  <ChevronsUp className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="В конец очереди"
+                                  onClick={() =>
+                                    actionMut.mutate({
+                                      url: `/api/v1/schedule/${it.id}/move`,
+                                      body: { position: 'back' },
+                                    })
+                                  }
+                                >
+                                  <ChevronsDown className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Отменить"
+                                  onClick={() => actionMut.mutate({ url: `/api/v1/schedule/${it.id}/cancel` })}
+                                >
+                                  <X className="h-4 w-4 text-rose-600" />
+                                </Button>
+                              </>
+                            )}
+                            {!it.pending && (
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                title="Снова поставить в конец очереди"
+                                onClick={() =>
+                                  actionMut.mutate({
+                                    url: `/api/v1/schedule/${it.id}/requeue`,
+                                    body: { position: 'back' },
+                                  })
+                                }
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                Снова в очередь
+                              </Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Автопроверки метрик Prometheus + SSH */}
       <Card>
@@ -507,7 +912,7 @@ export function SchedulePage() {
       </Card>
 
       {/* Быстрая постановка в очередь */}
-      <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title="Поставить тест в очередь">
+      <Modal open={quickOpen} onClose={() => setQuickOpen(false)} title="Запланировать тест">
         <form
           className="space-y-3 text-xs"
           onSubmit={async (e) => {
@@ -551,7 +956,7 @@ export function SchedulePage() {
             <div>
               <label className="block font-medium text-slate-700 mb-1">Профиль нагрузки</label>
               <Select value={qmProfileId} onChange={(e) => setQmProfileId(e.target.value)}>
-                <option value="">★ Базовая нагрузка скрипта</option>
+                <option value="">Нагрузка скрипта (как сохранена)</option>
                 {selectedScriptObj.profiles.map((p: any) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
@@ -568,8 +973,8 @@ export function SchedulePage() {
             <div>
               <label className="block font-medium text-slate-700 mb-1">Позиция</label>
               <Select value={qmPos} onChange={(e) => setQmPos(e.target.value as any)}>
-                <option value="auto">Ближайшее окно</option>
-                <option value="front">В начало очереди</option>
+                <option value="auto">Ближайшее авто</option>
+                <option value="front">В начало (после текущего)</option>
                 <option value="back">В конец очереди</option>
               </Select>
             </div>
@@ -579,14 +984,14 @@ export function SchedulePage() {
               Отмена
             </Button>
             <Button type="submit" size="sm">
-              Добавить
+              Запланировать
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Импорт расписания JSON */}
-      <Modal open={impOpen} onClose={() => setImpOpen(false)} title="Импорт расписания (JSON)" maxWidth="max-w-xl">
+      {/* Импорт списка тестов JSON */}
+      <Modal open={impOpen} onClose={() => setImpOpen(false)} title="Импорт списка тестов (JSON)" maxWidth="max-w-xl">
         <form
           className="space-y-3 text-xs"
           onSubmit={async (e) => {
@@ -594,6 +999,7 @@ export function SchedulePage() {
             try {
               const fd = new FormData();
               fd.append('json', impJson);
+              fd.append('gapMinutes', String(impGapMin));
               const res = await apiUpload('/api/v1/schedule/import', fd);
               toast.success(res.message);
               setImpOpen(false);
@@ -612,12 +1018,84 @@ export function SchedulePage() {
             placeholder='[{"script": "my-script", "profile": "Max", "count": 2}]'
             className="font-mono text-xs"
           />
+          <div>
+            <label className="block font-medium text-slate-700 mb-1">Пауза между тестами (мин)</label>
+            <Input
+              type="number"
+              min={1}
+              value={impGapMin}
+              onChange={(e) => setImpGapMin(Number(e.target.value) || 5)}
+              className="w-32"
+            />
+          </div>
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setImpOpen(false)}>
               Отмена
             </Button>
             <Button type="submit" size="sm">
               Импортировать
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Импорт профилей нагрузки */}
+      <Modal
+        open={impProfOpen}
+        onClose={() => setImpProfOpen(false)}
+        title="Импорт профилей нагрузки (JSON)"
+        maxWidth="max-w-xl"
+      >
+        <form
+          className="space-y-3 text-xs"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              const fd = new FormData();
+              fd.append('json', impProfJson);
+              fd.append('scheduleSequential', String(impProfSeq));
+              fd.append('gapMinutes', String(impProfGap));
+              const res = await apiUpload('/api/v1/schedule/import-profiles', fd);
+              toast.success(res.message);
+              setImpProfOpen(false);
+              setImpProfJson('');
+              refresh();
+            } catch (err: any) {
+              toast.error(err.message);
+            }
+          }}
+        >
+          <Textarea
+            rows={8}
+            required
+            value={impProfJson}
+            onChange={(e) => setImpProfJson(e.target.value)}
+            placeholder='[{"script": "my-script", "name": "100% Max", ...}]'
+            className="font-mono text-xs"
+          />
+          <Switch
+            checked={impProfSeq}
+            onChange={setImpProfSeq}
+            label={<span className="text-xs">Сразу поставить импортированные профили последовательно в расписание</span>}
+          />
+          {impProfSeq && (
+            <div>
+              <label className="block font-medium text-slate-700 mb-1">Пауза между прогонами (мин)</label>
+              <Input
+                type="number"
+                min={5}
+                value={impProfGap}
+                onChange={(e) => setImpProfGap(Number(e.target.value) || 5)}
+                className="w-32"
+              />
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setImpProfOpen(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" size="sm">
+              Импортировать профили
             </Button>
           </div>
         </form>

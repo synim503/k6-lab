@@ -53,7 +53,7 @@ public class DashboardApiController {
         List<GeneratorView> shown = all.stream()
                 .sorted(Comparator.comparingInt(DashboardApiController::priority)
                         .thenComparing(v -> v.g().getName(), String.CASE_INSENSITIVE_ORDER))
-                .limit(8)
+                .limit(6)
                 .toList();
 
         long online = all.stream()
