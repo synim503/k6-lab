@@ -1,7 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Activity, CheckCircle2, Palette, RotateCcw, Save, Sliders, XCircle } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  Maximize2,
+  Palette,
+  RotateCcw,
+  Save,
+  Server,
+  Sliders,
+  XCircle,
+} from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
   Badge,
@@ -10,6 +20,7 @@ import {
   CardBody,
   CardHeader,
   Input,
+  Modal,
   Select,
   Spinner,
   Switch,
@@ -56,15 +67,19 @@ interface SettingsResponse {
     retentionLogDays: number;
     retentionMetricsDays: number;
     allowMetrics: string;
+    essentialMetrics?: string[];
     onlyNeededHistograms: boolean;
     urlNameTag: boolean;
   };
+  agentPort?: number;
+  requireDiagnostics?: boolean;
   metricNamesJson: string;
 }
 
 export function SettingsPage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'prom' | 'charts' | 'limits' | 'names'>('prom');
+  const hydratedRef = useRef(false);
 
   // Prometheus state
   const [rwUrl, setRwUrl] = useState('');
@@ -74,11 +89,11 @@ export function SettingsPage() {
   const [promSecret, setPromSecret] = useState('');
   const [grafanaUrlTpl, setGrafanaUrlTpl] = useState('');
   const [histogramMode, setHistogramMode] = useState<'CLASSIC' | 'NATIVE'>('CLASSIC');
-  const [pushIntervalSec, setPushIntervalSec] = useState(5);
+  const [pushIntervalSec, setPushIntervalSec] = useState(10);
   const [diagGenId, setDiagGenId] = useState('');
 
   // Chart style state
-  const [theme, setTheme] = useState('LIGHT');
+  const [theme, setTheme] = useState('DARK');
   const [width, setWidth] = useState(1100);
   const [height, setHeight] = useState(360);
   const [legend, setLegend] = useState('BOTTOM');
@@ -89,14 +104,17 @@ export function SettingsPage() {
   const [sortDir, setSortDir] = useState('DESC');
   const [absoluteTime, setAbsoluteTime] = useState(false);
   const [skipWarmup, setSkipWarmup] = useState(false);
+  const [seriesCount, setSeriesCount] = useState<number>(6);
+  const [naturalDim, setNaturalDim] = useState<{ w: number; h: number } | null>(null);
+  const [zoomPreviewOpen, setZoomPreviewOpen] = useState(false);
 
   // Limits & metrics state
   const [logLinesPerSec, setLogLinesPerSec] = useState(200);
-  const [retentionLogDays, setRetentionLogDays] = useState(14);
-  const [retentionMetricsDays, setRetentionMetricsDays] = useState(30);
+  const [retentionLogDays, setRetentionLogDays] = useState(30);
+  const [retentionMetricsDays, setRetentionMetricsDays] = useState(7);
   const [allowMetrics, setAllowMetrics] = useState('');
-  const [onlyNeededHistograms, setOnlyNeededHistograms] = useState(false);
-  const [urlNameTag, setUrlNameTag] = useState(false);
+  const [onlyNeededHistograms, setOnlyNeededHistograms] = useState(true);
+  const [urlNameTag, setUrlNameTag] = useState(true);
 
   // Metric names JSON
   const [metricNamesJson, setMetricNamesJson] = useState('{}');
@@ -104,42 +122,52 @@ export function SettingsPage() {
   const { data, isLoading } = useQuery<SettingsResponse>({
     queryKey: ['settings'],
     queryFn: () => apiFetch('/api/v1/settings'),
+    refetchInterval: (query) => (query.state.data?.diagnostics?.running ? 1500 : false),
   });
+
+  const applyServerStateToForms = (d: SettingsResponse) => {
+    setRwUrl(d.prometheus.rwUrl);
+    setQueryUrl(d.prometheus.queryUrl);
+    setAuthType(d.prometheus.authType);
+    setPromUser(d.prometheus.user);
+    setPromSecret('');
+    setGrafanaUrlTpl(d.prometheus.grafanaUrlTpl);
+    setHistogramMode(d.prometheus.histogramMode);
+    setPushIntervalSec(d.prometheus.pushIntervalSec);
+    if (d.connectedGenerators.length > 0) {
+      setDiagGenId((prev) => prev || String(d.connectedGenerators[0].id));
+    }
+
+    setTheme(d.chartStyle.theme === 'LIGHT' ? 'LIGHT' : 'DARK');
+    setWidth(d.chartStyle.width);
+    setHeight(d.chartStyle.height);
+    setLegend(d.chartStyle.legend);
+    setStats(d.chartStyle.stats);
+    setMaxLegend(d.chartStyle.maxLegend);
+    setAutoWidth(d.chartStyle.autoWidth);
+    setSortBy(d.chartStyle.sortBy);
+    setSortDir(d.chartStyle.sortDir);
+    setAbsoluteTime(d.chartStyle.absoluteTime);
+    setSkipWarmup(d.chartStyle.skipWarmup);
+
+    setLogLinesPerSec(d.limits.logLinesPerSec);
+    setRetentionLogDays(d.limits.retentionLogDays);
+    setRetentionMetricsDays(d.limits.retentionMetricsDays);
+    setAllowMetrics(d.limits.allowMetrics);
+    setOnlyNeededHistograms(d.limits.onlyNeededHistograms);
+    setUrlNameTag(d.limits.urlNameTag);
+
+    setMetricNamesJson(d.metricNamesJson || '{}');
+  };
 
   useEffect(() => {
     if (!data) return;
-    setRwUrl(data.prometheus.rwUrl);
-    setQueryUrl(data.prometheus.queryUrl);
-    setAuthType(data.prometheus.authType);
-    setPromUser(data.prometheus.user);
-    setPromSecret('');
-    setGrafanaUrlTpl(data.prometheus.grafanaUrlTpl);
-    setHistogramMode(data.prometheus.histogramMode);
-    setPushIntervalSec(data.prometheus.pushIntervalSec);
-    if (!diagGenId && data.connectedGenerators.length > 0) {
+    if (!hydratedRef.current) {
+      hydratedRef.current = true;
+      applyServerStateToForms(data);
+    } else if (!diagGenId && data.connectedGenerators.length > 0) {
       setDiagGenId(String(data.connectedGenerators[0].id));
     }
-
-    setTheme(data.chartStyle.theme);
-    setWidth(data.chartStyle.width);
-    setHeight(data.chartStyle.height);
-    setLegend(data.chartStyle.legend);
-    setStats(data.chartStyle.stats);
-    setMaxLegend(data.chartStyle.maxLegend);
-    setAutoWidth(data.chartStyle.autoWidth);
-    setSortBy(data.chartStyle.sortBy);
-    setSortDir(data.chartStyle.sortDir);
-    setAbsoluteTime(data.chartStyle.absoluteTime);
-    setSkipWarmup(data.chartStyle.skipWarmup);
-
-    setLogLinesPerSec(data.limits.logLinesPerSec);
-    setRetentionLogDays(data.limits.retentionLogDays);
-    setRetentionMetricsDays(data.limits.retentionMetricsDays);
-    setAllowMetrics(data.limits.allowMetrics);
-    setOnlyNeededHistograms(data.limits.onlyNeededHistograms);
-    setUrlNameTag(data.limits.urlNameTag);
-
-    setMetricNamesJson(data.metricNamesJson || '{}');
   }, [data]);
 
   const promMut = useMutation({
@@ -154,7 +182,7 @@ export function SettingsPage() {
           secret: promSecret || null,
           grafanaUrlTpl,
           histogramMode,
-          pushIntervalSec: Number(pushIntervalSec) || 5,
+          pushIntervalSec: Number(pushIntervalSec) || 10,
         },
       }),
     onSuccess: () => {
@@ -167,12 +195,12 @@ export function SettingsPage() {
 
   const diagMut = useMutation({
     mutationFn: () =>
-      apiFetch<{ ok: boolean }>('/api/v1/settings/diagnostics', {
+      apiFetch<{ ok: boolean; started?: boolean }>('/api/v1/settings/diagnostics', {
         method: 'POST',
-        body: { generatorId: Number(diagGenId) },
+        body: { generatorId: Number(diagGenId), async: true },
       }),
     onSuccess: () => {
-      toast.success('Сквозная диагностика завершена');
+      toast.info('Диагностика запущена — шаги обновляются в реальном времени');
       qc.invalidateQueries({ queryKey: ['settings'] });
     },
     onError: (e: Error) => {
@@ -208,9 +236,11 @@ export function SettingsPage() {
 
   const resetChartMut = useMutation({
     mutationFn: () => apiFetch('/api/v1/settings/report-charts/reset', { method: 'POST' }),
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success('Стиль графиков сброшен к значениям по умолчанию');
-      qc.invalidateQueries({ queryKey: ['settings'] });
+      const fresh = await apiFetch<SettingsResponse>('/api/v1/settings');
+      qc.setQueryData(['settings'], fresh);
+      applyServerStateToForms(fresh);
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -221,8 +251,8 @@ export function SettingsPage() {
         method: 'POST',
         body: {
           logLinesPerSec: Number(logLinesPerSec) || 200,
-          retentionLogDays: Number(retentionLogDays) || 14,
-          retentionMetricsDays: Number(retentionMetricsDays) || 30,
+          retentionLogDays: Number(retentionLogDays) || 30,
+          retentionMetricsDays: Number(retentionMetricsDays) || 7,
           allowMetrics,
           onlyNeededHistograms,
           urlNameTag,
@@ -261,35 +291,71 @@ export function SettingsPage() {
       sortBy,
       sortDir,
       skipWarmup: String(skipWarmup),
+      seriesCount: String(seriesCount),
     });
     return `/settings/report-charts/preview.png?${sp.toString()}`;
-  }, [theme, width, height, legend, stats, maxLegend, absoluteTime, autoWidth, sortBy, sortDir, skipWarmup]);
+  }, [
+    theme,
+    width,
+    height,
+    legend,
+    stats,
+    maxLegend,
+    absoluteTime,
+    autoWidth,
+    sortBy,
+    sortDir,
+    skipWarmup,
+    seriesCount,
+  ]);
 
   if (isLoading && !data) return <Spinner label="Загрузка системных настроек…" />;
 
+  const diagRunning = !!data?.diagnostics?.running;
+
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-slate-900">Системные настройки</h1>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Prometheus / VictoriaMetrics, сквозная диагностика, стиль графиков отчёта, хранение и словарь метрик
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-slate-900">Системные настройки</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Prometheus / VictoriaMetrics, сквозная диагностика, стиль графиков отчёта, хранение и словарь метрик
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {data?.agentPort && (
+            <Badge variant="neutral">
+              <Server className="h-3 w-3" />
+              Порт агентов: {data.agentPort}
+            </Badge>
+          )}
+          {data?.requireDiagnostics !== undefined && (
+            <Badge variant={data.requireDiagnostics ? 'info' : 'warning'}>
+              {data.requireDiagnostics
+                ? 'Запуск тестов требует диагностики'
+                : 'Проверка диагностики отключена (dev)'}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Вкладки */}
       <div className="flex flex-wrap gap-1.5">
-        {([
-          ['prom', 'Prometheus и диагностика'],
-          ['charts', 'Графики отчёта'],
-          ['limits', 'Метрики и хранение'],
-          ['names', 'Словарь имён метрик'],
-        ] as const).map(([id, title]) => (
+        {(
+          [
+            ['prom', 'Prometheus и диагностика'],
+            ['charts', 'Графики отчёта'],
+            ['limits', 'Метрики и хранение'],
+            ['names', 'Словарь имён метрик'],
+          ] as const
+        ).map(([tabId, title]) => (
           <button
-            key={id}
+            key={tabId}
             type="button"
-            onClick={() => setTab(id)}
+            onClick={() => setTab(tabId)}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              tab === id
+              tab === tabId
                 ? 'bg-indigo-600 text-white'
                 : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
             }`}
@@ -303,12 +369,16 @@ export function SettingsPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           <Card className="lg:col-span-2">
             <CardHeader>
-              <div className="font-semibold text-sm text-slate-900">Подключение к Prometheus / VictoriaMetrics</div>
+              <div className="font-semibold text-sm text-slate-900">
+                Подключение к Prometheus / VictoriaMetrics
+              </div>
             </CardHeader>
             <CardBody className="space-y-3.5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Remote Write URL (для агентов)</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Remote Write URL (для агентов)
+                  </label>
                   <Input
                     value={rwUrl}
                     onChange={(e) => setRwUrl(e.target.value)}
@@ -317,7 +387,9 @@ export function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Query Base URL (для админки)</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Query Base URL (для админки)
+                  </label>
                   <Input
                     value={queryUrl}
                     onChange={(e) => setQueryUrl(e.target.value)}
@@ -362,10 +434,12 @@ export function SettingsPage() {
                   </Select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Интервал отправки (сек)</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Интервал отправки (5–60 сек)
+                  </label>
                   <Input
                     type="number"
-                    min={1}
+                    min={5}
                     max={60}
                     value={pushIntervalSec}
                     onChange={(e) => setPushIntervalSec(Number(e.target.value))}
@@ -394,8 +468,8 @@ export function SettingsPage() {
           <Card>
             <CardHeader>
               <div className="font-semibold text-sm text-slate-900">Сквозная диагностика</div>
-              <Badge variant={data?.diagnostics.passed ? 'success' : 'warning'}>
-                {data?.diagnostics.passed ? 'Пройдена' : 'Не подтверждена'}
+              <Badge variant={diagRunning ? 'info' : data?.diagnostics.passed ? 'success' : 'warning'}>
+                {diagRunning ? 'Выполняется…' : data?.diagnostics.passed ? 'Пройдена' : 'Не подтверждена'}
               </Badge>
             </CardHeader>
             <CardBody className="space-y-3">
@@ -414,13 +488,19 @@ export function SettingsPage() {
                 className="w-full"
                 size="sm"
                 variant="secondary"
-                disabled={!diagGenId}
-                loading={diagMut.isPending}
+                disabled={!diagGenId || diagRunning}
+                loading={diagMut.isPending || diagRunning}
                 onClick={() => diagMut.mutate()}
               >
                 <Activity className="h-3.5 w-3.5" />
-                Запустить проверку
+                {diagRunning ? 'Проверка выполняется…' : 'Запустить проверку'}
               </Button>
+
+              {diagRunning && data?.diagnostics?.progress && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800 animate-pulse">
+                  {data.diagnostics.progress}
+                </div>
+              )}
 
               {data?.diagnostics.last && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2 text-xs">
@@ -459,9 +539,8 @@ export function SettingsPage() {
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Тема</label>
                   <Select value={theme} onChange={(e) => setTheme(e.target.value)}>
+                    <option value="DARK">Grafana Dark (Тёмная)</option>
                     <option value="LIGHT">Светлая (Light)</option>
-                    <option value="GRAFANA_DARK">Grafana Dark</option>
-                    <option value="SLATE">Строгая (Slate)</option>
                   </Select>
                 </div>
                 <div>
@@ -469,6 +548,7 @@ export function SettingsPage() {
                   <Select value={legend} onChange={(e) => setLegend(e.target.value)}>
                     <option value="BOTTOM">Снизу</option>
                     <option value="RIGHT">Справа</option>
+                    <option value="LEFT">Слева</option>
                     <option value="NONE">Скрыть</option>
                   </Select>
                 </div>
@@ -509,10 +589,26 @@ export function SettingsPage() {
               </div>
 
               <div className="space-y-2 pt-1">
-                <Switch checked={stats} onChange={setStats} label="Показывать таблицу Min / Mean / Max / Last в легенде" />
-                <Switch checked={autoWidth} onChange={setAutoWidth} label="Авторасширение при длинных подписях серий" />
-                <Switch checked={absoluteTime} onChange={setAbsoluteTime} label="Абсолютное время ЧЧ:ММ на оси X (вместо минут от старта)" />
-                <Switch checked={skipWarmup} onChange={setSkipWarmup} label="Скрывать участок прогрева (warmup) на графиках" />
+                <Switch
+                  checked={stats}
+                  onChange={setStats}
+                  label="Показывать таблицу Min / Mean / Max / Last в легенде"
+                />
+                <Switch
+                  checked={autoWidth}
+                  onChange={setAutoWidth}
+                  label="Авторасширение при длинных подписях серий"
+                />
+                <Switch
+                  checked={absoluteTime}
+                  onChange={setAbsoluteTime}
+                  label="Абсолютное время ЧЧ:ММ на оси X (вместо минут от старта)"
+                />
+                <Switch
+                  checked={skipWarmup}
+                  onChange={setSkipWarmup}
+                  label="Скрывать участок прогрева (warmup) на графиках"
+                />
               </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-slate-100">
@@ -535,18 +631,60 @@ export function SettingsPage() {
 
           <Card className="lg:col-span-7">
             <CardHeader>
-              <div className="font-semibold text-sm text-slate-900">Живой предпросмотр рендерера</div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm text-slate-900">Живой предпросмотр рендерера</span>
+                {naturalDim && (
+                  <Badge variant="neutral">
+                    {naturalDim.w} × {naturalDim.h} px
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+                  {[4, 6, 12].map((cnt) => (
+                    <button
+                      key={cnt}
+                      type="button"
+                      onClick={() => setSeriesCount(cnt)}
+                      className={`rounded-md px-2 py-0.5 font-medium cursor-pointer ${
+                        seriesCount === cnt ? 'bg-indigo-600 text-white' : 'text-slate-600'
+                      }`}
+                    >
+                      {cnt} сер.
+                    </button>
+                  ))}
+                </div>
+                <Button variant="ghost" size="xs" onClick={() => setZoomPreviewOpen(true)}>
+                  <Maximize2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </CardHeader>
             <CardBody className="flex items-center justify-center bg-slate-50/70">
               <img
                 src={previewUrl}
                 alt="Предпросмотр графика отчёта"
-                className="max-w-full rounded-lg border border-slate-200 shadow-xs"
+                onClick={() => setZoomPreviewOpen(true)}
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  if (img.naturalWidth && img.naturalHeight) {
+                    setNaturalDim({ w: img.naturalWidth, h: img.naturalHeight });
+                  }
+                }}
+                className="max-w-full rounded-lg border border-slate-200 shadow-xs cursor-zoom-in"
               />
             </CardBody>
           </Card>
         </div>
       )}
+
+      <Modal
+        open={zoomPreviewOpen}
+        onClose={() => setZoomPreviewOpen(false)}
+        title={`Предпросмотр рендерера (${naturalDim ? `${naturalDim.w} × ${naturalDim.h} px` : ''})`}
+        maxWidth="max-w-6xl"
+      >
+        <img src={previewUrl} alt="Zoom preview" className="w-full h-auto rounded-lg border border-slate-200" />
+      </Modal>
 
       {tab === 'limits' && (
         <Card>
@@ -559,7 +697,9 @@ export function SettingsPage() {
           <CardBody className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Лимит строк лога / сек с агента</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Лимит строк лога / сек с агента
+                </label>
                 <Input
                   type="number"
                   min={10}
@@ -568,7 +708,9 @@ export function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Хранение логов запусков (дней)</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Хранение логов запусков (дней)
+                </label>
                 <Input
                   type="number"
                   min={1}
@@ -577,7 +719,9 @@ export function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Хранение снимков результатов (дней)</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Хранение снимков результатов (дней)
+                </label>
                 <Input
                   type="number"
                   min={1}
@@ -587,8 +731,8 @@ export function SettingsPage() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
+            <div className="space-y-2">
+              <label className="block text-xs font-medium text-slate-700">
                 Белый список метрик для Remote Write (по одной маске на строку, пусто = отправлять все)
               </label>
               <Textarea
@@ -598,6 +742,16 @@ export function SettingsPage() {
                 onChange={(e) => setAllowMetrics(e.target.value)}
                 placeholder={'k6_http_req_*\nk6_vus*\ncustom_metric_*'}
               />
+              {data?.limits?.essentialMetrics && data.limits.essentialMetrics.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                  <span>Всегда отправляются автоматически (нужны админке):</span>
+                  {data.limits.essentialMetrics.map((em) => (
+                    <code key={em} className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">
+                      {em}
+                    </code>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -609,7 +763,7 @@ export function SettingsPage() {
               <Switch
                 checked={urlNameTag}
                 onChange={setUrlNameTag}
-                label="Группировать метрики по тегу name вместо полного URL (защита от кардинальности)"
+                label="Сохранять тег name (URL запроса) на HTTP-метриках (отключите при динамических ID в пути)"
               />
             </div>
 
@@ -626,11 +780,14 @@ export function SettingsPage() {
       {tab === 'names' && (
         <Card>
           <CardHeader>
-            <div className="font-semibold text-sm text-slate-900">Человекочитаемые названия метрик в отчётах (JSON)</div>
+            <div className="font-semibold text-sm text-slate-900">
+              Человекочитаемые названия метрик в отчётах (JSON)
+            </div>
           </CardHeader>
           <CardBody className="space-y-3">
             <p className="text-xs text-slate-500">
-              Переопределение отображаемых имён кастомных метрик k6 в итоговых таблицах отчёта (`{"\"my_trend\": \"Время ответа шлюза, мс\""}`).
+              Переопределение отображаемых имён кастомных метрик k6 в итоговых таблицах отчёта (
+              <code>{'"my_trend": "Время ответа шлюза, мс"'}</code>).
             </p>
             <Textarea
               rows={12}

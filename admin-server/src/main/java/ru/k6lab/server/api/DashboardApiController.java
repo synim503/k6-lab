@@ -194,6 +194,7 @@ public class DashboardApiController {
         m.put("status", r.getStatus().name());
         m.put("degraded", r.isDegraded());
         m.put("thresholdsFailed", r.isThresholdsFailed());
+        m.put("conclusion", r.getConclusion());
         m.put("stopReason", r.getStopReason());
         m.put("error", r.getError());
         m.put("queuedAt", r.getQueuedAt());

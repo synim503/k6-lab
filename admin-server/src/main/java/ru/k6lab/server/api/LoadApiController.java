@@ -264,8 +264,19 @@ public class LoadApiController {
         if (!scenarioNames(edited.path("scenarios")).equals(scenarioNames(base.baseConfig().path("scenarios")))) {
             throw new IllegalArgumentException("Сценарии нельзя добавлять и удалять вручную");
         }
+        for (var e : (Iterable<Map.Entry<String, JsonNode>>) () -> edited.path("scenarios").fields()) {
+            if (!e.getValue().isObject() || !e.getValue().hasNonNull("executor")) {
+                throw new IllegalArgumentException("У сценария «" + e.getKey() + "» должен быть executor");
+            }
+        }
         ObjectNode patch = K6ConfigOverrides.diff(base.baseConfig(), edited);
         var overrides = K6ConfigOverrides.toMap(patch);
+        if (!overrides.isEmpty() && k6.locate().isPresent() && base.version() != null) {
+            String err = validateWithK6(base, K6ConfigOverrides.apply(base.baseConfig(), overrides).config().toString());
+            if (err != null) {
+                throw new IllegalArgumentException("k6 не принял конфиг: " + err);
+            }
+        }
         load.saveK6Overrides(id, overrides);
         Script s = scripts.get(id);
         Map<String, Object> state = buildLoadState(s, load.toForm(id), s.getGeneratorCount(), null, null);
@@ -361,12 +372,29 @@ public class LoadApiController {
         var profList = profiles.list(id);
         RunPlan plan = planFor(id, generators, loadedProfileId);
         boolean baseDefined = load.isDefined(id);
+        int gens = Math.max(1, generators);
+        boolean hasReadyProfile = !baseDefined && profList.stream().anyMatch(p -> {
+            try {
+                return planner.plan(id, gens, load.fromProfile(id, p.id())).ok();
+            } catch (IllegalArgumentException e) {
+                return false;
+            }
+        });
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("script", ScriptApiController.toScriptDto(s, s.getGitRepoId() != null ? safeRepo(s.getGitRepoId()) : null));
         out.put("loadedProfileId", loadedProfileId);
         out.put("loadedProfileName", loadedProfileName);
         out.put("baseDefined", baseDefined);
+        out.put("hasReadyProfile", hasReadyProfile);
+        out.put("basePushDefaults", Map.of(
+                "env", f.isBaseOverrideEnv(),
+                "stop", f.isBaseOverrideStop(),
+                "sla", f.isBaseOverrideSla(),
+                "warmup", f.isBaseOverrideWarmup(),
+                "data", f.isBaseOverrideData(),
+                "generators", f.isBaseOverrideGenerators()
+        ));
         out.put("form", f);
         out.put("env", LoadForm.parseKv(f.getEnvText()));
         out.put("baseWarmupDuration", f.getBaseWarmupDuration());
@@ -418,5 +446,33 @@ public class LoadApiController {
         Set<String> out = new TreeSet<>();
         scenarios.fieldNames().forEachRemaining(out::add);
         return out;
+    }
+
+    private String validateWithK6(RunPlan plan, String configJson) {
+        Path dir = null;
+        try {
+            dir = Files.createTempDirectory("k6lab-cfg");
+            ZipUtil.extract(new ByteArrayInputStream(scripts.zipBytes(plan.version())), dir);
+            Files.createDirectories(dir.resolve("__admin"));
+            Files.write(dir.resolve("__admin/admin.js"), helper.content());
+            K6Tool.Result r = k6.requirements(dir, plan.version().getEntrypoint(), configJson);
+            if (r.timedOut()) {
+                return "Проверка конфигурации через k6 inspect превысила таймаут (60 с)";
+            }
+            if (!r.ok()) {
+                String s = r.stderr().isBlank() ? r.stdout() : r.stderr();
+                return s.strip().lines().reduce((a, b) -> b).orElse("ошибка");
+            }
+            return null;
+        } catch (IOException e) {
+            return null;
+        } finally {
+            if (dir != null) {
+                try (var walk = Files.walk(dir)) {
+                    walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+                } catch (IOException ignored) {
+                }
+            }
+        }
     }
 }

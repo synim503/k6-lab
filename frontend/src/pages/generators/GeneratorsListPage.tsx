@@ -121,6 +121,7 @@ export function GeneratorsListPage() {
 
   // Bulk Add state
   const [bHosts, setBHosts] = useState('');
+  const [bDefaultPort, setBDefaultPort] = useState('22');
   const [bCredId, setBCredId] = useState('');
   const [bMode, setBMode] = useState<'SYSTEM' | 'USER'>('SYSTEM');
   const [bServerUrl, setBServerUrl] = useState('');
@@ -200,12 +201,22 @@ export function GeneratorsListPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const bulkParsedCount = useMemo(
+    () =>
+      bHosts
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith('#')).length,
+    [bHosts]
+  );
+
   const bulkMut = useMutation({
     mutationFn: () =>
       apiFetch<{ deploymentIds: number[] }>('/api/v1/generators/bulk', {
         method: 'POST',
         body: {
           hosts: bHosts,
+          defaultPort: Number(bDefaultPort) || 22,
           credentialId: Number(bCredId),
           mode: bMode,
           serverUrl: bServerUrl.trim() || undefined,
@@ -735,18 +746,23 @@ export function GeneratorsListPage() {
           {addTab === 'bulk' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Список хостов (по одному на строку: `host` или `host:port`) *
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-slate-700">
+                    Список хостов (по одному на строку: <code>host[:port] [имя]</code>) *
+                  </label>
+                  <Badge variant={bulkParsedCount > 0 ? 'info' : 'neutral'}>
+                    Распознано хостов: {bulkParsedCount}
+                  </Badge>
+                </div>
                 <Textarea
                   rows={6}
                   className="font-mono text-xs"
                   value={bHosts}
                   onChange={(e) => setBHosts(e.target.value)}
-                  placeholder={'10.0.1.11\n10.0.1.12:2222\n# комментарий'}
+                  placeholder={'10.0.1.11 gen-01\n10.0.1.12:2222 gen-02\n# комментарий'}
                 />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">SSH-учётка *</label>
                   <Select value={bCredId} onChange={(e) => setBCredId(e.target.value)}>
@@ -757,6 +773,10 @@ export function GeneratorsListPage() {
                       </option>
                     ))}
                   </Select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Порт по умолч.</label>
+                  <Input type="number" value={bDefaultPort} onChange={(e) => setBDefaultPort(e.target.value)} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Режим установки</label>

@@ -40,19 +40,24 @@ import java.util.Optional;
 @RequestMapping("/api/v1/scripts")
 public class ScriptApiController {
 
+    private static final com.fasterxml.jackson.databind.ObjectMapper PRETTY_MAPPER = new com.fasterxml.jackson.databind.ObjectMapper();
+
     private final ScriptService scripts;
     private final GitRepoService gitRepos;
     private final LoadService load;
     private final LoadProfileStore profiles;
     private final RunService runs;
+    private final ru.k6lab.server.run.RunOrchestrator orchestrator;
 
     public ScriptApiController(ScriptService scripts, GitRepoService gitRepos,
-                               LoadService load, LoadProfileStore profiles, RunService runs) {
+                               LoadService load, LoadProfileStore profiles, RunService runs,
+                               ru.k6lab.server.run.RunOrchestrator orchestrator) {
         this.scripts = scripts;
         this.gitRepos = gitRepos;
         this.load = load;
         this.profiles = profiles;
         this.runs = runs;
+        this.orchestrator = orchestrator;
     }
 
     public record GitCreateRequest(String name, Long repoId, String ref, String entrypoint, String comment) {
@@ -140,17 +145,32 @@ public class ScriptApiController {
                 .filter(r -> id.equals(r.getScriptId()))
                 .toList();
 
+        var profList = profiles.list(id);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("script", toScriptDto(s, repo));
         out.put("latestVersion", latest != null ? toVersionDto(latest, scripts.hasFiles(latest)) : null);
         out.put("versions", vers.stream().map(v -> toVersionSummaryDto(v, scripts.hasFiles(v))).toList());
+        out.put("missingFiles", vers.stream().filter(v -> !scripts.hasFiles(v)).map(ScriptVersion::getId).toList());
         out.put("loadDefined", load.isDefined(id));
-        out.put("profilesCount", profiles.list(id).size());
+        out.put("profilesCount", profList.size());
+        out.put("profiles", profList.stream().map(p -> Map.of(
+                "id", p.id(),
+                "name", p.name(),
+                "updatedAt", p.updatedAt() != null ? p.updatedAt().toString() : "",
+                "updatedBy", p.updatedBy() != null ? p.updatedBy() : ""
+        )).toList());
         out.put("activeOperations", load.activeOperations(id).stream().map(op -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("name", op.getName());
             m.put("execFn", op.getExecFn());
             m.put("executor", op.getExecutor());
+            m.put("ratePerSec", op.getRatePerSec());
+            m.put("expectedDurationSec", op.getExpectedDurationSec());
+            m.put("slaPercentile", op.getSlaPercentile());
+            m.put("slaThresholdMs", op.getSlaThresholdMs());
+            m.put("maxErrorPct", op.getMaxErrorPct());
+            m.put("failureSource", op.getFailureSource() != null ? op.getFailureSource().name() : "HTTP");
+            m.put("enabled", op.isEnabled());
             return m;
         }).toList());
         out.put("activeRuns", activeForScript.stream().map(DashboardApiController::toRunSummaryDto).toList());
@@ -169,6 +189,18 @@ public class ScriptApiController {
     public Map<String, Object> delete(@PathVariable Long id) {
         scripts.delete(id);
         return Map.of("ok", true);
+    }
+
+    @PostMapping("/{id}/stop")
+    public Map<String, Object> stopActiveRuns(@PathVariable Long id) {
+        int stopped = 0;
+        for (Run r : runs.activeRuns()) {
+            if (id.equals(r.getScriptId())) {
+                orchestrator.stop(r.getId(), "остановлено пользователем");
+                stopped++;
+            }
+        }
+        return Map.of("ok", true, "stopped", stopped);
     }
 
     @PostMapping("/{id}/versions")
@@ -327,6 +359,14 @@ public class ScriptApiController {
         m.put("sha256", v.getSha256());
         m.put("inspectStatus", v.getInspectStatus() != null ? v.getInspectStatus().name() : null);
         m.put("inspectError", v.getInspectError());
+        String inspectJson = null;
+        if (v.getInspectResult() != null) {
+            try {
+                inspectJson = PRETTY_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(v.getInspectResult());
+            } catch (IOException ignored) {
+            }
+        }
+        m.put("inspectJson", inspectJson);
         m.put("usesHelper", v.isUsesHelper());
         m.put("warnings", v.getWarnings() != null ? v.getWarnings() : List.of());
         m.put("operations", v.getOperations() != null ? v.getOperations() : List.of());

@@ -83,7 +83,7 @@ public class InfraApiController {
                                      Integer maxConcurrentRuns, Long agentArtifactId, Long k6ArtifactId) {
     }
 
-    public record BulkAddPayload(String hosts, Long credentialId, String mode, String serverUrl, Boolean tuneOs) {
+    public record BulkAddPayload(String hosts, Integer defaultPort, Long credentialId, String mode, String serverUrl, Boolean tuneOs) {
     }
 
     public record UpdateGenPayload(Long agentArtifactId, Long k6ArtifactId) {
@@ -206,22 +206,27 @@ public class InfraApiController {
         Generator.InstallMode mode = "USER".equalsIgnoreCase(req.mode())
                 ? Generator.InstallMode.USER
                 : Generator.InstallMode.SYSTEM;
+        int defPort = req.defaultPort() != null && req.defaultPort() > 0 ? req.defaultPort() : 22;
         List<Long> depIds = new ArrayList<>();
         for (String line : (req.hosts() == null ? "" : req.hosts()).split("\\r?\\n")) {
             String t = line.trim();
             if (t.isEmpty() || t.startsWith("#")) continue;
-            String host = t;
-            int port = 22;
-            int colon = t.lastIndexOf(':');
-            if (colon > 0) {
+            String[] parts = t.split("\\s+", 2);
+            String addr = parts[0];
+            String customName = parts.length > 1 && !parts[1].isBlank() ? parts[1].trim() : null;
+            String host = addr;
+            int port = defPort;
+            int colon = addr.lastIndexOf(':');
+            if (colon > 0 && addr.indexOf(':') == colon) {
                 try {
-                    port = Integer.parseInt(t.substring(colon + 1));
-                    host = t.substring(0, colon);
+                    port = Integer.parseInt(addr.substring(colon + 1));
+                    host = addr.substring(0, colon);
                 } catch (NumberFormatException ignored) {
                 }
             }
+            String gName = customName != null ? customName : host;
             Deployment d = deploy.startInstall(new DeployService.InstallRequest(
-                    host, host, port, req.credentialId(), mode, null,
+                    gName, host, port, req.credentialId(), mode, null,
                     req.serverUrl(), Boolean.TRUE.equals(req.tuneOs()), 1, null, null
             ));
             depIds.add(d.getId());
@@ -347,11 +352,17 @@ public class InfraApiController {
             return m;
         }).toList();
 
+        Map<String, String> keyDescriptions = new LinkedHashMap<>();
+        for (String k : TuningAnalyzer.allKeys()) {
+            keyDescriptions.put(k, TuningAnalyzer.describe(k));
+        }
+
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("rows", rows);
         out.put("optProfiles", tuningProfiles.list());
         out.put("history", tuningStore.history(30));
         out.put("allKeys", TuningAnalyzer.allKeys());
+        out.put("keyDescriptions", keyDescriptions);
         return out;
     }
 
@@ -394,9 +405,24 @@ public class InfraApiController {
     @PostMapping("/tuning/profiles")
     @PreAuthorize("hasRole('ADMIN')")
     public Map<String, Object> createOptProfile(@RequestBody OptProfilePayload req, Principal user) {
+        String n = req.name() == null ? "" : req.name().strip();
+        if (n.isEmpty() || n.length() > 100) {
+            throw new IllegalArgumentException("Название профиля оптимизации: от 1 до 100 символов");
+        }
+        if (tuningProfiles.nameTaken(n, null)) {
+            throw new IllegalArgumentException("Профиль оптимизации «" + n + "» уже есть: выберите другое название");
+        }
         Map<String, String> settings = new LinkedHashMap<>();
         if (req.settings() != null && !req.settings().isEmpty()) {
-            settings.putAll(req.settings());
+            for (var e : req.settings().entrySet()) {
+                String k = e.getKey() == null ? "" : e.getKey().strip();
+                String v = e.getValue() == null ? "" : e.getValue().strip().replaceAll("\\s+", " ");
+                if (k.isEmpty()) continue;
+                if (!TuningAnalyzer.valid(k, v)) {
+                    throw new IllegalArgumentException("Недопустимое значение для «" + k + "»: " + v);
+                }
+                settings.put(k, v);
+            }
         } else if (req.fromHost() != null) {
             var p = tuningStore.latestDone(req.fromHost())
                     .orElseThrow(() -> new IllegalArgumentException("Для выбранного хоста нет завершённого профилирования"));
@@ -411,8 +437,43 @@ public class InfraApiController {
                 }
             }
         }
-        long id = tuningProfiles.create(req.name(), req.description() != null ? req.description() : "",
+        if (settings.isEmpty()) {
+            throw new IllegalArgumentException("Добавьте хотя бы одну настройку в профиль оптимизации");
+        }
+        long id = tuningProfiles.create(n, req.description() != null && !req.description().isBlank() ? req.description().strip() : null,
                 settings, user != null ? user.getName() : "admin");
+        return Map.of("ok", true, "id", id);
+    }
+
+    @PostMapping("/tuning/profiles/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Map<String, Object> updateOptProfile(@PathVariable long id, @RequestBody OptProfilePayload req) {
+        if (tuningProfiles.find(id).isEmpty()) {
+            throw new NoSuchElementException("Профиль оптимизации не найден");
+        }
+        String n = req.name() == null ? "" : req.name().strip();
+        if (n.isEmpty() || n.length() > 100) {
+            throw new IllegalArgumentException("Название профиля оптимизации: от 1 до 100 символов");
+        }
+        if (tuningProfiles.nameTaken(n, id)) {
+            throw new IllegalArgumentException("Профиль оптимизации «" + n + "» уже есть: выберите другое название");
+        }
+        Map<String, String> settings = new LinkedHashMap<>();
+        if (req.settings() != null) {
+            for (var e : req.settings().entrySet()) {
+                String k = e.getKey() == null ? "" : e.getKey().strip();
+                String v = e.getValue() == null ? "" : e.getValue().strip().replaceAll("\\s+", " ");
+                if (k.isEmpty()) continue;
+                if (!TuningAnalyzer.valid(k, v)) {
+                    throw new IllegalArgumentException("Недопустимое значение для «" + k + "»: " + v);
+                }
+                settings.put(k, v);
+            }
+        }
+        if (settings.isEmpty()) {
+            throw new IllegalArgumentException("В профиле оптимизации должна остаться хотя бы одна настройка");
+        }
+        tuningProfiles.update(id, n, req.description() != null && !req.description().isBlank() ? req.description().strip() : null, settings);
         return Map.of("ok", true, "id", id);
     }
 

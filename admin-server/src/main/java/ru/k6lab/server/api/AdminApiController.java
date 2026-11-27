@@ -58,6 +58,8 @@ public class AdminApiController {
     private final GeneratorRepository generators;
     private final AgentSessionRegistry agentRegistry;
     private final AuditLogRepository auditRepo;
+    private final ru.k6lab.server.config.AppProperties props;
+    private final ru.k6lab.server.run.RunOrchestrator orchestrator;
 
     public AdminApiController(SecretService secrets, DistributionService distributions,
                               SshCredentialService sshCreds, KnownHostService knownHosts,
@@ -65,7 +67,9 @@ public class AdminApiController {
                               SettingsService settings, PrometheusDiagnostics diagnostics,
                               MetricNamesService metricNames, ChartStyleService chartStyle,
                               GeneratorRepository generators, AgentSessionRegistry agentRegistry,
-                              AuditLogRepository auditRepo) {
+                              AuditLogRepository auditRepo,
+                              ru.k6lab.server.config.AppProperties props,
+                              ru.k6lab.server.run.RunOrchestrator orchestrator) {
         this.secrets = secrets;
         this.distributions = distributions;
         this.sshCreds = sshCreds;
@@ -79,6 +83,8 @@ public class AdminApiController {
         this.generators = generators;
         this.agentRegistry = agentRegistry;
         this.auditRepo = auditRepo;
+        this.props = props;
+        this.orchestrator = orchestrator;
     }
 
     public record SecretPayload(String name, String description, String value) {
@@ -355,9 +361,12 @@ public class AdminApiController {
                 "retentionLogDays", settings.logRetentionDays(),
                 "retentionMetricsDays", settings.metricsRetentionDays(),
                 "allowMetrics", String.join("\n", settings.allowMetrics()),
+                "essentialMetrics", orchestrator.essentialMetrics(),
                 "onlyNeededHistograms", settings.onlyNeededHistograms(),
                 "urlNameTag", settings.urlNameTag()
         ));
+        out.put("agentPort", props.getAgentPort());
+        out.put("requireDiagnostics", props.isRequireDiagnostics());
         out.put("metricNamesJson", metricNames.json());
         return out;
     }
@@ -371,19 +380,27 @@ public class AdminApiController {
 
         settings.savePrometheus(req.rwUrl(), req.queryUrl(), at, req.user(), req.secret(), req.grafanaUrlTpl());
         if (req.histogramMode() != null) {
-            settings.set(SettingsService.HISTOGRAM_MODE, req.histogramMode());
+            settings.set(SettingsService.HISTOGRAM_MODE, "NATIVE".equalsIgnoreCase(req.histogramMode()) ? "NATIVE" : "CLASSIC");
         }
         if (req.pushIntervalSec() != null) {
-            settings.set(SettingsService.PUSH_INTERVAL_SEC, String.valueOf(Math.max(1, req.pushIntervalSec())));
+            settings.set(SettingsService.PUSH_INTERVAL_SEC, String.valueOf(Math.max(5, Math.min(60, req.pushIntervalSec()))));
         }
         return Map.of("ok", true);
     }
 
     @PostMapping("/settings/diagnostics")
     @PreAuthorize("hasRole('ADMIN')")
-    public Map<String, Object> startDiagnostics(@RequestBody Map<String, Long> body) {
-        Long gid = body.get("generatorId");
+    public Map<String, Object> startDiagnostics(@RequestBody Map<String, Object> body) {
+        Object gidRaw = body.get("generatorId");
+        Long gid = gidRaw instanceof Number n ? n.longValue() : (gidRaw != null ? Long.parseLong(String.valueOf(gidRaw)) : null);
         if (gid == null) throw new IllegalArgumentException("Выберите генератор для диагностики");
+        if (Boolean.TRUE.equals(body.get("async"))) {
+            boolean started = diagnostics.start(gid);
+            if (!started) {
+                throw new IllegalStateException("Диагностика уже выполняется");
+            }
+            return Map.of("ok", true, "started", true, "running", true);
+        }
         var res = diagnostics.runSync(gid);
         return Map.of("ok", res.ok(), "result", res);
     }
@@ -406,10 +423,18 @@ public class AdminApiController {
     @PostMapping("/settings/limits")
     @PreAuthorize("hasRole('ADMIN')")
     public Map<String, Object> saveLimits(@RequestBody LimitsPayload req) {
-        if (req.logLinesPerSec() != null) settings.set(SettingsService.LOG_LINES_PER_SEC, String.valueOf(req.logLinesPerSec()));
-        if (req.retentionLogDays() != null) settings.set(SettingsService.RETENTION_LOG_DAYS, String.valueOf(req.retentionLogDays()));
-        if (req.retentionMetricsDays() != null) settings.set(SettingsService.RETENTION_METRICS_DAYS, String.valueOf(req.retentionMetricsDays()));
-        if (req.allowMetrics() != null) settings.set(SettingsService.ALLOW_METRICS, req.allowMetrics());
+        if (req.logLinesPerSec() != null) settings.set(SettingsService.LOG_LINES_PER_SEC, String.valueOf(Math.max(1, req.logLinesPerSec())));
+        if (req.retentionLogDays() != null) settings.set(SettingsService.RETENTION_LOG_DAYS, String.valueOf(Math.max(1, req.retentionLogDays())));
+        if (req.retentionMetricsDays() != null) settings.set(SettingsService.RETENTION_METRICS_DAYS, String.valueOf(Math.max(1, req.retentionMetricsDays())));
+        if (req.allowMetrics() != null) {
+            List<String> patterns = SettingsService.parseMetricMasks(req.allowMetrics());
+            for (String pat : patterns) {
+                if (!pat.matches("[A-Za-z0-9_:*]+")) {
+                    throw new IllegalArgumentException("Недопустимая маска «" + pat + "»: имя метрики состоит из букв, цифр, _ и :, допускается *");
+                }
+            }
+            settings.set(SettingsService.ALLOW_METRICS, String.join("\n", patterns));
+        }
         if (req.onlyNeededHistograms() != null) settings.set(SettingsService.ONLY_NEEDED_HISTOGRAMS, String.valueOf(req.onlyNeededHistograms()));
         if (req.urlNameTag() != null) settings.set(SettingsService.URL_NAME_TAG, String.valueOf(req.urlNameTag()));
         return Map.of("ok", true);

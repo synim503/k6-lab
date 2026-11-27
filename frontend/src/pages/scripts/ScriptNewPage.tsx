@@ -3,10 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, apiUpload } from '@/lib/api';
 import { Button, Card, CardBody, CardHeader, Input, Modal, Select, Textarea } from '@/components/ui/primitives';
-import { ArrowLeft, FileUp, GitBranch, RefreshCw, ShieldAlert } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { fmtBytes } from '@/lib/utils';
+import { ArrowLeft, Bug, FileUp, GitBranch, RefreshCw, ShieldAlert, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 export function ScriptNewPage() {
+  const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [mode, setMode] = useState<'upload' | 'git'>('upload');
@@ -17,6 +20,7 @@ export function ScriptNewPage() {
   const [entrypoint, setEntrypoint] = useState('');
   const [comment, setComment] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // Git state
@@ -32,6 +36,13 @@ export function ScriptNewPage() {
     queryFn: () => apiFetch('/api/v1/git-repos'),
   });
   const repos: any[] = reposData?.items || [];
+
+  const applySelectedFile = (f: File | null) => {
+    setFile(f);
+    if (f && !name.trim()) {
+      setName(f.name.replace(/\.(zip|js|mjs|ts)$/i, ''));
+    }
+  };
 
   const handleLoadRefs = async (idStr: string) => {
     if (!idStr) return;
@@ -110,6 +121,8 @@ export function ScriptNewPage() {
     }
   };
 
+  const isZipSelected = !!file?.name.toLowerCase().endsWith('.zip');
+
   return (
     <div className="max-w-2xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
@@ -124,6 +137,23 @@ export function ScriptNewPage() {
           </Button>
         </Link>
       </div>
+
+      {/* Быстрый переход в песочницу для написания с нуля */}
+      {isAdmin && (
+        <Card className="p-3.5 bg-indigo-50/50 border-indigo-200/80 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-slate-700">
+            <Bug className="h-4 w-4 text-indigo-600 shrink-0" />
+            <span>
+              Хотите написать сценарий с нуля, проверить HTTP-ответы и сразу отладить его?
+            </span>
+          </div>
+          <Link to="/sandbox">
+            <Button variant="outline" size="xs">
+              Написать и отладить в браузере →
+            </Button>
+          </Link>
+        </Card>
+      )}
 
       <div className="inline-flex rounded-xl bg-slate-200/70 p-1 gap-1">
         <button
@@ -155,6 +185,42 @@ export function ScriptNewPage() {
           </CardHeader>
           <CardBody>
             <form onSubmit={onUploadSubmit} className="space-y-4">
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  applySelectedFile(e.dataTransfer.files?.[0] || null);
+                }}
+                className={`rounded-xl border-2 border-dashed p-5 text-center transition-colors ${
+                  dragOver
+                    ? 'border-indigo-500 bg-indigo-50/70'
+                    : 'border-slate-300 bg-slate-50/50 hover:border-indigo-300'
+                }`}
+              >
+                <label className="cursor-pointer flex flex-col items-center gap-1.5">
+                  <Upload className="h-6 w-6 text-indigo-600" />
+                  <span className="text-sm font-medium text-slate-800">
+                    {file
+                      ? `${file.name} (${fmtBytes(file.size)})`
+                      : 'Перетащите .js / .ts / .zip сюда или нажмите для выбора файла'}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    Для многофайловых проектов с CSV-данными и модулями загрузите .zip архив
+                  </span>
+                  <input
+                    type="file"
+                    accept=".js,.mjs,.ts,.zip"
+                    onChange={(e) => applySelectedFile(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Название скрипта *</label>
                 <Input
@@ -173,29 +239,16 @@ export function ScriptNewPage() {
                   placeholder="Краткое назначение сценария (необязательно)"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Файл (.js, .ts или .zip архив) *</label>
-                <input
-                  type="file"
-                  accept=".js,.mjs,.ts,.zip"
-                  required
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    setFile(f);
-                    if (f && !name) {
-                      setName(f.name.replace(/\.(zip|js|mjs|ts)$/i, ''));
-                    }
-                  }}
-                  className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3.5 file:py-2 file:text-xs file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
-                />
-              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Entrypoint (для .zip)</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Entrypoint {isZipSelected ? '(главный файл в .zip)' : '(для .zip)'}
+                  </label>
                   <Input
                     value={entrypoint}
                     onChange={(e) => setEntrypoint(e.target.value)}
-                    placeholder="Авто (например main.js)"
+                    placeholder="Авто (main.js / index.js)"
+                    className={isZipSelected ? 'border-indigo-400 bg-indigo-50/20' : ''}
                   />
                 </div>
                 <div>
@@ -253,6 +306,7 @@ export function ScriptNewPage() {
                     ))}
                   </Select>
                   <Button
+                    type="button"
                     variant="outline"
                     disabled={!repoId}
                     loading={loadingRefs}
@@ -290,6 +344,10 @@ export function ScriptNewPage() {
                     placeholder="scripts/main.js"
                   />
                 </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Комментарий</label>
+                <Input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Импорт из Git" />
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <Link to="/scripts">

@@ -70,7 +70,7 @@ export function parseDurationToSec(dur?: string | null): number {
   return total;
 }
 
-export type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'purple';
+export type BadgeVariant = 'default' | 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'purple';
 
 export function runStatusMeta(status?: string, thresholdsFailed?: boolean): { label: string; variant: BadgeVariant; active: boolean } {
   switch (status) {
