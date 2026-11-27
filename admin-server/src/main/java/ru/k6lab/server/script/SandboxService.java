@@ -168,7 +168,7 @@ public class SandboxService {
             Path cfg = dir.resolve("__sandbox-config.json");
             Files.writeString(cfg, config(req), StandardCharsets.UTF_8);
 
-            List<String> cmd = new ArrayList<>(List.of(k6bin.toString(), "run", "--quiet", "--no-color", "--config", cfg.toString()));
+            List<String> cmd = new ArrayList<>(List.of(k6bin.toString(), "run", "--quiet", "--no-color", "--address=", "--config", cfg.toString()));
             flags.forEach(f -> cmd.add(f.getArg()));
             cmd.add(entry);
 
@@ -214,7 +214,7 @@ public class SandboxService {
                 sessions.remove(id);
             }
             if (s != null && s.process != null && s.process.isAlive()) {
-                s.process.destroyForcibly();
+                killTree(s.process, true);
             }
             if (dir != null) {
                 deleteQuietly(dir);
@@ -254,7 +254,7 @@ public class SandboxService {
         var timeoutTask = killerScheduler.schedule(() -> {
             if (s.process != null && s.process.isAlive()) {
                 s.note = "Остановлено по времени (" + limitSec + " с)";
-                s.process.destroyForcibly();
+                killTree(s.process, true);
             }
         }, limitSec + 15L, TimeUnit.SECONDS);
         try (BufferedReader r = new BufferedReader(new InputStreamReader(s.process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -324,11 +324,11 @@ public class SandboxService {
         Session s = sessions.get(id);
         if (s != null && s.process != null && s.process.isAlive()) {
             s.note = "Остановлено пользователем";
-            s.process.destroy();
+            killTree(s.process, false);
             // Эскалация в SIGKILL через 5 с, если скрипт завис и не реагирует на SIGTERM
             killerScheduler.schedule(() -> {
                 if (s.process != null && s.process.isAlive()) {
-                    s.process.destroyForcibly();
+                    killTree(s.process, true);
                 }
             }, 5, TimeUnit.SECONDS);
         }
@@ -369,11 +369,26 @@ public class SandboxService {
         killerScheduler.shutdownNow();
         for (Session s : sessions.values()) {
             if (s.process != null && s.process.isAlive()) {
-                s.process.destroyForcibly();
+                killTree(s.process, true);
             }
             deleteQuietly(s.dir);
         }
         sessions.clear();
+    }
+
+    private static void killTree(Process p, boolean force) {
+        p.descendants().forEach(h -> {
+            if (force) {
+                h.destroyForcibly();
+            } else {
+                h.destroy();
+            }
+        });
+        if (force) {
+            p.destroyForcibly();
+        } else {
+            p.destroy();
+        }
     }
 
     private static void deleteQuietly(Path dir) {

@@ -647,35 +647,49 @@ class ScriptFlowIT extends AbstractIT {
     @Test
     void sandboxRunsScriptWithRealK6AndStreamsLog() throws Exception {
         org.junit.jupiter.api.Assumptions.assumeTrue(k6tool.locate().isPresent(), "k6 не найден");
-        var req = new ru.k6lab.server.script.SandboxService.RunRequest(java.util.List.of(
-                new ru.k6lab.server.script.SandboxService.FileIn("main.js",
-                        "export default function () { console.log('hello ' + __ENV.WHO); }\n"
-                                + "export function other() { console.log('other-fn'); }\n", null),
-                new ru.k6lab.server.script.SandboxService.FileIn("data.txt", "x", null)),
-                "main.js", "other", 1, 2, 60, java.util.Map.of("WHO", "sandbox"), java.util.List.of("VERBOSE"));
-        String id = sandbox.start(req);
-        ru.k6lab.server.script.SandboxService.Chunk c;
-        long end = System.currentTimeMillis() + 60_000;
-        do {
-            Thread.sleep(300);
-            c = sandbox.read(id, 0);
-        } while (!c.done() && System.currentTimeMillis() < end);
-        String all = String.join("\n", c.lines().stream().map(l -> l.text()).toList());
-        assertThat(c.done()).isTrue();
-        assertThat(c.exitCode()).as(all).isEqualTo(0);
-        assertThat(all).contains("other-fn").doesNotContain("hello");
-        // default в выпадающем списке = основная функция: exec в конфиге не задаётся, запуск проходит
-        String id2 = sandbox.start(new ru.k6lab.server.script.SandboxService.RunRequest(req.files(), "main.js", "default", 1, 1, 60,
-                java.util.Map.of("WHO", "def"), java.util.List.of()));
-        ru.k6lab.server.script.SandboxService.Chunk c2;
-        long end2 = System.currentTimeMillis() + 60_000;
-        do {
-            Thread.sleep(300);
-            c2 = sandbox.read(id2, 0);
-        } while (!c2.done() && System.currentTimeMillis() < end2);
-        String all2 = String.join("\n", c2.lines().stream().map(l -> l.text()).toList());
-        assertThat(c2.exitCode()).as(all2).isEqualTo(0);
-        assertThat(all2).contains("hello def");
+        // Занимаем порт 6565 (дефолтный REST API k6), чтобы убедиться, что отладка не падает и не спамит предупреждением bind: address already in use
+        java.net.ServerSocket busy6565 = null;
+        try {
+            busy6565 = new java.net.ServerSocket(6565, 1, java.net.InetAddress.getByName("127.0.0.1"));
+        } catch (java.io.IOException ignored) {
+            // 6565 уже занят внешним процессом — условие теста тем более выполнено
+        }
+        try {
+            var req = new ru.k6lab.server.script.SandboxService.RunRequest(java.util.List.of(
+                    new ru.k6lab.server.script.SandboxService.FileIn("main.js",
+                            "export default function () { console.log('hello ' + __ENV.WHO); }\n"
+                                    + "export function other() { console.log('other-fn'); }\n", null),
+                    new ru.k6lab.server.script.SandboxService.FileIn("data.txt", "x", null)),
+                    "main.js", "other", 1, 2, 60, java.util.Map.of("WHO", "sandbox"), java.util.List.of("VERBOSE"));
+            String id = sandbox.start(req);
+            ru.k6lab.server.script.SandboxService.Chunk c;
+            long end = System.currentTimeMillis() + 60_000;
+            do {
+                Thread.sleep(300);
+                c = sandbox.read(id, 0);
+            } while (!c.done() && System.currentTimeMillis() < end);
+            String all = String.join("\n", c.lines().stream().map(l -> l.text()).toList());
+            assertThat(c.done()).isTrue();
+            assertThat(c.exitCode()).as(all).isEqualTo(0);
+            assertThat(all).contains("other-fn").doesNotContain("hello")
+                    .doesNotContain("6565").doesNotContain("Error from API server");
+            // default в выпадающем списке = основная функция: exec в конфиге не задаётся, запуск проходит
+            String id2 = sandbox.start(new ru.k6lab.server.script.SandboxService.RunRequest(req.files(), "main.js", "default", 1, 1, 60,
+                    java.util.Map.of("WHO", "def"), java.util.List.of()));
+            ru.k6lab.server.script.SandboxService.Chunk c2;
+            long end2 = System.currentTimeMillis() + 60_000;
+            do {
+                Thread.sleep(300);
+                c2 = sandbox.read(id2, 0);
+            } while (!c2.done() && System.currentTimeMillis() < end2);
+            String all2 = String.join("\n", c2.lines().stream().map(l -> l.text()).toList());
+            assertThat(c2.exitCode()).as(all2).isEqualTo(0);
+            assertThat(all2).contains("hello def").doesNotContain("6565").doesNotContain("Error from API server");
+        } finally {
+            if (busy6565 != null) {
+                busy6565.close();
+            }
+        }
         assertThatThrownBy(() -> sandbox.start(new ru.k6lab.server.script.SandboxService.RunRequest(java.util.List.of(
                 new ru.k6lab.server.script.SandboxService.FileIn("a.js", "x", null)), "missing.js", null, 1, 1, 10, null, null)))
                 .isInstanceOf(IllegalArgumentException.class);
